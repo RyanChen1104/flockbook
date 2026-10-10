@@ -316,3 +316,31 @@ fn shape_chips(s: &mut Shaped, chips: &[Chip], colw: f32, t: &Tokens) {
     }
     s.h = y + h;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::selectable::flow::model::{Inline, Para};
+    use crate::theme::Tokens;
+
+    fn width(para: &Para) -> f32 {
+        let t = Tokens::LIGHT;
+        let spans = spans_of(para, 15.0, &t, t.label, Weight::Normal, false, false);
+        make(&spans, f32::INFINITY, 15.0, 1.55, Wrapping::None).min_bounds().width
+    }
+
+    fn inl(text: &str, italic: bool) -> Inline {
+        Inline { text: text.into(), italic, ..Default::default() }
+    }
+
+    // Splitting CJK text into styled spans must not add any advance at the span boundaries.
+    #[test]
+    fn cjk_span_boundaries_add_no_gap() {
+        let one = width(&Para { inlines: vec![inl("受到衰減影響", false)] });
+        let split = width(&Para { inlines: vec![inl("受到", false), inl("衰減", true), inl("影響", false)] });
+        assert!(one > 0.0);
+        assert!((one - split).abs() < 0.5, "one span {one} vs three spans {split}");
+        let spaced = width(&Para { inlines: vec![inl("受到 ", false), inl("衰減", true), inl(" 影響", false)] });
+        assert!(spaced > one + 2.0, "the check can see a real space: {spaced} vs {one}");
+    }
+}

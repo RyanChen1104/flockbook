@@ -255,4 +255,16 @@ mod tests {
         assert_eq!(s[0].paras[0].plain(), "結果摘要：新上架的商品現在排第一。");
         assert!(parse("", false).is_empty());
     }
+
+    #[test]
+    fn cjk_inline_span_boundaries_add_no_spaces() {
+        let s = parse("長尾查詢可能受到*衰減*影響，需要重放驗證。", false);
+        assert_eq!(s[0].paras[0].plain(), "長尾查詢可能受到衰減影響，需要重放驗證。");
+        assert!(s[0].paras[0].inlines.iter().any(|i| i.text == "衰減" && i.italic), "emphasis is its own inline");
+        let s = parse("`half_life_days`設為 30 只是起點。", false);
+        assert_eq!(s[0].paras[0].plain(), "half_life_days設為 30 只是起點。");
+        let s = parse("- 受到**衰減**影響\n- `x`設為", false);
+        let plains: Vec<String> = s.iter().map(|r| r.paras[0].plain()).collect();
+        assert_eq!(plains, ["受到衰減影響", "x設為"]);
+    }
 }
