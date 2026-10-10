@@ -1,0 +1,25 @@
+[package]
+name = "flockbook"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Flockbook: a reading view for Herdr agents (iced)"
+
+[lib]
+name = "flockbook"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flockbook"
+path = "src/main.rs"
+
+[dependencies]
+iced = { workspace = true, features = ["svg", "canvas", "tiny-skia", "tokio"] }
+iced_test.workspace = true
+fb-ui = { path = "../fb-ui" }
+herdr-core = { path = "../herdr-core" }
+png.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde_json.workspace = true
+pulldown-cmark = { version = "0.12", default-features = false }
