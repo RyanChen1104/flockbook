@@ -1,0 +1,11 @@
+{"type": "user", "uuid": "p1", "message": {"role": "user", "content": "<pasted_content id=\"4821\">\nShip the Orchard banner today.\n</pasted_content id=\"4821\">"}}
+{"type": "user", "uuid": "p2", "message": {"role": "user", "content": "Please review this:\n<pasted_content id=\"77\">\nline A\nline B\n</pasted_content id=\"77\">\nThanks"}}
+{"type": "user", "uuid": "p3", "message": {"role": "user", "content": "<pasted_content>first</pasted_content>\n<pasted_content>second</pasted_content>"}}
+{"type": "user", "uuid": "p4", "message": {"role": "user", "content": "<pasted_content id=\"9\">\nRelay: <pasted_content id=\"3\">inner</pasted_content id=\"3\"> end\n</pasted_content id=\"9\">"}}
+{"type": "user", "uuid": "p5", "message": {"role": "user", "content": [{"type": "text", "text": "<pasted_content id=\"5\">\nblock form\n</pasted_content id=\"5\">"}]}}
+{"type": "user", "uuid": "p6", "message": {"role": "user", "content": "<pasted_content id=\"6\">\n\n</pasted_content id=\"6\">"}}
+{"type": "user", "uuid": "p7", "message": {"role": "user", "content": "<pasted_content id=\"8\">\ncut off at the end"}}
+{"type": "user", "uuid": "p8", "message": {"role": "user", "content": "<task-notification>\n<task-id>t1</task-id>\n</task-notification>"}}
+{"type": "user", "uuid": "p9", "message": {"role": "user", "content": "<pasted-contentx>not a paste</pasted-contentx>"}}
+{"type": "user", "uuid": "p10", "message": {"role": "user", "content": "<pasted_content id=\"2\">meta paste</pasted_content id=\"2\">"}, "isMeta": true}
+{"type": "user", "uuid": "p11", "message": {"role": "user", "content": "<system-reminder>reminder</system-reminder>"}}

@@ -57,6 +57,27 @@ import Foundation
     else { check(false, "compaction is a status item") }
 }
 
+// Pasted text: Claude Code wraps it in <pasted_content id="…"> … </pasted_content id="…">; it is the owner's message
+@MainActor func checksPasted() async throws {
+    let p = String(decoding: fixture("pasted.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
+    check(describe(SessionLog.parse(lines: p)) == [
+        "user:Ship the Orchard banner today.",
+        "user:Please review this:\n\nline A\nline B\n\nThanks",
+        "user:first\n\nsecond",
+        "user:Relay: <pasted_content id=\"3\">inner</pasted_content id=\"3\"> end",
+        "user:block form",
+        "user:cut off at the end",
+    ], "pasted: shown as user text, wrappers stripped, order kept, injected tags still hidden")
+    check(ConversationParser.userVisible("<environment_context>cwd</environment_context>") == nil
+          && ConversationParser.userVisible("[Request interrupted by user]") == nil
+          && ConversationParser.userVisible("typed <b>text</b>") == "typed <b>text</b>", "pasted: allowlist of visible tags")
+    let cxp = SessionLog.parse(lines: [
+        #"{"timestamp":"2026-10-10T01:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<pasted_content id=\"1\">codex paste</pasted_content id=\"1\">"}]}}"#,
+        #"{"timestamp":"2026-10-10T01:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}"#,
+    ])
+    check(describe(cxp) == ["user:codex paste"], "pasted: codex user text uses the same rule")
+}
+
 // Codex rollout
 @MainActor func checksCodexRollout() async throws {
     check(describe(SessionLog.parse(lines: cx)) == [

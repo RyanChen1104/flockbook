@@ -78,9 +78,10 @@ public struct ConversationParser: Sendable {
                         done.append(ConversationItem(id: bid, kind: .status("Context compacted"), timestamp: lineTS))
                         continue
                     }
-                    if meta || Self.isInjected(text) { continue }
+                    if meta { continue }
+                    guard let shown = Self.userVisible(text) else { continue }
                     flush()
-                    done.append(ConversationItem(id: bid, kind: .userText(text), timestamp: lineTS))
+                    done.append(ConversationItem(id: bid, kind: .userText(shown), timestamp: lineTS))
                 } else {
                     flush()
                     done.append(ConversationItem(id: bid, kind: .assistantText(text), timestamp: lineTS))
@@ -137,9 +138,9 @@ public struct ConversationParser: Sendable {
             if text.isEmpty { return }
             flush()
             if role == "user" {
-                if Self.isInjected(text) || text.hasPrefix("# AGENTS.md") { return }
+                guard !text.hasPrefix("# AGENTS.md"), let shown = Self.userVisible(text) else { return }
                 answerAsyncQuestions()
-                done.append(ConversationItem(id: bid, kind: .userText(text), timestamp: lineTS))
+                done.append(ConversationItem(id: bid, kind: .userText(shown), timestamp: lineTS))
             } else {
                 done.append(ConversationItem(id: bid, kind: .assistantText(text), timestamp: lineTS))
             }
@@ -330,8 +331,46 @@ public struct ConversationParser: Sendable {
         return name
     }
 
+    /// Tags whose text is the user's own. Claude Code wraps pasted text in `<pasted_content id="…">`. Any other text
+    /// that starts with a tag (`<system-reminder>`, `<command-name>`, `<task-notification>`, …) is injected context.
+    static let visibleTags: Set<String> = ["pasted_content"]
+
+    /// The text to show for a user message, or nil when it is injected context. Pasted blocks lose their wrapper
+    /// tags; typed text and pasted blocks keep their order, separated by a blank line.
+    static func userVisible(_ text: String) -> String? {
+        if text.hasPrefix("<") {
+            guard let m = text.firstMatch(of: /^<([A-Za-z_][\w-]*)/), visibleTags.contains(String(m.1)) else { return nil }
+        } else if isInjected(text) {
+            return nil
+        }
+        guard text.contains("<pasted_content") else { return text }
+        let out = unwrapPasted(text)
+        return out.isEmpty ? nil : out
+    }
+
+    /// Splits text into typed parts and pasted blocks. A block ends at the closing tag with the same id (or the
+    /// plain closing tag without an id), so pasted text that itself quotes these tags stays as it is.
+    static func unwrapPasted(_ text: String) -> String {
+        var parts: [Substring] = []
+        var rest = text[...]
+        while let open = rest.firstMatch(of: /<pasted_content(?: id="([^"]*)")?>/) {
+            parts.append(rest[..<open.range.lowerBound])
+            let close = open.1.map { "</pasted_content id=\"\($0)\">" } ?? "</pasted_content>"
+            let body = rest[open.range.upperBound...]
+            if let c = body.range(of: close) {
+                parts.append(body[..<c.lowerBound])
+                rest = body[c.upperBound...]
+            } else {
+                parts.append(body)
+                rest = ""
+            }
+        }
+        parts.append(rest)
+        return parts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
     static func isInjected(_ text: String) -> Bool {
-        if text.hasPrefix("<") { return true }          // <system-reminder>, <command-name>, <local-command-*>
+        if text.hasPrefix("<") { return true }          // tagged text; `userVisible` lets the visible tags through
         if text.hasPrefix("[Request interrupted") { return true }
         if text.hasPrefix("Caveat:") { return true }
         return false

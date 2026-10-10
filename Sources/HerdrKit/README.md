@@ -90,6 +90,14 @@ If no log is found, `items()` yields `[]` once and keeps polling for the file.
 
 `loadEarlier` reads up to `bytes` before the current start, cut to whole lines. The older items appear at the front of the next `items()` emission (within one poll, 0.5 s). The whole loaded range is parsed again together, so a tool result in a later segment still matches its call. Item ids do not change (Codex ids come from the line's byte offset), so the UI can keep scroll position. It returns `false` before the first load and when the file start is reached. `HerdrStore.loadEarlier(paneId:) async -> Bool` (or `loadEarlier(for: sessionId)`) wraps it for the store's own log; false for an unknown pane or a pane without an agent session. Call it from the "Show earlier" button after the loaded items are all shown.
 
+### User text (Claude Code, Codex)
+A user message that starts with a tag is injected context (`<system-reminder>`, `<command-name>`, `<local-command-*>`,
+`<task-notification>`, Codex `<environment_context>`, …) and is skipped, except the tags in
+`ConversationParser.visibleTags` (an allowlist). Today that is `pasted_content`: Claude Code stores pasted text as
+`<pasted_content id="…">…</pasted_content id="…">`. `userText` then holds the text without the wrapper tags; typed
+text and pasted blocks keep their order, separated by a blank line. A block ends at the closing tag with its own id,
+so pasted text that quotes these tags is kept as is. Pasted blocks are not marked in the model.
+
 ### Agents and log formats
 
 | Agent | Log | Notes |
