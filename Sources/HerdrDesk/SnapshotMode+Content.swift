@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Offscreen checks for the content area (conversation, composer). One entry point; `HerdrDeskApp` dispatches the flags.
 @MainActor enum ContentTests {
-    static let flags: Set<String> = ["--test-sendfail", "--test-loadstate", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search", "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn", "--test-question-live"]
+    static let flags: Set<String> = ["--test-sendfail", "--test-loadstate", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search", "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn", "--test-question-live", "--bench-conversation"]
     /// Pictures go here; `--light` runs a test in the light appearance with its own folder.
     static var dir = "build/snapshots-content"
 
@@ -20,6 +20,7 @@ import SwiftUI
         if args.contains("--test-search") { Task { await search() }; return true }
         if args.contains("--test-scrolltop") { Task { await scrollTop() }; return true }
         if args.contains("--test-shortcuts") { Task { await shortcuts() }; return true }
+        if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }
         if args.contains("--test-screencolumn") { Task { await screenColumn() }; return true }

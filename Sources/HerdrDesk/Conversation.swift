@@ -107,7 +107,7 @@ struct ConversationView: View {
 
     private var list: some View {
         ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if items.count > shown || (onLoadEarlier != nil && moreEarlier) {
                         Button {
                             if items.count > shown { shown += 150; return }

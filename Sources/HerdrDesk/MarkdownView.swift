@@ -14,8 +14,7 @@ struct MarkdownView: View {
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
 
     var body: some View {
-        let blocks = MarkdownCache.blocks(for: text)
-        let lines = Self.estimatedLines(text, size: size)
+        let (blocks, lines) = MarkdownCache.blocksAndLines(for: text, size: size)
         let fold = foldable && !expanded && lines > 40
         VStack(alignment: .leading, spacing: 0) {
             content(blocks)
@@ -75,15 +74,22 @@ struct MarkdownView: View {
     }
 }
 
-/// Parsed blocks per message text, so re-rendering never re-parses.
+/// Parsed blocks (and the fold line estimate) per message text, so re-rendering never re-parses or re-counts.
 @MainActor enum MarkdownCache {
-    private static var store: [String: [MBlock]] = [:]
-    static func blocks(for text: String) -> [MBlock] {
-        if let b = store[text] { return b }
-        let b = MBlock.parse(text)
-        if store.count > 400 { store.removeAll(keepingCapacity: true) }
-        store[text] = b
-        return b
+    private struct Entry { var blocks: [MBlock]; var lines: [ReadingSize: Int] = [:] }
+    private static var store: [String: Entry] = [:]
+    static func blocks(for text: String) -> [MBlock] { blocksAndLines(for: text, size: nil).blocks }
+    /// One lookup for both: hashing a long reply is itself a cost on every render.
+    static func blocksAndLines(for text: String, size: ReadingSize?) -> (blocks: [MBlock], lines: Int) {
+        let cached = store[text]
+        if let cached, let size, let n = cached.lines[size] { return (cached.blocks, n) }
+        if let cached, size == nil { return (cached.blocks, 0) }
+        var e = cached ?? Entry(blocks: MBlock.parse(text))
+        let lines = size.map { MarkdownView.estimatedLines(text, size: $0) } ?? 0
+        if let size { e.lines[size] = lines }
+        if cached == nil, store.count > 400 { store.removeAll(keepingCapacity: true) }
+        store[text] = e
+        return (e.blocks, lines)
     }
 }
 
