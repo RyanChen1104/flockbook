@@ -6,3 +6,4 @@ DerivedData/
 .DS_Store
 xcuserdata/
 .claude/
+__pycache__/
