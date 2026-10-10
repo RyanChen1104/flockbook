@@ -176,7 +176,7 @@ struct QuestionCard: View {
 
     private var card: some View {
         let q = flow.question
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 16) {
             head(q)
             // The question and options scroll inside a capped height, so a long question never makes the card (and the
             // pane) taller than the window. Its height is measured, never taken from the text's own (narrow-width) size.
@@ -185,25 +185,24 @@ struct QuestionCard: View {
                     VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(q.text).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                            if q.multiSelect { Text("Choose any.").font(.caption).foregroundStyle(.tertiary) }
+                            if q.multiSelect { Text("Choose any.").font(.callout).foregroundStyle(.secondary) }
                         }
-                        VStack(spacing: 6) {
-                            ForEach(Array(q.options.enumerated()), id: \.offset) { i, o in optionRow(i, o, multi: q.multiSelect).id(i) }
-                        }
+                        optionGroup(q)
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bodyHeight = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .frame(height: scrollHeight)
                 .onChange(of: flow.lastPick) { _, i in if let i { withAnimation { reader.scrollTo(i) } } }
+                .onChange(of: focus) { _, f in if f == .other { withAnimation { reader.scrollTo(Self.otherRowID) } } }
             }
-            otherRow(q)
             foot(q)
         }
         .padding(16)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome = $0 - scrollHeight }
-        .glassCard(radius: Radius.bubble, tint: .orange.opacity(0.08))
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .glassCard(radius: Radius.bubble)
+        .overlay(RoundedRectangle(cornerRadius: Radius.bubble, style: .continuous).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.1), radius: 12, y: 4)
         .focusable()
         .focusEffectDisabled()
         .focused($focus, equals: .card)
@@ -216,86 +215,68 @@ struct QuestionCard: View {
     /// The scrolled part's height: all of it when it fits under `maxHeight`, else what is left after the rest of the card.
     private var scrollHeight: CGFloat { min(bodyHeight, max(80, maxHeight - chrome)) }
 
+    private static let otherRowID = "other"
+
     private func head(_ q: QuestionRequest.Question) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "questionmark").font(.callout.weight(.bold)).foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Color.orange, in: RoundedRectangle(cornerRadius: Radius.control))
-            Text("\(Text(agentName).fontWeight(.semibold).foregroundStyle(.primary)) asks you").foregroundStyle(.secondary)
-                .font(.callout).lineLimit(1)
+        HStack(spacing: 8) {
+            Image(systemName: "questionmark.bubble.fill").font(.system(size: 20))
+                .symbolRenderingMode(.hierarchical).foregroundStyle(Color.orange)
+                .accessibilityHidden(true)
+            Text("\(Text(agentName).font(.headline).foregroundStyle(.primary)) asks you").foregroundStyle(.secondary)
+                .lineLimit(1)
             Spacer(minLength: 8)
-            if flow.total > 1 {
-                HStack(spacing: 4) {
-                    ForEach(0..<flow.total, id: \.self) { k in
-                        Capsule().fill(k == flow.step ? Color.orange : k < flow.step ? Color.secondary.opacity(0.6) : Color.primary.opacity(0.12))
-                            .frame(width: 18, height: 4)
-                    }
-                }
-                .accessibilityElement().accessibilityLabel("Question \(flow.step + 1) of \(flow.total)")
-            }
             if !flow.header.isEmpty {
-                Text(flow.header).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                Text(flow.header).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                     .padding(.horizontal, 8).padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: Radius.control))
+                    .background(.quaternary, in: Capsule())
+            }
+            if flow.total > 1 {
+                Text("\(flow.step + 1) of \(flow.total)").font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    .accessibilityLabel("Question \(flow.step + 1) of \(flow.total)")
             }
         }
     }
 
-    private func optionRow(_ i: Int, _ o: QuestionRequest.Option, multi: Bool) -> some View {
-        let on = flow.picks[flow.step].contains(i)
-        return Button { flow.pick(i); focus = .card } label: {
-            HStack(alignment: .top, spacing: 10) {
-                if multi {
-                    Image(systemName: on ? "checkmark.square.fill" : "square").font(.body)
-                        .foregroundStyle(on ? Color.accentColor : Color.secondary).frame(width: 22, height: 22)
-                } else {
-                    KeyBadge(text: "\(i + 1)", on: on)
+    /// Options and "Other" as one inset group (System Settings style): rows with hairline separators.
+    private func optionGroup(_ q: QuestionRequest.Question) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(q.options.enumerated()), id: \.offset) { i, o in
+                QuestionOptionRow(index: i, option: o, multi: q.multiSelect, on: flow.picks[flow.step].contains(i)) {
+                    withAnimation(.spring) { flow.pick(i) }
+                    focus = .card
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
-                        Text(o.label).fontWeight(.semibold)
-                        if o.recommended {
-                            Text("Recommended").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: Radius.control))
-                        }
-                    }
-                    if !o.detail.isEmpty { Text(o.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                }
-                .font(.callout)
-                Spacer(minLength: 8)
-                if !multi, on { Image(systemName: "checkmark").font(.callout.weight(.semibold)).foregroundStyle(Color.accentColor) }
+                .id(i)
+                Divider().padding(.leading, 44)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(on ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Radius.card).strokeBorder(on ? Color.accentColor : Color.primary.opacity(0.09), lineWidth: on ? 1.5 : 0.5))
-            .contentShape(Rectangle())
+            otherRow(q).id(Self.otherRowID)
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(on ? .isSelected : [])
-        .accessibilityLabel(o.recommended ? "\(o.label), recommended" : o.label)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5))
     }
 
     private func otherRow(_ q: QuestionRequest.Question) -> some View {
         let on = !flow.other[flow.step].trimmingCharacters(in: .whitespaces).isEmpty
-        return HStack(spacing: 10) {
-            KeyBadge(text: q.multiSelect ? "+" : "\(flow.otherKey)", on: false, outline: true)
+        return HStack(spacing: 12) {
+            Image(systemName: q.multiSelect ? (on ? "checkmark.square.fill" : "square") : (on ? "checkmark.circle.fill" : "circle"))
+                .font(.system(size: 17)).foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.6))
+                .frame(width: 20).accessibilityHidden(true)
             OtherField(text: Binding(get: { flow.other[flow.step] }, set: { flow.setOther($0) }),
                        placeholder: "Other: type your own answer",
                        onSubmit: { returnKey() }, onEscape: { focus = .card })
                 .focused($focus, equals: .other)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(on ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: Radius.control))
-                .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(on ? Color.accentColor : Color.primary.opacity(0.09), lineWidth: on ? 1.5 : 0.5))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                    .strokeBorder(focus == .other ? Color.accentColor.opacity(0.8) : Color.primary.opacity(0.12), lineWidth: focus == .other ? 1.5 : 0.5))
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(on ? Color.accentColor.opacity(0.12) : Color.clear)
         .id(flow.step)   // a fresh field per question
     }
 
     private func foot(_ q: QuestionRequest.Question) -> some View {
         HStack(spacing: 8) {
-            if flow.step > 0 { Button("Back") { flow.back(); focus = .card } }
             if let problem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -307,10 +288,12 @@ struct QuestionCard: View {
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityElement(children: .combine)
+            } else {
+                hint(q)
             }
             Spacer(minLength: 8)
             if busy { ProgressView().controlSize(.small) }
-            hint(q).layoutPriority(-1)
+            if flow.step > 0 { Button("Back") { flow.back(); focus = .card } }
             Button(flow.isLast ? (flow.total > 1 ? "Send Answers" : "Send") : "Next") { returnKey() }
                 .buttonStyle(.borderedProminent)
                 .disabled(busy || !flow.valid || (flow.isLast && !canSend))
@@ -365,7 +348,10 @@ struct QuestionCard: View {
             return .ignored
         default:
             guard let n = Int(press.characters), (1...9).contains(n) else { return .ignored }
-            switch flow.digit(n) {
+            var next = flow
+            let result = next.digit(n)
+            if result == .picked { withAnimation(.spring) { flow = next } }
+            switch result {
             case .picked: return .handled
             case .other: focus = .other; return .handled
             case .ignored: return .ignored
@@ -374,16 +360,47 @@ struct QuestionCard: View {
     }
 }
 
-private struct KeyBadge: View {
-    let text: String
-    var on = false
-    var outline = false
+/// One option in the question card's group: a radio (single choice) or checkbox (multiSelect), title and detail. The
+/// number key shows as a faint keycap on hover only; the footer lists the keys.
+private struct QuestionOptionRow: View {
+    let index: Int
+    let option: QuestionRequest.Option
+    let multi: Bool
+    let on: Bool
+    let action: () -> Void
+    @State private var hover = false
+
     var body: some View {
-        Text(text).font(.system(size: 11, weight: .semibold, design: .monospaced))
-            .foregroundStyle(on ? Color.white : Color.secondary)
-            .frame(width: 22, height: 22)
-            .background(on ? Color.accentColor : outline ? Color.clear : Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: Radius.control))
-            .overlay { if outline { RoundedRectangle(cornerRadius: Radius.control).strokeBorder(Color.primary.opacity(0.15)) } }
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: multi ? (on ? "checkmark.square.fill" : "square") : (on ? "checkmark.circle.fill" : "circle"))
+                    .font(.system(size: 17)).foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.6))
+                    .frame(width: 20, height: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(option.label).font(.body.weight(.medium))
+                        if option.recommended {
+                            Text("Recommended").font(.caption.weight(.medium)).foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        }
+                    }
+                    if !option.detail.isEmpty {
+                        Text(option.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                if hover, index < 9 { Kbd(key: "\(index + 1)").opacity(0.7) }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(on ? Color.accentColor.opacity(0.12) : hover ? Color.primary.opacity(0.05) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityLabel(option.recommended ? "\(option.label), recommended" : option.label)
     }
 }
 
