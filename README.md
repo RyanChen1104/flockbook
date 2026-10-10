@@ -6,6 +6,81 @@ Flockbook is a native macOS reading view for your [Herdr](https://herdr.dev) age
 
 Your agents' conversations are already in the terminal. Flockbook shows the same conversation in a layout that is easier to read.
 
+## Features
+
+The screenshots use a fictional demo session (`scripts/demo-seed.sh`).
+
+### Sidebar and overview
+
+The sidebar lists your Herdr workspaces. Overview shows every tab and its state: working, waiting for you, done or idle.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/overview-dark.png">
+  <img src="docs/media/overview-light.png" alt="Sidebar and overview" width="800">
+</picture>
+
+### Conversation view
+
+Each agent's session log is shown as a document: Markdown, code, tables, and tool calls folded into short chips.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/conversation-dark.png">
+  <img src="docs/media/conversation-light.png" alt="Conversation view" width="800">
+</picture>
+
+### Reply
+
+Type under the conversation and press Return to send. You can paste images or attach a file path.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/reply-dark.png">
+  <img src="docs/media/reply-light.png" alt="Reply" width="800">
+</picture>
+
+### Question card
+
+When an agent asks a question with options, pick an answer from a card.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/question-dark.png">
+  <img src="docs/media/question-light.png" alt="Question card" width="800">
+</picture>
+
+### Approval card
+
+When an agent asks for permission, choose Allow or Deny without opening the terminal.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/approval-dark.png">
+  <img src="docs/media/approval-light.png" alt="Approval card" width="800">
+</picture>
+
+### Needs you
+
+Agents that wait for you are collected in one list, marked in orange.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/needs-you-dark.png">
+  <img src="docs/media/needs-you-light.png" alt="Needs you" width="800">
+</picture>
+
+### Split panes
+
+A tab with split panes shows one conversation per pane, stacked.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/split-dark.png">
+  <img src="docs/media/split-light.png" alt="Split panes" width="800">
+</picture>
+
+### Embedded terminal
+
+Press Control-backtick (⌃`) to see the real terminal of the pane in a sheet.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/terminal-dark.png">
+  <img src="docs/media/terminal-light.png" alt="Embedded terminal" width="800">
+</picture>
 ## Requirements
 
 - macOS 26 or later

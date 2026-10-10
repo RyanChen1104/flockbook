@@ -26,7 +26,7 @@ export const features = [
 		id: 'reply',
 		title: 'Reply in one place',
 		body: 'Type under the conversation and press Return to send, with input methods, dictation and pasted images.',
-		image: null,
+		image: 'reply',
 		alt: 'The reply field under a conversation, with a pasted image.'
 	},
 	{
