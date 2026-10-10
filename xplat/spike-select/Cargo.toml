@@ -10,3 +10,7 @@ iced.workspace = true
 
 [dev-dependencies]
 iced_test.workspace = true
+# Only used by the evaluation test that probes what the single-widget crate offers.
+iced_selection = "0.5.0"
+# Decodes the headless snapshot so a test can prove the highlight was drawn.
+png = "0.18"
