@@ -32,6 +32,19 @@ for (const width of [1440, 390]) {
 		await page.screenshot({ path: file, fullPage: true });
 		console.log(`${file}  horizontal overflow: ${overflow}px`);
 		if (overflow > 0) failed = true;
+		// Carousel: the third dot must bring the third slide into the track.
+		const dots = page.locator('.dots a');
+		if ((await dots.count()) >= 3) {
+			await page.emulateMedia({ reducedMotion: 'reduce' });
+			await dots.nth(2).click();
+			await page.waitForTimeout(300);
+			const slide = await page.evaluate(() => {
+				const t = document.querySelector('.track');
+				return Math.round(t.scrollLeft / t.clientWidth) + 1;
+			});
+			console.log(`  dot 3 -> slide ${slide}`);
+			if (slide !== 3) failed = true;
+		}
 		await page.close();
 	}
 }
