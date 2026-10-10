@@ -54,6 +54,21 @@ else
   echo "icon: $ICON_SRC not found, skipped"
 fi
 
+# Light/dark app icon (macOS 26): compile the Icon Composer document into Assets.car.
+# actool ships only with Xcode (CI has it); without it the .icns above is the only icon.
+ICON_DOC="docs/design/icon/AppIcon.icon"
+if [ -d "$ICON_DOC" ] && xcrun --find actool >/dev/null 2>&1; then
+  xcrun actool "$ICON_DOC" --compile "$APP/Contents/Resources" --app-icon AppIcon \
+    --platform macosx --target-device mac --minimum-deployment-target 26.0 \
+    --output-partial-info-plist "$(mktemp -d)/icon.plist" --output-format human-readable-text --errors --warnings
+  ICON_KEY="$ICON_KEY
+  <key>CFBundleIconName</key><string>AppIcon</string>"
+  echo "icon: Assets.car from $ICON_DOC; appearances:"
+  xcrun assetutil --info "$APP/Contents/Resources/Assets.car" | grep -o '"Appearance" : "[^"]*"' | sort | uniq -c
+else
+  echo "icon: actool not available (needs Xcode), no light/dark Assets.car"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
