@@ -1,1 +1,31 @@
-//! Herdr link core (gate 3).
+//! Herdr link core: a Rust port of HerdrKit (models, snapshot parsing, line-socket client, conversation parsers).
+//!
+//! Read-only by design in this gate: the client exposes `session.snapshot` and `events.subscribe`. `raw_request` is
+//! generic, but nothing here sends input, keys, resize, takeover or any other mutating method.
+
+pub mod client;
+pub mod conversation;
+pub mod error;
+pub mod model;
+pub mod question;
+pub mod session;
+pub mod snapshot;
+pub mod transport;
+pub mod util;
+
+pub use client::{EventStream, HerdrClient};
+#[cfg(unix)]
+pub use client::UnixConnector;
+pub use conversation::{parse_lines, ConversationParser};
+pub use error::HerdrError;
+pub use model::*;
+pub use session::HerdrSession;
+pub use transport::{Connector, LineSocket, Transport};
+
+/// Text Claude Code draws on its permission prompt (port of `PermissionGate`).
+pub const PROMPT_MARKER: &str = "Do you want";
+
+/// Does the pane's visible screen show a permission prompt? Only the screen tells a prompt from a running tool.
+pub fn screen_shows_prompt(screen_text: &str) -> bool {
+    screen_text.contains(PROMPT_MARKER)
+}

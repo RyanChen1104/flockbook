@@ -1,0 +1,13 @@
+session: (default / from env)
+round trip: 16.9 ms (connect + snapshot + parse)
+workspaces: 10
+tabs: 44
+panes: 45
+agents: 44
+  agent status blocked  0
+  agent status working  2
+  agent status done     11
+  agent status idle     31
+  agent status unknown  0
+agent kinds: {"claude": 44}
+tab status rollup: {"done": 11, "idle": 30, "unknown": 1, "working": 2}

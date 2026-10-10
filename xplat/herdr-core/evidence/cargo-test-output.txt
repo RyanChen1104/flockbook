@@ -1,0 +1,44 @@
+     Running unittests src/lib.rs (target/debug/deps/herdr_core-920fb2ec0a227a32)
+running 2 tests
+test util::tests::pretty_matches_foundation_style ... ok
+test util::tests::time_formats ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (target/debug/deps/client-dd846eb125e23e0d)
+running 6 tests
+test connect_failure_is_socket_error ... ok
+test garbage_response_is_protocol_error ... ok
+test server_error_maps_to_error ... ok
+test snapshot_roundtrip_and_request_ids ... ok
+test event_stream_push_latency_and_socket_loss ... ok
+test stuck_server_times_out ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+     Running tests/conversation.rs (target/debug/deps/conversation-7fcb43bf9d686cdc)
+running 11 tests
+test cut_on_char_boundary ... ok
+test codex_rollout ... ok
+test question_state_type_is_reexported ... ok
+test open_tool_use_and_prompt_marker ... ok
+test timestamps ... ok
+test tool_call_details ... ok
+test claude_maps_lines ... ok
+test pi_tree ... ok
+test injected_user_lines ... ok
+test pasted_text ... ok
+test cursor_transcript ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/questions.rs (target/debug/deps/questions-aa8d1e0915c3d760)
+running 4 tests
+test codex_questions ... ok
+test question_answer_keys ... ok
+test screen_question ... ok
+test ask_user_question ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/snapshot_session.rs (target/debug/deps/snapshot_session-c98bafa41a628629)
+running 3 tests
+test session_resolution ... ok
+test snapshot_pane_label_and_tolerance ... ok
+test snapshot_fixture ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests herdr_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

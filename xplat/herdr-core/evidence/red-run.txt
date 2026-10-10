@@ -1,0 +1,6 @@
+   1 error: could not compile `herdr-core` (test "client") due to 4 previous errors
+   1 error: could not compile `herdr-core` (test "conversation") due to 7 previous errors
+   1 error: could not compile `herdr-core` (test "questions") due to 6 previous errors
+   1 error: could not compile `herdr-core` (test "snapshot_session") due to 19 previous errors
+   1 error[E0425]: cannot find function `parse_lines` in crate `herdr_core`
+(first run, before any implementation: all test targets fail to compile)
