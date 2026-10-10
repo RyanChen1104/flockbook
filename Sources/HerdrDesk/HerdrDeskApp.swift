@@ -13,7 +13,7 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--stress", "--hittest", "--test-approve", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--stress", "--hittest", "--test-approve", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
@@ -72,6 +72,10 @@ struct HerdrDeskApp: App {
         if let i = args.firstIndex(of: "--snapshot-live"), args.indices.contains(i + 1) {
             let dir = args[i + 1], live = store
             Task { @MainActor in try? await Task.sleep(for: .seconds(4)); await SnapshotRunner.runLive(dir: dir, store: live) }
+        }
+        if let i = args.firstIndex(of: "--snapshot-demo"), args.indices.contains(i + 1) {
+            let dir = args[i + 1], live = store
+            Task { @MainActor in await SnapshotRunner.runDemo(dir: dir, store: live) }
         }
         let m = AppModel(store: store)
         if args.contains("--test-fullscreen-real") {

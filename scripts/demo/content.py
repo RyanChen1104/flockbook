@@ -588,7 +588,15 @@ def score(doc, bm25, now):
 3     Royal Gala, organic           3.70   9       3.42   6d
 4     Gala crate, wholesale (2025)  3.95   604     3.17   402d
 5     Gala seedlings                2.10   40      2.06   90d'''),
-    ("a", "The new-season listing is first now, and the old bestseller still ranks second on relevance. Next I'll replay last week's query log to check the change does not hurt long queries."),
+    ("a", '''The new-season listing is first now, and the old bestseller still ranks second on relevance.
+
+| Listing | Rank before | Rank after |
+|---|---|---|
+| Gala apples, new season | 3 | **1** |
+| Gala apples, 10 kg (2024) | 1 | 2 |
+| Royal Gala, organic | 4 | 3 |
+
+Next I'll replay last week's query log to check the change does not hurt long queries.'''),
     ("bash", "python -m quarry.replay logs/queries-2026-w40.jsonl --metric ndcg@10", None),
 ]
 

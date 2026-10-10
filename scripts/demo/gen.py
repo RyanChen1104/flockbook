@@ -17,7 +17,7 @@ import argparse, datetime as dt, json, os, subprocess, sys, textwrap, time, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import content  # noqa: E402
 
-W = 120  # pane width the screens are drawn for
+W = 100  # screen width; narrower than the pane, so the app's terminal sheet does not wrap it
 NS = uuid.UUID("6f1e9a52-3c1d-4b8e-9a8e-0d1f4c2b7a10")
 
 
