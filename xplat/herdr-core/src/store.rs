@@ -12,7 +12,7 @@ use crate::model::*;
 use crate::session::HerdrSession;
 use crate::session_log::{ConversationLoadState, SessionLog, Snapshot};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use crate::transport::{Connector, Transport};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -104,6 +104,8 @@ impl<C: Connector> Connector for StoppableConnector<C> {
 struct LogEntry {
     log: Arc<SessionLog>,
     snap: Arc<Mutex<Option<Snapshot>>>,
+    /// Bumped each time the reader stores a new snapshot; a cheap change counter for the UI.
+    rev: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
 }
 
@@ -435,21 +437,25 @@ impl<C: Connector + 'static> HerdrStore<C> {
         let stream = log.snapshots(st.projects_dir.as_deref(), Duration::from_millis(500), None);
         let snap = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
-        let (s2, st2) = (snap.clone(), stop.clone());
+        let rev = Arc::new(AtomicU64::new(0));
+        let (s2, st2, r2) = (snap.clone(), stop.clone(), rev.clone());
         readers.fetch_add(1, Ordering::SeqCst);
         let guard = ReaderGuard(readers);
         thread::spawn(move || {
             let _guard = guard;
             while !st2.load(Ordering::SeqCst) {
                 match stream.recv_timeout(Duration::from_millis(250)) {
-                    Ok(x) => *s2.lock().unwrap() = Some(x),
+                    Ok(x) => {
+                        *s2.lock().unwrap() = Some(x);
+                        r2.fetch_add(1, Ordering::SeqCst);
+                    }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(_) => break,
                 }
             }
             // `stream` drops here: that stops the tailer thread and its file watcher.
         });
-        st.logs.insert(session_id.to_string(), LogEntry { log, snap, stop });
+        st.logs.insert(session_id.to_string(), LogEntry { log, snap, rev, stop });
         true
     }
 
@@ -465,6 +471,16 @@ impl<C: Connector + 'static> HerdrStore<C> {
         }
         let snap = st.logs[id].snap.lock().unwrap().clone();
         snap.map(|s| s.items).unwrap_or_default()
+    }
+
+    /// Change counter of a session's conversation: equal values mean `conversation` would return the same items.
+    /// `None` when the session is not tailed yet (call `conversation` to start). Never starts tailing itself.
+    pub fn conversation_revision(&self, session_id: Option<&str>) -> Option<u64> {
+        let st = self.shared.state.lock().unwrap();
+        if st.is_preview {
+            return None;
+        }
+        st.logs.get(session_id?).map(|e| e.rev.load(Ordering::SeqCst))
     }
 
     /// Whether the conversation is still loading, ready (possibly empty), has no log file, or failed. Starts tailing on

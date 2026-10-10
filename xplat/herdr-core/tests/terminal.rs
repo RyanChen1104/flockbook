@@ -353,3 +353,28 @@ fn dropping_a_store_ends_log_threads() {
         readers.load(std::sync::atomic::Ordering::SeqCst)
     );
 }
+
+// The revision is a cheap change counter: None until tailing starts, then it moves only when a new snapshot is consumed.
+#[test]
+fn store_conversation_revision_moves_only_on_new_snapshots() {
+    let root = temp_dir("storerev");
+    let proj = root.join("p");
+    std::fs::create_dir_all(&proj).unwrap();
+    let log = proj.join("rev-session.jsonl");
+    std::fs::write(&log, "").unwrap();
+    let sess = HerdrSession { name: Some("x".into()), socket_path: root.join("nonexistent.sock").to_string_lossy().into_owned() };
+    let st = HerdrStore::new(&sess);
+    st.set_projects_dir(root.clone());
+    assert!(st.conversation_revision(Some("rev-session")).is_none(), "revision: none before tailing");
+    assert!(st.conversation_revision(None).is_none(), "revision: none for no session");
+    let _ = st.conversation(Some("rev-session"));
+    assert!(until(3.0, || st.conversation_revision(Some("rev-session")).is_some_and(|r| r > 0)), "revision: first snapshot counted");
+    std::thread::sleep(Duration::from_millis(300));
+    let r1 = st.conversation_revision(Some("rev-session")).unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(st.conversation_revision(Some("rev-session")), Some(r1), "revision: stable while the log is idle");
+    let line = r#"{"type":"user","uuid":"u1","timestamp":"2026-10-10T10:00:00Z","message":{"role":"user","content":"hello"}}"#;
+    std::fs::write(&log, format!("{line}\n")).unwrap();
+    assert!(until(3.0, || st.conversation_revision(Some("rev-session")).is_some_and(|r| r > r1)), "revision: moves on append");
+    st.stop();
+}
