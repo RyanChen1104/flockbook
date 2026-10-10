@@ -1,6 +1,19 @@
 # Flockbook app icon
 
-Three stacked cards = many agents / tabs in one desk. The front card is one agent at work: the blue arc is the "working" status from DESIGN.md §6. Grays plus one accent (system blue #007AFF light, #0A84FF dark). No text.
+V2 "gem arrowhead": one faceted arrowhead (the lead) with two small ones behind it (the flock). Black and white only. No text.
+
+| File | What |
+|---|---|
+| `flockbook-light.svg` | Source of truth, light appearance. |
+| `flockbook-dark.svg` | Source of truth, dark appearance. |
+| `AppIcon-1024.png` | Light render. `scripts/bundle.sh` builds `AppIcon.icns` from it. |
+| `AppIcon-dark-1024.png` | Dark render. For the asset catalog dark appearance (needs `actool`, which needs Xcode). |
+
+Render: `rsvg-convert -w 1024 -h 1024 flockbook-light.svg -o AppIcon-1024.png` (same for dark).
+
+Grid: Apple macOS template. Body 824×824 at (100,100), corner radius 185.
+
+## Previous design (stacked cards, not used)
 
 | File | What |
 |---|---|
