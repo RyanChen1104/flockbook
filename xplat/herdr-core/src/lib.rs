@@ -29,3 +29,11 @@ pub const PROMPT_MARKER: &str = "Do you want";
 pub fn screen_shows_prompt(screen_text: &str) -> bool {
     screen_text.contains(PROMPT_MARKER)
 }
+
+pub mod approval;
+pub mod scrollback;
+pub mod store;
+pub mod terminal;
+pub mod resolver;
+pub mod session_log;
+pub use terminal::TerminalFrame;
