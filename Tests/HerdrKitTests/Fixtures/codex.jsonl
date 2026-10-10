@@ -1,0 +1,13 @@
+{"type":"session_meta","payload":{"id":"cx-1","cwd":"/tmp/demo"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"system rules"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /tmp/demo"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review the parser"}]}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking the files."}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"const r = await tools.exec_command({cmd:\"rg -n foo\"})"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"ok"}}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"c2","arguments":"{\"command\":[\"bash\",\"-lc\",\"swift test\"]}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"c2","output":"done"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"No P1 found."}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"c3","arguments":"{\"command\":[\"rm\",\"-rf\",\"build\"]}"}}
+{"type":"event_msg","payload":{"type":"token_count"}}

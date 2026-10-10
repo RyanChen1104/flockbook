@@ -1,0 +1,291 @@
+import HerdrKit
+import SwiftUI
+import AppKit
+
+/// Multi-line input. Return sends, Shift-Return inserts a newline.
+/// Never sends while IME marked text is active; system dictation works because this is a real NSTextView.
+struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var height: CGFloat
+    @Binding var composing: Bool
+    var pasteboard: NSPasteboard = .general
+    var onPasteImages: ([URL]) -> Void = { _ in }
+    var onSubmit: () -> Void
+    var canSubmit = true
+    var maxHeight: CGFloat = 160
+    var handle: ComposerHandle? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = false
+        let tv = SubmitTextView()
+        tv.delegate = context.coordinator
+        tv.pasteboard = pasteboard
+        tv.onPasteImages = { [weak c = context.coordinator] in c?.parent.onPasteImages($0) }
+        tv.onMarkedChange = { [weak c = context.coordinator] in c?.markedChanged() }
+        tv.isRichText = false
+        tv.allowsUndo = true
+        tv.drawsBackground = false
+        tv.font = .preferredFont(forTextStyle: .title3)   // same style as the placeholder
+        tv.textContainerInset = NSSize(width: 0, height: 4)
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.autoresizingMask = [.width]
+        tv.isVerticallyResizable = true
+        scroll.documentView = tv
+        context.coordinator.textView = tv
+        handle?.textView = tv
+        DispatchQueue.main.async { context.coordinator.recalc() }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = context.coordinator.textView else { return }
+        if tv.string != text, !tv.hasMarkedText() { tv.string = text; context.coordinator.recalc() }
+    }
+
+    final class SubmitTextView: NSTextView {
+        /// Called after the marked-text state may have changed (IME start / update / commit).
+        var onMarkedChange: (() -> Void)?
+        var pasteboard: NSPasteboard = .general
+        var onPasteImages: (([URL]) -> Void)?
+        /// A screenshot on the clipboard holds only image types, which a plain-text view does not read, so the
+        /// system would grey out Edit > Paste (and ⌘V) and never call `paste`. Enable it for images.
+        override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+            if item.action == #selector(NSText.paste(_:)), PasteImages.hasImage(pasteboard) { return true }
+            return super.validateUserInterfaceItem(item)
+        }
+        override func paste(_ sender: Any?) {
+            if let urls = PasteImages.capture(from: pasteboard), !urls.isEmpty { onPasteImages?(urls); return }
+            if pasteboard === NSPasteboard.general { super.paste(sender); return }
+            // Injected pasteboard (tests): NSTextView would read the system one.
+            if let t = pasteboard.string(forType: .string) { insertText(t, replacementRange: selectedRange()) }
+        }
+        override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+            super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+            onMarkedChange?()
+        }
+        override func unmarkText() { super.unmarkText(); onMarkedChange?() }
+        override func insertNewline(_ sender: Any?) {
+            if hasMarkedText() { super.insertNewline(sender); return }
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                insertNewlineIgnoringFieldEditor(sender)
+            } else {
+                (delegate as? Coordinator)?.submit()
+            }
+        }
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerTextView
+        weak var textView: NSTextView?
+        init(_ p: ComposerTextView) { parent = p }
+
+        func textDidChange(_ n: Notification) {
+            guard let tv = textView else { return }
+            if !tv.hasMarkedText() { parent.text = tv.string }
+            let marked = tv.hasMarkedText()
+            if parent.composing != marked { parent.composing = marked }
+            recalc()
+        }
+        func markedChanged() {
+            guard let tv = textView else { return }
+            let marked = tv.hasMarkedText()
+            if parent.composing != marked { parent.composing = marked }
+        }
+        func submit() {
+            guard let tv = textView, !tv.hasMarkedText(), parent.canSubmit else { return }
+            parent.text = tv.string
+            parent.onSubmit()
+            tv.string = ""
+            parent.text = ""
+            recalc()
+        }
+        func recalc() {
+            guard let tv = textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+            lm.ensureLayout(for: tc)
+            let h = lm.usedRect(for: tc).height + tv.textContainerInset.height * 2
+            let clamped = min(max(h, 26), parent.maxHeight)
+            if abs(parent.height - clamped) > 0.5 { DispatchQueue.main.async { self.parent.height = clamped } }
+        }
+    }
+}
+
+/// Lets the toolbar buttons reach the NSTextView (insert text, take focus).
+@MainActor final class ComposerHandle {
+    weak var textView: NSTextView?
+    func insert(_ s: String) {
+        guard let tv = textView else { return }
+        tv.window?.makeFirstResponder(tv)
+        tv.insertText(s, replacementRange: tv.selectedRange())
+    }
+    func focus() { if let tv = textView { tv.window?.makeFirstResponder(tv) } }
+    static func quoted(_ url: URL) -> String {
+        let p = url.path
+        return p.contains(where: { " ()'\"&;".contains($0) }) ? "'" + p.replacingOccurrences(of: "'", with: "'\\''") + "'" : p
+    }
+}
+
+/// Plain icon button with a hover background.
+struct HoverIconStyle: ButtonStyle {
+    @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(enabled ? 1 : 0.35)   // the system's disabled look; a plain style does not dim by itself
+            .frame(width: 28, height: 28)
+            .background(Color.primary.opacity(!enabled ? 0 : configuration.isPressed ? 0.14 : hover ? 0.08 : 0), in: Circle())
+            .contentShape(Circle())
+            .onHover { hover = $0 }
+    }
+}
+
+/// Unsent composer content for one pane.
+struct ComposerDraft: Equatable {
+    var text = ""
+    var images: [URL] = []
+    var isEmpty: Bool { text.isEmpty && images.isEmpty }
+}
+
+struct ComposerView: View {
+    let agentName: String
+    var readOnly = false
+    var branch: String? = nil
+    var onSend: (String) -> Void
+    var onDraft: (ComposerDraft) -> Void = { _ in }
+    /// When set, sends through this instead of `onSend` and learns whether herdr took the message. On failure the
+    /// text and images come back into the composer (unless the owner already typed something new) with a note.
+    var deliver: ((String) async -> Bool)? = nil
+    /// Overrides the "Reply to <agent>" placeholder.
+    var placeholder: String? = nil
+    /// Changes when the owner asks for the field (an unfocused pane's composer was clicked): take keyboard focus.
+    var focusRequest = 0
+    @State private var text: String
+    @State private var images: [URL]
+    var pasteboard: NSPasteboard = .general
+    init(agentName: String, readOnly: Bool = false, branch: String? = nil, draft: ComposerDraft = ComposerDraft(),
+         onSend: @escaping (String) -> Void, onDraft: @escaping (ComposerDraft) -> Void = { _ in }, probe: PlaceholderProbe? = nil, pasteboard: NSPasteboard = .general,
+         deliver: ((String) async -> Bool)? = nil, placeholder: String? = nil, focusRequest: Int = 0) {
+        self.pasteboard = pasteboard; self.deliver = deliver; self.placeholder = placeholder; self.focusRequest = focusRequest
+        self.agentName = agentName; self.readOnly = readOnly; self.branch = branch
+        self.onSend = onSend; self.onDraft = onDraft; self.probe = probe
+        _text = State(initialValue: draft.text); _images = State(initialValue: draft.images)
+    }
+    @State private var height: CGFloat = 26
+    @State private var composing = false
+    /// Test hook: tells whether the placeholder view is currently in the hierarchy.
+    var probe: PlaceholderProbe? = nil
+    @State private var handle = ComposerHandle()
+    @State private var dropping = false
+    @State private var sendError: String?
+    /// Text the failed send gave back; the note goes once the owner edits it.
+    @State private var returnedText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !images.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(images, id: \.self) { url in PasteChip(url: url) { removeImage(url) } }
+                    }
+                }
+            }
+            ZStack(alignment: .topLeading) {
+                if text.isEmpty && !composing {
+                    Text(readOnly ? "Read-only: input is off" : placeholder ?? "Reply to \(agentName)").font(.title3).foregroundStyle(Color(nsColor: .placeholderTextColor))
+                        .padding(.top, 4).allowsHitTesting(false)
+                        .onAppear { probe?.shown = true }.onDisappear { probe?.shown = false }
+                }
+                ComposerTextView(text: $text, height: $height, composing: $composing, pasteboard: pasteboard,
+                                 onPasteImages: { images.append(contentsOf: $0) },
+                                 onSubmit: { send() }, canSubmit: !readOnly, handle: handle)
+                    .frame(height: height)
+            }
+            if let sendError {
+                Label(sendError, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.red)
+                    .transition(.opacity)
+            }
+            HStack(spacing: 10) {
+                Button { attach() } label: { Image(systemName: "plus").foregroundStyle(.secondary) }
+                    .buttonStyle(HoverIconStyle()).help("Attach file (inserts its path)").disabled(readOnly)
+                if let branch {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.branch").font(.subheadline)
+                        Text(branch).font(.caption).lineLimit(1).truncationMode(.tail)
+                    }
+                    .foregroundStyle(.secondary).help(branch)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    handle.focus()
+                    NSApp.sendAction(Selector(("startDictation:")), to: nil, from: nil)
+                } label: { Image(systemName: "mic").foregroundStyle(.secondary) }
+                    .buttonStyle(HoverIconStyle()).help("Dictate").disabled(readOnly)
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(canSend ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(canSend ? Color.accentColor : Color.primary.opacity(0.08)))
+                }
+                .buttonStyle(.plain).disabled(!canSend).help("Send (Return)")
+            }
+        }
+        .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !readOnly else { return false }
+            handle.insert(urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+            return true
+        } isTargeted: { dropping = $0 }
+        .onChange(of: text) {
+            onDraft(ComposerDraft(text: text, images: images))
+            if sendError != nil, !text.isEmpty, text != returnedText { withAnimation(.easeOut(duration: 0.2)) { sendError = nil } }
+            probe?.text = text
+        }
+        .onChange(of: sendError) { probe?.error = sendError }
+        .onChange(of: focusRequest) { DispatchQueue.main.async { handle.focus() } }
+        .onChange(of: images) { onDraft(ComposerDraft(text: text, images: images)); probe?.images = images }
+        .onAppear { probe?.images = images; probe?.removeFirst = { if let u = images.first { removeImage(u) } } }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .glassCard(radius: Radius.bubble)
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+    }
+
+    private func attach() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        guard panel.runModal() == .OK else { return }
+        handle.insert(panel.urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+    }
+    private var canSend: Bool { !readOnly && !(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) }
+    /// Message = text, then the absolute image paths (agents read an image path as an attachment).
+    private func send() {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !readOnly, !(t.isEmpty && images.isEmpty) else { return }
+        let paths = images.map { ComposerHandle.quoted($0) }.joined(separator: " ")
+        let message = [t, paths].filter { !$0.isEmpty }.joined(separator: " ")
+        let sent = (text: text, images: images)
+        text = ""; images = []   // files stay: the agent reads them; they are purged after 7 days
+        sendError = nil
+        guard let deliver else { onSend(message); return }
+        Task {
+            guard !(await deliver(message)) else { return }
+            if text.isEmpty && images.isEmpty { text = sent.text; images = sent.images }
+            returnedText = text
+            withAnimation(.easeOut(duration: 0.2)) { sendError = "Not sent: herdr did not take the message. Press Return to try again." }
+        }
+    }
+    private func removeImage(_ url: URL) {
+        PasteImages.remove(url)
+        images.removeAll { $0 == url }
+    }
+}
+
+@MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)? }

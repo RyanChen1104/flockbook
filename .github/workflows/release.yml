@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+# The build job only reads the repo; only the publish job writes the release.
+permissions:
+  contents: read
+
+jobs:
+  # Signed + notarized universal Flockbook.app as .zip and .dmg. Signing: import the
+  # Developer ID cert into a temporary keychain, sign with hardened runtime, notarize, staple. Without secrets: ad-hoc sign, no notarization,
+  # release notes say "unsigned".
+  build:
+    name: Build macOS app
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      # Pin the toolchain: Xcode 26.1.1 ships Swift 6.2.1, the same compiler the app is developed with.
+      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+      ARCHS: arm64 x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build (arm64 + x86_64)
+        run: |
+          for a in $ARCHS; do swift build -c release --product HerdrDesk --arch "$a"; done
+
+      # Headless checks only: they use a fake herdr socket and fixtures, no herdr server, no window.
+      - name: HerdrKitChecks
+        run: swift run HerdrKitChecks
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "No APPLE_CERTIFICATE secret set; skipping import (ad-hoc sign later)."
+            exit 0
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Bundle and sign
+        env:
+          SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: scripts/bundle.sh
+
+      - name: Notarize and package
+        env:
+          SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "${SIGN_ID:-}" ] && [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+            NOTARIZED=1
+          else
+            NOTARIZED=0
+            echo "Signing or notarization secrets missing; publishing an unsigned build."
+          fi
+          if [ "$NOTARIZED" = 1 ]; then scripts/notarize.sh build/Flockbook.app; fi
+          scripts/package.sh
+          if [ "$NOTARIZED" = 1 ]; then scripts/notarize.sh "dist/Flockbook-$VERSION.dmg"; fi
+          (cd dist && shasum -a 256 Flockbook-* > SHA256SUMS && cat SHA256SUMS)
+          {
+            if [ "$NOTARIZED" = 1 ]; then
+              echo "Signed with a Developer ID and notarized by Apple."
+            else
+              echo "**Unsigned build.** It is not signed with a Developer ID and not notarized."
+              echo "macOS blocks it on first open. To run it anyway: \`xattr -dr com.apple.quarantine /Applications/Flockbook.app\`."
+            fi
+            echo
+            echo "Requires macOS 26 or later and a running Herdr. Universal (Apple silicon + Intel)."
+            echo "Unofficial: not affiliated with, endorsed by, or supported by Herdr, Inc."
+          } > dist/NOTES.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flockbook-macos
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flockbook-macos
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          body_path: dist/NOTES.md
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.dmg
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

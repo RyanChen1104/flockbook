@@ -1,0 +1,9 @@
+{"id":"t","result":{"type":"session_snapshot","snapshot":{"protocol":22,"version":"0.9.1",
+"workspaces":[{"workspace_id":"w1","label":"Demo","number":1,"agent_status":"blocked","pane_count":3,"tab_count":2}],
+"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"Main","number":1,"agent_status":"working","pane_count":2},
+        {"tab_id":"w1:t2","workspace_id":"w1","label":"Shell","number":2,"agent_status":"unknown","pane_count":1}],
+"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","terminal_id":"term_a","cwd":"/tmp/demo","agent_status":"working","agent_session":{"kind":"id","value":"sess-1"}},
+         {"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","terminal_id":"term_b","cwd":"/tmp/demo","agent_status":"blocked"},
+         {"pane_id":"w1:p3","tab_id":"w1:t2","workspace_id":"w1","terminal_id":"term_c","cwd":"/tmp","agent_status":"unknown"}],
+"agents":[{"pane_id":"w1:p1","agent":"claude","name":"demo-dev","agent_status":"working","agent_session":{"kind":"id","value":"sess-1"},"terminal_title_stripped":"Fix the bug"},
+          {"pane_id":"w1:p2","agent":"codex","name":"demo-rev","agent_status":"blocked","terminal_title_stripped":"Review"}]}}}

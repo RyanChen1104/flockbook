@@ -1,0 +1,7 @@
+{"type":"user","uuid":"u1","message":{"role":"user","content":"Fix the login bug"}}
+{"type":"user","uuid":"u2","isMeta":true,"message":{"role":"user","content":"<system-reminder>ignore</system-reminder>"}}
+{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"thinking","thinking":""},{"type":"text","text":"Looking at it now."},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a.swift"}},{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/b.swift"}},{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"swift test"}}]}}
+{"type":"user","uuid":"u3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"},{"type":"tool_result","tool_use_id":"t2","content":"y"},{"type":"tool_result","tool_use_id":"t3","content":"z"}]}}
+{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":[{"type":"text","text":"Tests pass."}]}}
+{"type":"assistant","uuid":"a3","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sub agent noise"}]}}
+{"type":"assistant","uuid":"a4","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Bash","input":{"command":"rm -rf build"}}]}}

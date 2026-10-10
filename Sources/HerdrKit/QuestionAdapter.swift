@@ -1,0 +1,392 @@
+import Foundation
+
+/// Everything that differs per agent for question cards: (a) parsing the tool call and its result,
+/// (b) the screen markers and key sequence that answer it. Verified key sequences: docs/research/ask-user-question-keys.md.
+public enum QuestionAdapter {
+
+    // MARK: (a) Parse — Claude Code AskUserQuestion
+
+    static let recommendedSuffixes = ["(Recommended)", "（Recommended）", "（建議）", "(建議)", "（推薦）", "(推薦)"]
+
+    static func stripRecommended(_ raw: String) -> (String, Bool) {
+        let label = raw.trimmingCharacters(in: .whitespaces)
+        for suf in recommendedSuffixes where label.hasSuffix(suf) {
+            return (String(label.dropLast(suf.count)).trimmingCharacters(in: .whitespaces), true)
+        }
+        return (label, false)
+    }
+
+    static func claude(id: String, input: [String: Any]) -> QuestionRequest? {
+        guard let qs = input["questions"] as? [[String: Any]], !qs.isEmpty else { return nil }
+        let questions = qs.map { q -> QuestionRequest.Question in
+            let opts = (q["options"] as? [[String: Any]] ?? []).map { o -> QuestionRequest.Option in
+                let (label, rec) = stripRecommended(o["label"] as? String ?? "")
+                return .init(label: label, detail: o["description"] as? String ?? "", recommended: rec)
+            }
+            return .init(header: q["header"] as? String ?? "", text: q["question"] as? String ?? "",
+                         options: opts, multiSelect: q["multiSelect"] as? Bool ?? false)
+        }
+        return QuestionRequest(toolUseId: id, agent: "claude", questions: questions)
+    }
+
+    /// Answers come from the line's `toolUseResult.answers` (question text -> answer), else from the result text
+    /// (`"question"="answer", …`). An error result is a rejection.
+    static func claudeState(_ q: QuestionRequest, isError: Bool, result: Any?, text: String) -> QuestionRequest.State {
+        if isError { return .declined }
+        var byQuestion: [String: String] = [:]
+        if let r = result as? [String: Any], let a = r["answers"] as? [String: String] { byQuestion = a }
+        else {
+            for m in text.matches(of: /"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/) {
+                func un(_ s: Substring) -> String { s.replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\") }
+                byQuestion[un(m.1)] = un(m.2)
+            }
+        }
+        return answered(q.questions.map { byQuestion[$0.id] })
+    }
+
+    // MARK: (a) Parse — Codex request_user_input / request_user_input_async
+
+    static let codexTools: Set<String> = ["request_user_input", "request_user_input_async"]
+
+    /// `request_user_input` (Plan mode picker): `{questions:[{id, header, question, options:[{label, description}]}]}`.
+    /// `request_user_input_async`: `{questions:[{title, options:[String]}]}`; it returns at once, the user answers in a message.
+    static func codex(name: String, callId: String, arguments: String) -> QuestionRequest? {
+        guard codexTools.contains(name), let d = arguments.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let qs = o["questions"] as? [[String: Any]], !qs.isEmpty else { return nil }
+        let questions = qs.enumerated().map { k, q -> QuestionRequest.Question in
+            let opts: [QuestionRequest.Option] = (q["options"] as? [Any] ?? []).compactMap { o in
+                if let s = o as? String { let (l, r) = stripRecommended(s); return .init(label: l, recommended: r) }
+                guard let o = o as? [String: Any] else { return nil }
+                let (l, r) = stripRecommended(o["label"] as? String ?? "")
+                return .init(label: l, detail: o["description"] as? String ?? "", recommended: r)
+            }
+            let text = q["question"] as? String ?? q["title"] as? String ?? ""
+            return .init(id: q["id"] as? String ?? "q\(k)", header: q["header"] as? String ?? "", text: text,
+                         options: opts, multiSelect: q["multiSelect"] as? Bool ?? q["multi_select"] as? Bool ?? false)
+        }
+        return QuestionRequest(toolUseId: callId, agent: "codex",
+                               delivery: name == "request_user_input" ? .picker : .message, questions: questions)
+    }
+
+    /// Codex picker output: `{"answers":{"<id>":{"answers":["Blue"]}}}`; the notes come as `"user_note: …"`.
+    /// Anything else (e.g. "unavailable in Default mode", an interrupt) means no answer. The async tool's
+    /// `{"accepted":true}` returns nil: the question stays pending until the next user message.
+    static func codexState(_ q: QuestionRequest, output: String) -> QuestionRequest.State? {
+        let o = output.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        if q.delivery == .message, o?["accepted"] as? Bool == true { return nil }
+        guard let byId = o?["answers"] as? [String: Any] else { return .declined }
+        return answered(q.questions.map { question -> String? in
+            guard let list = (byId[question.id] as? [String: Any])?["answers"] as? [String] else { return nil }
+            let notes = list.filter { $0.hasPrefix("user_note: ") }.map { String($0.dropFirst(11)) }
+            var picks = list.filter { !$0.hasPrefix("user_note: ") }
+            if !notes.isEmpty { picks.removeAll { $0 == codexOtherLabel } }
+            return (picks + notes).joined(separator: ", ")
+        })
+    }
+
+    static func answered(_ answers: [String?]) -> QuestionRequest.State {
+        guard answers.contains(where: { $0 != nil }) else { return .answered(nil) }
+        return .answered(answers.map { $0 ?? "" })
+    }
+
+    // MARK: (b) Answer — screen markers and keys
+
+    /// Codex's own last picker row; picking it with notes is how free text is given.
+    static let codexOtherLabel = "None of the above"
+
+    /// Text that is on screen only while the agent's question picker is open.
+    public static func markers(agent: String) -> [String] {
+        agent == "codex" ? ["enter to submit"] : ["Chat about this", "Review your answers"]
+    }
+
+    /// One step of an answer. `waitFor` blocks until the picker (not the rest of the screen) shows the text.
+    public enum Step: Sendable, Hashable {
+        case text(String)
+        case keys([String])
+        case waitFor(String)
+    }
+
+    public enum Failure: Error, Sendable, Hashable, CustomStringConvertible {
+        /// The pane does not show this question's picker: nothing was sent.
+        case notOnScreen
+        /// This answer cannot be given with keys (e.g. multiSelect on Codex). Nothing was sent.
+        case unsupported(String)
+        /// Keys were sent, but the expected screen did not come (stopped there).
+        case stuck(String)
+        /// All keys were sent, but the picker is still on screen.
+        case stillOnScreen
+        public var description: String {
+            switch self {
+            case .notOnScreen: "the question is not on screen"
+            case .unsupported(let m): "cannot answer: \(m)"
+            case .stuck(let m): "stopped waiting for: \(m)"
+            case .stillOnScreen: "the question is still on screen after answering"
+            }
+        }
+    }
+
+    /// Screen text with lines trimmed and joined, so a wrapped question still matches.
+    static func flat(_ s: String) -> String {
+        s.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ")
+            .replacing(/\s+/, with: " ")
+    }
+
+    /// Start of a question's text (short, so a wrap inside CJK text does not break the match).
+    static func needle(_ q: QuestionRequest.Question) -> String {
+        String(flat(q.text).prefix(24)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The picker part of the screen only, flattened: Claude from its tab bar down, Codex from its "Question k/n" line
+    /// down. Text above it (the user's own prompt often repeats the question) must not count. Nil = no picker.
+    public static func pickerRegion(agent: String, screen: String) -> String? {
+        let lines = screen.components(separatedBy: "\n")
+        let start: Int?
+        if agent == "codex" {
+            start = lines.lastIndex { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }
+        } else {
+            start = lines.lastIndex { l in
+                let t = l.trimmingCharacters(in: .whitespaces)
+                return t.hasPrefix("☐") || t.hasPrefix("☒") || t.hasPrefix("✔") || t.hasPrefix("←")
+            }
+        }
+        guard let start else { return nil }
+        let region = flat(lines[start...].joined(separator: "\n"))
+        return markers(agent: agent).contains { region.contains($0) } ? region : nil
+    }
+
+    public static func pickerShown(_ q: QuestionRequest, screen: String) -> Bool {
+        pickerRegion(agent: q.agent, screen: screen) != nil
+    }
+
+    /// The picker is open and shows the first question.
+    public static func screenShows(_ q: QuestionRequest, screen: String) -> Bool {
+        guard let first = q.questions.first, let region = pickerRegion(agent: q.agent, screen: screen) else { return false }
+        return region.contains(needle(first))
+    }
+
+    /// The key sequence for a picker question. Throws `.unsupported` before anything is sent.
+    public static func steps(for q: QuestionRequest, answers: [QuestionAnswer]) throws -> [Step] {
+        guard answers.count == q.questions.count else { throw Failure.unsupported("\(answers.count) answers for \(q.questions.count) questions") }
+        for (k, a) in answers.enumerated() {
+            let n = q.questions[k].options.count
+            guard a.picks.allSatisfy({ (0..<n).contains($0) }), n <= 8 else { throw Failure.unsupported("question \(k + 1): option out of range") }
+            let other = a.other?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if other.contains(where: \.isNewline) { throw Failure.unsupported("question \(k + 1): line break in the text") }
+            if a.picks.isEmpty && other.isEmpty { throw Failure.unsupported("question \(k + 1): no answer") }
+            if !q.questions[k].multiSelect && a.picks.count > 1 { throw Failure.unsupported("question \(k + 1): one choice only") }
+        }
+        return q.agent == "codex" ? try codexSteps(q, answers) : claudeSteps(q, answers)
+    }
+
+    static func otherText(_ a: QuestionAnswer) -> String? {
+        let s = a.other?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return s.isEmpty ? nil : s
+    }
+
+    /// Claude Code 2.1.296. Single choice: digit picks and moves on ("Other" = digit n+1, text, Enter).
+    /// multiSelect: digits toggle; "Other" = digit n+1, Down to the row, text, Tab, Enter; without it Tab moves on.
+    /// After the last question of a multi-question or multiSelect card: review screen, `1` submits.
+    static func claudeSteps(_ q: QuestionRequest, _ answers: [QuestionAnswer]) -> [Step] {
+        var out: [Step] = []
+        for (k, question) in q.questions.enumerated() {
+            let a = answers[k], n = question.options.count
+            if !question.multiSelect {
+                if let other = otherText(a) { out += [.text("\(n + 1)"), .text(other), .keys(["Enter"])] }
+                else { out.append(.text("\(a.picks[0] + 1)")) }
+            } else {
+                for p in a.picks.sorted() { out.append(.text("\(p + 1)")) }
+                if let other = otherText(a) {
+                    out += [.text("\(n + 1)"), .keys(Array(repeating: "Down", count: n)), .text(other), .keys(["Tab"]), .keys(["Enter"])]
+                } else {
+                    out.append(.keys(["Tab"]))
+                }
+            }
+            if k + 1 < q.questions.count { out.append(.waitFor(needle(q.questions[k + 1]))) }
+        }
+        if q.questions.count > 1 || q.questions.last?.multiSelect == true {
+            out += [.waitFor("Review your answers"), .text("1")]
+        }
+        return out
+    }
+
+    /// Codex 0.162 (Plan mode picker). Digit picks and moves on; on the last question it submits all.
+    /// Free text: Down to "None of the above" (row n+1), Tab opens the notes, text, Enter. No multiSelect.
+    static func codexSteps(_ q: QuestionRequest, _ answers: [QuestionAnswer]) throws -> [Step] {
+        var out: [Step] = []
+        for (k, question) in q.questions.enumerated() {
+            if question.multiSelect { throw Failure.unsupported("Codex has no multiSelect picker") }
+            let a = answers[k], n = question.options.count
+            if let other = otherText(a) {
+                out += [.keys(Array(repeating: "Down", count: a.picks.first ?? n) + ["Tab"]), .text(other), .keys(["Enter"])]
+            } else {
+                out.append(.text("\(a.picks[0] + 1)"))
+            }
+            if k + 1 < q.questions.count { out.append(.waitFor(needle(q.questions[k + 1]))) }
+        }
+        return out
+    }
+
+    /// `.message` delivery: the text sent as a user message. One question: the answer; several: "question: answer" lines.
+    public static func messageText(for q: QuestionRequest, answers: [QuestionAnswer]) -> String {
+        let parts = zip(q.questions, answers).map { question, a -> String in
+            let v = (a.picks.sorted().map { question.options[$0].label } + [otherText(a)].compactMap { $0 }).joined(separator: ", ")
+            return q.questions.count == 1 ? v : "\(question.text) \(v)"
+        }
+        return parts.joined(separator: "\n")
+    }
+}
+
+// MARK: Claude Code: the pending question comes from the screen
+
+extension QuestionAdapter {
+    /// A screen-read request. Headers go on the questions when all are read; the id depends only on the tab bar
+    /// (plus the text for a single question), so the read-only and the full read give the same id.
+    static func screenRequest(headers: [String], questions: [QuestionRequest.Question]) -> QuestionRequest {
+        var qs = questions
+        if qs.count == headers.count { for k in qs.indices { qs[k].header = headers[k] } }
+        let key = headers.joined(separator: "|") + (headers.count == 1 ? "|" + (questions.first?.text ?? "") : "")
+        let hash = key.utf8.reduce(UInt32(5381)) { ($0 &<< 5) &+ $0 &+ UInt32($1) }   // stable across calls and runs
+        return QuestionRequest(toolUseId: "screen-\(String(hash, radix: 16))", agent: "claude", questions: qs, headers: headers)
+    }
+
+    /// Claude Code 2.1.296 writes the AskUserQuestion call to its log only after it is answered, so while the
+    /// picker is open the question exists only on screen. This reads the visible question: the tab-bar headers
+    /// (one per question) and the current question with its options. Nil when no Claude picker is shown.
+    public static func claudeScreen(_ screen: String) -> (headers: [String], question: QuestionRequest.Question)? {
+        let lines = screen.components(separatedBy: "\n")
+        guard let end = lines.lastIndex(where: { $0.contains("Chat about this") }) else { return nil }
+        let isBar: (String) -> Bool = { l in
+            let t = l.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("☐") || t.hasPrefix("☒") || t.hasPrefix("✔") || t.hasPrefix("←")
+        }
+        guard let bar = lines[..<end].lastIndex(where: isBar) else { return nil }
+        let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
+        let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
+        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false
+        for l in lines[(bar + 1)..<end] {
+            let t = l.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("──") { break }
+            if let m = l.wholeMatch(of: optRe) {
+                let label = String(m.3).trimmingCharacters(in: .whitespaces)
+                if label.hasPrefix("Type something") { break }
+                inOptions = true
+                if m.2 != nil { multi = true }
+                let (clean, rec) = stripRecommended(label)
+                options.append(.init(label: clean, recommended: rec))
+            } else if inOptions {
+                if !t.isEmpty, !options.isEmpty { options[options.count - 1].detail += (options[options.count - 1].detail.isEmpty ? "" : " ") + t }
+            } else if !t.isEmpty {
+                text.append(t)
+            }
+        }
+        guard !options.isEmpty, !text.isEmpty else { return nil }
+        let q = text.joined(separator: " ")
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi))
+    }
+}
+
+extension HerdrClient {
+    /// The pane's visible screen as plain text (read-only).
+    public func visibleText(paneId: String) async throws -> String {
+        let data = try await rawRequest(method: "pane.read", params: ["pane_id": paneId, "source": "visible", "format": "text", "lines": 60])
+        guard let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let read = (o["result"] as? [String: Any])?["read"] as? [String: Any],
+              let text = read["text"] as? String else { throw HerdrError.protocolError("pane.read has no text") }
+        return text
+    }
+
+    /// Answers a pending question in `paneId`, one `QuestionAnswer` per question.
+    /// Picker: (1) checks the picker with the first question is on screen (Claude: another question of this request
+    /// is moved back with Left; anything else throws `.notOnScreen`, nothing sent),
+    /// (2) sends the keys, waiting for each next question, (3) checks the picker is gone (else throws `.stillOnScreen`).
+    /// Message (Codex async): sends the answer text and Enter, like the composer (`send(text:to:)`).
+    public func answerQuestion(paneId: String, request q: QuestionRequest, answers: [QuestionAnswer]) async throws {
+        guard q.state == .pending else { throw QuestionAdapter.Failure.unsupported("the question is not pending") }
+        guard q.unread == 0 else { throw QuestionAdapter.Failure.unsupported("\(q.unread) questions not read yet (loadAllQuestions)") }
+        if q.delivery == .message {
+            guard answers.count == q.questions.count, answers.allSatisfy({ !$0.picks.isEmpty || QuestionAdapter.otherText($0) != nil })
+            else { throw QuestionAdapter.Failure.unsupported("no answer") }
+            try await send(text: QuestionAdapter.messageText(for: q, answers: answers), to: paneId)   // the composer path: text + Enter
+            return
+        }
+        let steps = try QuestionAdapter.steps(for: q, answers: answers)
+        let screen = try await visibleText(paneId: paneId)
+        if !QuestionAdapter.screenShows(q, screen: screen) {
+            // Claude: the user may have moved the picker to a later question of THIS request; go back to question 1.
+            guard q.agent == "claude", q.questions.count > 1, let shown = QuestionAdapter.claudeScreen(screen)?.question,
+                  q.questions.dropFirst().contains(where: { $0.text == shown.text }) else { throw QuestionAdapter.Failure.notOnScreen }
+            try await sendNamedKeys(Array(repeating: "Left", count: q.questions.count - 1), to: paneId)
+            guard try await waitScreen(paneId: paneId, timeout: 2, { QuestionAdapter.screenShows(q, screen: $0) }) else {
+                throw QuestionAdapter.Failure.stuck("back to question 1")
+            }
+        }
+        for step in steps {
+            switch step {
+            case .text(let s): try await sendKeys(Array(s.utf8), to: paneId)   // typed as is: no Enter, not as a paste
+            case .keys(let k): try await sendNamedKeys(k, to: paneId)
+            case .waitFor(let s):
+                guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
+                    throw QuestionAdapter.Failure.stuck(s)
+                }
+            }
+            try await Task.sleep(for: .milliseconds(120))   // the TUI handles one key event per render
+        }
+        guard try await waitScreen(paneId: paneId, timeout: 5, { !QuestionAdapter.pickerShown(q, screen: $0) }) else {
+            throw QuestionAdapter.Failure.stillOnScreen
+        }
+    }
+
+    /// Claude Code's open question picker, read from the screen (its log has the call only after the answer).
+    /// READ-ONLY: sends nothing, so it is safe to call automatically. `questions` = the question on screen;
+    /// `headers` = all questions' headers from the tab bar; `unread` > 0 when there are more questions than the one
+    /// shown (then call `loadAllQuestions` on a user action). Nil when the pane shows no Claude picker.
+    /// `toolUseId` is "screen-…", the same for both calls (the real id appears in the log with the answer).
+    public func pendingQuestion(paneId: String) async throws -> QuestionRequest? {
+        guard let shown = QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId)) else { return nil }
+        return QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question])
+    }
+
+    /// SENDS KEYS: call only on a user action (e.g. Next on question 1, or as the first step of Send), never on a
+    /// timer, refresh or render. Moves the picker with Left to question 1, reads each question with Right
+    /// (navigation only, nothing is chosen), then moves back to the question that was on screen and checks it is
+    /// there again (`.stuck` if not). One question: no keys, same as `pendingQuestion`.
+    public func loadAllQuestions(paneId: String) async throws -> QuestionRequest? {
+        guard let shown = QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId)) else { return nil }
+        let n = shown.headers.count
+        guard n > 1 else { return QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question]) }
+        func now() async throws -> QuestionRequest.Question? { QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId))?.question }
+        // To question 1 (Left stops there).
+        try await sendNamedKeys(Array(repeating: "Left", count: n - 1), to: paneId)
+        try await Task.sleep(for: .milliseconds(200))
+        guard let first = try await now() else { throw QuestionAdapter.Failure.stuck("question 1") }
+        var questions = [first]
+        for _ in 1..<n {
+            try await sendNamedKeys(["Right"], to: paneId)
+            var next: QuestionRequest.Question?
+            _ = try await waitScreen(paneId: paneId, timeout: 2) { screen in
+                guard let r = QuestionAdapter.claudeScreen(screen), r.question.text != questions.last?.text else { return false }
+                next = r.question; return true
+            }
+            guard let q = next else { throw QuestionAdapter.Failure.stuck("reading question \(questions.count + 1)") }
+            questions.append(q)
+        }
+        // Back to where the picker was.
+        let back = n - 1 - (questions.firstIndex { $0.text == shown.question.text } ?? 0)
+        if back > 0 { try await sendNamedKeys(Array(repeating: "Left", count: back), to: paneId) }
+        guard try await waitScreen(paneId: paneId, timeout: 2, { QuestionAdapter.claudeScreen($0)?.question.text == shown.question.text }) else {
+            throw QuestionAdapter.Failure.stuck("back to the question on screen")
+        }
+        return QuestionAdapter.screenRequest(headers: shown.headers, questions: questions)
+    }
+
+    private func waitScreen(paneId: String, timeout: Double, _ ok: (String) -> Bool) async throws -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while true {
+            if ok(try await visibleText(paneId: paneId)) { return true }
+            if Date() >= end { return false }
+            try await Task.sleep(for: .milliseconds(150))
+        }
+    }
+}

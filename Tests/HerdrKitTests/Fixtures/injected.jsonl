@@ -1,0 +1,11 @@
+{"type":"user","uuid":"i1","message":{"role":"user","content":"Real question"}}
+{"type":"user","uuid":"i2","isMeta":true,"message":{"role":"user","content":"Caveat: local command output follows"}}
+{"type":"user","uuid":"i3","message":{"role":"user","content":"<command-name>/effort</command-name>"}}
+{"type":"user","uuid":"i4","message":{"role":"user","content":"<local-command-stdout>Set effort</local-command-stdout>"}}
+{"type":"user","uuid":"i5","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>reminder</system-reminder>"}]}}
+{"type":"user","uuid":"i6","isCompactSummary":true,"message":{"role":"user","content":"Summary of the earlier work"}}
+{"type":"user","uuid":"i7","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}}
+{"type":"assistant","uuid":"i8","message":{"role":"assistant","content":[{"type":"tool_use","id":"k1","name":"Read","input":{"file_path":"/a"}}]}}
+{"type":"user","uuid":"i9","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"k1","content":"file text"}]}}
+{"type":"user","uuid":"i10","message":{"role":"user","content":"[herdr-send from orchard-main-orch] please rebuild"}}
+{"type":"assistant","uuid":"i11","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]}}
