@@ -122,7 +122,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         nav_row(app, Icon::SquarePen, "New tab", None, 0, Message::Sidebar(SidebarMsg::NewTab)),
         nav_row(app, Icon::Inbox, "Needs you", Some(Screen::NeedsYou), blocked, Message::Navigate(Screen::NeedsYou)),
         nav_row(app, Icon::LayoutGrid, "Overview", Some(Screen::Overview), 0, Message::Navigate(Screen::Overview)),
-        nav_row(app, Icon::Search, "Search", Some(Screen::Search), 0, Message::Navigate(Screen::Search)),
+        nav_row(app, Icon::Search, "Search", Some(Screen::Search), 0, Message::Search(crate::search::SearchMsg::Open)),
     ]
     .spacing(2);
 

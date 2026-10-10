@@ -4,6 +4,7 @@ use crate::source::DataSource;
 use fb_ui::{Mode, StatusKind};
 use herdr_core::{AgentStatus, ConversationItem, Pane, Tab, Workspace};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
@@ -60,8 +61,9 @@ pub struct State {
     pub selected_workspace: Option<String>,
     pub selected_tab: Option<String>,
     pub selected_pane: Option<String>,
-    /// Conversation items per pane id. Filled for the selected pane on `refresh`.
-    pub conversations: HashMap<String, Vec<ConversationItem>>,
+    /// Conversation items per pane id. Filled for the selected pane on `refresh`. Shared (`Arc`), so a search worker can
+    /// hold a snapshot without copying it.
+    pub conversations: HashMap<String, Arc<Vec<ConversationItem>>>,
     /// What `conversations` held when it was last fetched, per pane: the source's revision, or the tail of the items.
     seen: HashMap<String, Seen>,
     pub connected: bool,
@@ -71,8 +73,11 @@ pub struct State {
     pub sidebar: crate::sidebar::SidebarState,
     pub toprow: crate::toprow::TopRowState,
     pub overview: crate::overview::OverviewState,
+    pub needs_you: crate::needs_you::NeedsYouState,
     pub conversation: crate::conversation::ConversationState,
     pub composer: crate::composer::ComposerState,
+    pub cards: crate::cards::CardsState,
+    pub search: crate::search::SearchState,
 }
 
 impl State {
@@ -91,8 +96,11 @@ impl State {
             sidebar: Default::default(),
             toprow: Default::default(),
             overview: Default::default(),
+            needs_you: Default::default(),
             conversation: Default::default(),
             composer: Default::default(),
+            cards: Default::default(),
+            search: Default::default(),
         }
     }
 
@@ -200,7 +208,7 @@ impl State {
         if same {
             return false;
         }
-        self.conversations.insert(p.id, items);
+        self.conversations.insert(p.id, Arc::new(items));
         true
     }
 }

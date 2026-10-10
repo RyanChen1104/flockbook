@@ -75,8 +75,8 @@ fn ranking_conversation() -> Vec<ConversationItem> {
             AssistantText(
                 "結果摘要：新上架的商品現在排第一，舊的暢銷商品仍然排第二。\n\n\
                  ### 風險\n\n\
-                 - 長尾查詢可能受到 *衰減* 影響，需要用上週的查詢紀錄重放驗證。\n\
-                 - `half_life_days` 設為 30 只是起點，之後要用 A/B 測試調整。\n\n\
+                 - 長尾查詢可能受到*衰減*影響，需要用上週的查詢紀錄重放驗證。\n\
+                 - `half_life_days`設為 30 只是起點，之後要用 A/B 測試調整。\n\n\
                  Latency stays flat: p95 went from 41 ms to 43 ms."
                     .into(),
             ),
@@ -109,6 +109,8 @@ enum End {
     Running(&'static str, &'static str),
     /// A permission request.
     Ask(&'static str),
+    /// A question with options (AskUserQuestion).
+    AskQuestion,
 }
 
 /// Per agent: (the user's request, the agent's first answer, the ending).
@@ -123,7 +125,7 @@ fn script(agent: &str) -> (&'static str, &'static str, End) {
         "harbor-deploy-ops" => ("Ship build 418 to staging.", "The image is built and tagged. Next is the rollout.", End::Ask("./scripts/deploy.sh --env staging")),
         "harbor-ci-dev" => ("Why is the lint job slow?", "The cache key changed on every run. I pinned it to the lockfile hash.", End::Say("Lint now takes 40 s instead of 3 min.")),
         "harbor-runbook-docs" => ("Write the rollback runbook.", "I listed the three rollback paths in order of risk.", End::Say("The runbook is ready for review.")),
-        "lighthouse-start-docs" => ("Rewrite the install step for Windows.", "The old text assumes a Unix shell. I need to check one command.", End::Ask("winget install example-cli")),
+        "lighthouse-start-docs" => ("Rewrite the install step for Windows.", "The old text assumes a Unix shell. I need to know who reads this page before I write it.", End::AskQuestion),
         "lighthouse-api-docs" => ("Generate the API reference from the schema.", "The schema has 38 endpoints. I grouped them by resource.", End::Say("Reference generated. Two endpoints lack descriptions.")),
         "tidepool-parse-dev" => ("The parser fails on nested quotes.", "I wrote a failing case first. It breaks on an escaped quote in a key.", End::Tool("pencil", "Edited a file")),
         "tidepool-release-dev" => ("Prepare the 0.9 release notes.", "I collected 14 merged changes since the last tag.", End::Say("Notes drafted. Waiting for the version bump.")),
@@ -131,6 +133,25 @@ fn script(agent: &str) -> (&'static str, &'static str, End) {
         "quarry-notes-docs" => ("Summarize today's ranking changes.", "I read the diff and the benchmark output.", End::Say("Summary saved to the notes page.")),
         _ => ("Please pick up the next task.", "I read the notes and the open issues.", End::Say("Ready for the next task.")),
     }
+}
+
+/// The demo's pending question, same shape as an AskUserQuestion call.
+fn demo_question() -> herdr_core::QuestionRequest {
+    use herdr_core::{QOption, Question};
+    let opt = |label: &str, detail: &str, recommended: bool| QOption { label: label.into(), detail: detail.into(), recommended };
+    herdr_core::QuestionRequest::new(
+        "toolu_demo_q",
+        vec![Question::new(
+            "Audience",
+            "Who is the Getting Started page for?",
+            vec![
+                opt("New contributors", "Developers joining the repo: layout, running the docs site locally, making a first change. The index has no setup steps, so this fills the biggest gap.", true),
+                opt("Operators who deploy", "People who run deploys: the Harbor flow, environment setup, and what to check after a deploy.", false),
+                opt("API users", "Consumers of the services: calling Orchard and Atlas, with request and response basics.", false),
+            ],
+            false,
+        )],
+    )
 }
 
 fn scripted_conversation(agent: &str) -> Vec<ConversationItem> {
@@ -149,9 +170,10 @@ fn scripted_conversation(agent: &str) -> Vec<ConversationItem> {
             ToolChips(vec![ToolChip { id: "g-c2a".into(), symbol: "terminal".into(), text: format!("Running {tool}..."), calls: vec![ToolCall { id: "g-c2a-c".into(), tool_name: tool.into(), summary: cmd.into(), input: cmd.into(), output: None, is_error: false }] }]),
             BASE_TS + 60.0,
         )),
+        End::AskQuestion => v.push(item("g-q1", ItemKind::Question(demo_question()), BASE_TS + 50.0)),
         End::Ask(cmd) => v.push(item(
             "g-p1",
-            ItemKind::PermissionRequest(herdr_core::PermissionRequest { title: "Run a command".into(), command: cmd.into(), tool_name: "Bash".into(), tool_use_id: "toolu_demo".into(), state: PermState::Pending }),
+            ItemKind::PermissionRequest(herdr_core::PermissionRequest { title: "Run a command".into(), command: cmd.into(), tool_name: "Bash".into(), tool_use_id: "toolu_demo".into(), state: PermState::Pending, detail: String::new(), open_calls: 1 }),
             BASE_TS + 50.0,
         )),
     }

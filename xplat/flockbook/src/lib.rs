@@ -35,11 +35,16 @@
 //!
 //! Design tokens, fonts, icons and status symbols come from `fb-ui`. Never hard-code a color: use `Tokens`.
 
+pub mod access;
+pub mod actions;
+pub mod cards;
 pub mod composer;
 pub mod conversation;
 pub mod demo;
 pub mod links;
+pub mod needs_you;
 pub mod overview;
+pub mod search;
 pub mod sidebar;
 pub mod snapshot;
 pub mod source;
@@ -71,8 +76,11 @@ pub enum Message {
     Sidebar(sidebar::SidebarMsg),
     TopRow(toprow::TopRowMsg),
     Overview(overview::OverviewMsg),
+    NeedsYou(needs_you::NeedsYouMsg),
     Conversation(conversation::ConversationMsg),
     Composer(composer::ComposerMsg),
+    Cards(cards::CardsMsg),
+    Search(search::SearchMsg),
 }
 
 pub struct App {
@@ -99,6 +107,8 @@ impl App {
         app.state.select_tab(&ws, &tab);
         app.state.overview.clock = Some(overview::Clock::demo());
         app.refresh();
+        // The demo's blocked panes show their cards; the actions only record (no socket).
+        cards::install_demo(&mut app);
         app
     }
 
@@ -119,6 +129,8 @@ impl App {
 
     /// Pulls the tree and the selected conversation from the source.
     pub fn refresh(&mut self) {
+        // On Needs you the cards work on the selected request's pane.
+        needs_you::retarget(self);
         let changed = self.state.reload(self.source.as_ref());
         let pane = self.state.selected_pane().map(|p| p.id.clone());
         self.state.composer.switch_pane(pane.as_deref());
@@ -126,12 +138,14 @@ impl App {
         if changed || self.state.conversation.pane != pane {
             conversation::sync_markdown(self);
         }
+        cards::on_refresh(self);
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(screen) => {
                 self.state.screen = screen;
+                needs_you::sync_target(self);
                 Task::none()
             }
             Message::SelectWorkspace(id) => {
@@ -163,17 +177,21 @@ impl App {
             Message::Sidebar(m) => sidebar::update(self, m),
             Message::TopRow(m) => toprow::update(self, m),
             Message::Overview(m) => overview::update(self, m),
+            Message::NeedsYou(m) => needs_you::update(self, m),
             Message::Conversation(m) => conversation::update(self, m),
             Message::Composer(m) => composer::update(self, m),
+            Message::Cards(m) => cards::update(self, m),
+            Message::Search(m) => search::update(self, m),
         }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
         let t = self.tokens();
         let main: Element<Message> = match self.state.screen {
-            Screen::Conversation => column![style::with_top_fade(t, conversation::view(self)), composer::view(self)].into(),
+            Screen::Conversation => column![style::with_top_fade(t, conversation::view(self)), cards::bottom(self)].into(),
             Screen::Overview => style::with_top_fade(t, overview::view(self)),
-            Screen::NeedsYou | Screen::Search => overview::view(self),
+            Screen::NeedsYou => needs_you::view(self),
+            Screen::Search => overview::view(self),
         };
         let right = column![container(toprow::view(self)).height(Length::Fixed(fb_ui::theme::TOPROW_H)), container(main).width(Length::Fill).height(Length::Fill)];
         let body = row![

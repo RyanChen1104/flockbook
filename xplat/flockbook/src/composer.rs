@@ -29,6 +29,8 @@ pub const MAX_LINES: usize = 8;
 const LINE_H: f32 = READING.size * READING.line;
 const MIN_H: f32 = LINE_H + 8.0;
 const MAX_H: f32 = LINE_H * MAX_LINES as f32 + 8.0;
+/// Widget id of the editor (tests and focus operations).
+pub const EDITOR_ID: &str = "composer-editor";
 /// Width cap of the card, same as the conversation column.
 pub const CARD_MAX_W: f32 = 780.0;
 
@@ -207,6 +209,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let lines = st.content.line_count().clamp(1, MAX_LINES);
     let editor = text_editor_fn(&st.content)
+        .id(EDITOR_ID)
         .placeholder(placeholder)
         .on_action(|a| Message::Composer(ComposerMsg::Edit(a)))
         .key_binding(key_binding)

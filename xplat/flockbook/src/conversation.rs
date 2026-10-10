@@ -356,8 +356,7 @@ pub fn sync_markdown(app: &mut App) {
         *cs = ConversationState { probe: cs.probe.take(), viewport: cs.viewport, sink: cs.sink.clone(), pane: Some(pane.id.clone()), more_earlier: can_more, earlier_seq: cs.earlier_seq + 1, rebuilds: cs.rebuilds, ..Default::default() };
         cs.sink.borrow_mut().measures.clear();
     }
-    let empty: Vec<herdr_core::ConversationItem> = Vec::new();
-    let items = st.conversations.get(&pane.id).unwrap_or(&empty);
+    let items: &[herdr_core::ConversationItem] = st.conversations.get(&pane.id).map(|v| v.as_slice()).unwrap_or(&[]);
     cs.rebuilds += 1;
     let rows = build::build_rows(items, &cs.expanded, &mut cs.cache, cs.more_earlier, cs.loading_earlier);
     match cs.doc.set_rows(rows) {

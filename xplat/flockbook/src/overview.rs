@@ -436,8 +436,8 @@ fn workspace_sections<'a>(app: &'a App, cols: usize, clock: Clock) -> Element<'a
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match app.state.screen {
-        Screen::NeedsYou => return crate::stub(app, "Needs you"),
-        Screen::Search => return crate::stub(app, "Search"),
+        Screen::NeedsYou => return crate::needs_you::view(app),
+        Screen::Search => return crate::search::view(app),
         _ => {}
     }
     responsive(move |size| {
