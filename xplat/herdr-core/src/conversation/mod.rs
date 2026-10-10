@@ -36,6 +36,8 @@ pub struct ConversationParser {
     run_key: String,
     /// tool_use id -> command text, until a result arrives
     open_tool_uses: HashMap<String, String>,
+    /// tool_use id -> the call's `description`, when it has one
+    open_details: HashMap<String, String>,
     open_order: Vec<String>,
     /// tool call id -> time of its line
     call_ts: HashMap<String, f64>,
@@ -110,6 +112,8 @@ impl ConversationParser {
                         tool_name: t.tool,
                         tool_use_id: last.clone(),
                         state: PermState::Pending,
+                        detail: self.open_details.get(last).cloned().unwrap_or_default(),
+                        open_calls: self.open_order.len(),
                     }),
                     timestamp: self.call_ts.get(last).copied(),
                 });
@@ -221,6 +225,11 @@ impl ConversationParser {
                     self.run.push(RunEntry { label: label_for(&name), tool: name.clone(), id: id.clone() });
                     self.set_call_ts(&id);
                     self.open_tool_uses.insert(id.clone(), command_text(&name, &input));
+                    if name == "Bash" {
+                        if let Some(d) = s_of(&input, "description").filter(|d| !d.is_empty()) {
+                            self.open_details.insert(id.clone(), d.to_string());
+                        }
+                    }
                     self.open_order.push(id.clone());
                     self.call_by_id.insert(
                         id.clone(),
@@ -259,6 +268,7 @@ impl ConversationParser {
             c.is_error = is_error;
         }
         self.open_tool_uses.remove(id);
+        self.open_details.remove(id);
         self.open_order.retain(|x| x != id);
     }
 

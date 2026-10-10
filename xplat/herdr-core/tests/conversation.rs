@@ -235,3 +235,29 @@ fn question_state_type_is_reexported() {
     // Compile-time check that the public surface the app needs is reachable from the crate root.
     let _ = QuestionState::Pending;
 }
+
+#[test]
+fn pending_bash_carries_its_description() {
+    let detail = |line: &str| match &parse(&[line.into()]).last().unwrap().kind {
+        ItemKind::PermissionRequest(r) => r.detail.clone(),
+        _ => panic!("pending permission request"),
+    };
+    let with = r#"{"type":"assistant","uuid":"d1","message":{"content":[{"type":"tool_use","id":"dd","name":"Bash","input":{"command":"npm test","description":"Run the tests"}}]}}"#;
+    assert_eq!(detail(with), "Run the tests");
+    let without = r#"{"type":"assistant","uuid":"d2","message":{"content":[{"type":"tool_use","id":"de","name":"Bash","input":{"command":"npm test"}}]}}"#;
+    assert_eq!(detail(without), "");
+    let edit = r#"{"type":"assistant","uuid":"d3","message":{"content":[{"type":"tool_use","id":"df","name":"Edit","input":{"file_path":"a.rs","description":"x"}}]}}"#;
+    assert_eq!(detail(edit), "", "only Bash shows a description under the command");
+}
+
+#[test]
+fn pending_request_counts_the_open_calls() {
+    let open = |lines: &[&str]| match &parse(&lines.iter().map(|l| l.to_string()).collect::<Vec<_>>()).last().unwrap().kind {
+        ItemKind::PermissionRequest(r) => r.open_calls,
+        _ => panic!("pending permission request"),
+    };
+    let one = r#"{"type":"assistant","uuid":"o1","message":{"content":[{"type":"tool_use","id":"oa","name":"Bash","input":{"command":"ls"}}]}}"#;
+    let two = r#"{"type":"assistant","uuid":"o2","message":{"content":[{"type":"tool_use","id":"oa","name":"Bash","input":{"command":"ls"}},{"type":"tool_use","id":"ob","name":"Bash","input":{"command":"pwd"}}]}}"#;
+    assert_eq!(open(&[one]), 1);
+    assert_eq!(open(&[two]), 2, "parallel calls");
+}

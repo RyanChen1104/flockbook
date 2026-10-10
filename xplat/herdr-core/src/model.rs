@@ -122,6 +122,12 @@ pub struct PermissionRequest {
     pub tool_name: String,
     pub tool_use_id: String,
     pub state: PermState,
+    /// The call's own one-line description (Claude's Bash `description`), shown under the command in the prompt.
+    /// Empty when the call has none.
+    pub detail: String,
+    /// How many tool calls are still waiting for a result, this one included. More than one means parallel calls:
+    /// the prompt on screen may belong to another of them.
+    pub open_calls: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
