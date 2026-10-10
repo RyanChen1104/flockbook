@@ -163,8 +163,9 @@ impl Geometry {
     /// Document position under `point` (widget-relative). Points outside blocks
     /// clamp to the nearest edge, so a drag can leave the widget.
     fn hit(&self, blocks: &[Block], point: Point) -> Option<Pos> {
-        let last = self.items.len().checked_sub(1)?;
-        let first_item = &self.items[0];
+        // An empty document (or one not laid out yet) has no position to return.
+        let first_item = self.items.first()?;
+        let last = self.items.len() - 1;
         if point.y < first_item.rect.y {
             return Some(Pos { block: 0, offset: 0 });
         }

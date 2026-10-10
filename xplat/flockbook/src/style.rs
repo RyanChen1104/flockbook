@@ -1,8 +1,8 @@
 //! Small container styles shared by the modules. Add to it freely; keep each style a pure function of `Tokens`.
 
 use fb_ui::theme::*;
-use iced::widget::container;
-use iced::{Background, Border, Color, Theme};
+use iced::widget::{column, container, stack, Space};
+use iced::{Background, Border, Color, Element, Length, Radians, Theme};
 
 pub fn solid(c: Color) -> container::Style {
     container::Style { background: Some(Background::Color(c)), ..Default::default() }
@@ -43,5 +43,42 @@ pub fn float_e2(t: Tokens, radius: f32) -> impl Fn(&Theme) -> container::Style {
         border: Border { color: t.sep, width: 1.0, radius: radius.into() },
         shadow: shadow_e2(&t),
         ..Default::default()
+    }
+}
+
+/// Height of the soft fade under the top row.
+pub const FADE_H: f32 = 24.0;
+
+/// A vertical gradient from the content color to the same color with no alpha (top to bottom).
+pub fn fade_down(t: Tokens) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        let g = iced::gradient::Linear::new(Radians(std::f32::consts::PI)).add_stop(0.0, t.bg).add_stop(1.0, Color { a: 0.0, ..t.bg });
+        container::Style { background: Some(Background::Gradient(iced::Gradient::Linear(g))), ..Default::default() }
+    }
+}
+
+/// Puts a `FADE_H` soft fade over the top of `content`, so rows that scroll under the top row fade out instead of
+/// being cut. The content keeps its own top inset (24 pt in the conversation, 36 pt in the overview), so the first
+/// row at rest sits below the fade. The fade ignores the pointer.
+pub fn with_top_fade<'a, M: 'a>(t: Tokens, content: Element<'a, M>) -> Element<'a, M> {
+    let fade = container(Space::new()).width(Length::Fill).height(Length::Fixed(FADE_H)).style(fade_down(t));
+    stack![content, column![fade, Space::new().height(Length::Fill)]].into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fade_runs_from_the_content_color_to_transparent() {
+        let t = Tokens::LIGHT;
+        let st = fade_down(t)(&Theme::Light);
+        let Some(Background::Gradient(iced::Gradient::Linear(g))) = st.background else { panic!("gradient") };
+        let stops: Vec<_> = g.stops.iter().flatten().collect();
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, t.bg);
+        assert_eq!(stops[1].color.a, 0.0);
+        assert_eq!((stops[1].color.r, stops[1].color.g, stops[1].color.b), (t.bg.r, t.bg.g, t.bg.b), "no gray fringe");
+        assert_eq!(FADE_H, 24.0);
     }
 }

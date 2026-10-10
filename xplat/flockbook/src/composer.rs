@@ -74,6 +74,10 @@ pub struct ComposerState {
     pub branch_override: Option<String>,
     /// A send is on its way (blocks double sends of the same Enter).
     pub sending: bool,
+    /// The pane the editor currently belongs to.
+    pub pane: Option<String>,
+    /// Unsent text of the panes that are not shown, by pane id. One draft per pane, like the Swift app.
+    pub drafts: HashMap<String, String>,
 }
 
 impl ComposerState {
@@ -84,6 +88,30 @@ impl ComposerState {
         self.content = Content::with_text(s);
         self.content.perform(Action::Move(text_editor::Motion::DocumentEnd));
     }
+    /// Switches the editor to `pane`: the text on screen is kept as the old pane's draft, the new pane's draft
+    /// (if any) comes back. Does nothing when the pane did not change.
+    pub fn switch_pane(&mut self, pane: Option<&str>) {
+        if self.pane.as_deref() == pane {
+            return;
+        }
+        if let Some(old) = self.pane.take() {
+            let text = self.text();
+            if text.is_empty() {
+                self.drafts.remove(&old);
+            } else {
+                self.drafts.insert(old, text);
+            }
+        }
+        let draft = pane.and_then(|p| self.drafts.remove(p)).unwrap_or_default();
+        self.error = None;
+        if draft.is_empty() {
+            self.content = Content::new();
+        } else {
+            self.set_text(&draft);
+        }
+        self.pane = pane.map(str::to_string);
+    }
+
     pub fn can_send(&self) -> bool {
         self.sender.is_some() && !self.text().trim().is_empty()
     }
@@ -94,7 +122,7 @@ pub enum ComposerMsg {
     Edit(Action),
     Submit,
     /// Result of a send. `text` is given back to an empty box on failure.
-    Sent { text: String, error: Option<String> },
+    Sent { pane: String, text: String, error: Option<String> },
     /// Buttons without a function yet (attach, dictate).
     Noop,
 }
@@ -134,21 +162,28 @@ pub fn update(app: &mut App, msg: ComposerMsg) -> Task<Message> {
             app.state.composer.error = None;
             let (tx, rx) = iced::futures::channel::oneshot::channel();
             let sent = trimmed.clone();
+            let pane_id = pane.clone();
             std::thread::spawn(move || {
                 let _ = tx.send(sender.send(&pane, &sent).err());
             });
             Task::perform(
                 async move { rx.await.unwrap_or_else(|_| Some("send thread stopped".to_string())) },
-                move |error| Message::Composer(ComposerMsg::Sent { text: trimmed.clone(), error }),
+                move |error| Message::Composer(ComposerMsg::Sent { pane: pane_id.clone(), text: trimmed.clone(), error }),
             )
         }
-        ComposerMsg::Sent { text, error } => {
+        ComposerMsg::Sent { pane, text, error } => {
             if let Some(e) = error {
-                // Give the text back unless the owner already typed something new.
-                if app.state.composer.text().is_empty() {
-                    app.state.composer.set_text(&text);
+                let c = &mut app.state.composer;
+                if c.pane.as_deref() == Some(pane.as_str()) {
+                    // Give the text back unless the owner already typed something new.
+                    if c.text().is_empty() {
+                        c.set_text(&text);
+                    }
+                    c.error = Some(format!("Not sent: {e}. Press Enter to try again."));
+                } else {
+                    // The owner moved to another pane: the text goes back to the draft of the pane it was for.
+                    c.drafts.entry(pane).or_insert(text);
                 }
-                app.state.composer.error = Some(format!("Not sent: {e}. Press Enter to try again."));
             }
             Task::none()
         }
@@ -191,7 +226,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         });
 
     let can_send = st.can_send();
-    let send_btn = button(container(icon(Icon::ArrowUp, SIZE_DEFAULT, if can_send { t.on_accent } else { t.label_3 })).center(Length::Fixed(28.0)))
+    // The svg renderer drops icon alpha, so translucent icon colors are blended with the surface by hand.
+    let card_bg = if t.mode.is_dark() { rgba(48, 48, 52, 1.0) } else { rgba(255, 255, 255, 1.0) };
+    let send_icon = if can_send { t.on_accent } else { over(t.label_3, over(t.fill_2, card_bg)) };
+    let send_btn = button(container(icon(Icon::ArrowUp, SIZE_DEFAULT, send_icon)).center(Length::Fixed(28.0)))
         .padding(0)
         .on_press_maybe(can_send.then_some(Message::Composer(ComposerMsg::Submit)))
         .style(move |_, status| {
@@ -207,7 +245,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         });
 
     let ghost = move |ic: Icon, size: f32| {
-        button(container(icon(ic, size, t.label_2)).center(Length::Fixed(28.0)))
+        button(container(icon(ic, size, over(t.label_2, card_bg))).center(Length::Fixed(28.0)))
             .padding(0)
             .on_press_maybe((!read_only).then_some(Message::Composer(ComposerMsg::Noop)))
             .style(move |_, status| button::Style {
@@ -220,7 +258,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let mut controls = row![ghost(Icon::Plus, SIZE_DEFAULT + 2.0)].spacing(SP_8).align_y(Alignment::Center);
     if let Some(b) = branch_for(app) {
         controls = controls.push(
-            row![icon(Icon::GitBranch, SIZE_INLINE, t.label_2), CAPTION.text(b).color(t.label_2).wrapping(text::Wrapping::None)]
+            row![icon(Icon::GitBranch, SIZE_INLINE, over(t.label_2, card_bg)), CAPTION.text(b).color(t.label_2).wrapping(text::Wrapping::None)]
                 .spacing(4)
                 .align_y(Alignment::Center),
         );

@@ -35,6 +35,8 @@ pub struct Inline {
     pub code: bool,
     pub strike: bool,
     pub link: Option<String>,
+    /// Syntax class (code rows only).
+    pub tone: crate::highlight::Tone,
 }
 
 impl Inline {
@@ -382,10 +384,39 @@ pub struct SelState {
     drag: Option<Drag>,
     /// True after a click in the conversation; gates keyboard shortcuts so they do not steal the composer's.
     pub focused: bool,
-    last_click: Option<(std::time::Instant, Anchor, u8)>,
+    last_click: Option<(std::time::Instant, Anchor, iced::Point, u8)>,
+    clock: Clock,
 }
 
-const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(500);
+/// A second press within this time (and `MULTI_CLICK_PX`) counts as a double click.
+pub const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(500);
+/// Largest pointer move between two presses of one multi-click, in px.
+pub const MULTI_CLICK_PX: f32 = 4.0;
+
+/// Where `SelState` reads the time. The system clock by default; tests inject their own.
+#[derive(Clone)]
+pub struct Clock(Rc<dyn Fn() -> std::time::Instant>);
+
+impl Clock {
+    pub fn new(f: impl Fn() -> std::time::Instant + 'static) -> Clock {
+        Clock(Rc::new(f))
+    }
+    pub fn now(&self) -> std::time::Instant {
+        (self.0)()
+    }
+}
+
+impl Default for Clock {
+    fn default() -> Clock {
+        Clock::new(std::time::Instant::now)
+    }
+}
+
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Clock")
+    }
+}
 
 impl SelState {
     pub fn dragging(&self) -> bool {
@@ -420,14 +451,26 @@ impl SelState {
         (Anchor { id: at.id, offset: s }, Anchor { id: at.id, offset: e })
     }
 
-    /// Mouse press at `at`. A second quick press selects a word, a third the paragraph. Shift extends.
-    pub fn press(&mut self, doc: &Doc, at: Anchor, shift: bool, now: std::time::Instant) {
+    /// A state that reads the time from `clock` (tests).
+    pub fn with_clock(clock: Clock) -> SelState {
+        SelState { clock, ..Default::default() }
+    }
+
+    /// Mouse press at `at`, pointer at `point` (widget coordinates). Reads the injected clock.
+    pub fn press(&mut self, doc: &Doc, at: Anchor, point: iced::Point, shift: bool) {
+        let now = self.clock.now();
+        self.press_at(doc, at, point, shift, now);
+    }
+
+    /// Mouse press at time `now`. A second press within `MULTI_CLICK` and `MULTI_CLICK_PX` of the first, on the same
+    /// row, selects a word; a third the paragraph. Shift extends.
+    pub fn press_at(&mut self, doc: &Doc, at: Anchor, point: iced::Point, shift: bool, now: std::time::Instant) {
         self.focused = true;
         let count = match self.last_click {
-            Some((t, prev, n)) if now.duration_since(t) <= MULTI_CLICK && prev.id == at.id && prev.offset.abs_diff(at.offset) <= 3 => n % 3 + 1,
+            Some((t, prev, p, n)) if now.saturating_duration_since(t) <= MULTI_CLICK && prev.id == at.id && p.distance(point) <= MULTI_CLICK_PX => n % 3 + 1,
             _ => 1,
         };
-        self.last_click = Some((now, at, count));
+        self.last_click = Some((now, at, point, count));
         if shift && count == 1 {
             if let Some(sel) = self.sel {
                 self.sel = Some(FlowSel { anchor: sel.anchor, focus: at });
@@ -500,6 +543,8 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    const P0: iced::Point = iced::Point::ORIGIN;
+
     fn prose(id: u64, text: &str) -> Arc<Row> {
         Arc::new(Row::new(id, RowKind::Prose, vec![Para::text(text)], "\n\n", 12.0))
     }
@@ -516,18 +561,56 @@ mod tests {
         let mut s = SelState::default();
         let t0 = Instant::now();
         let at = Anchor { id: 1, offset: 7 };
-        s.press(&doc, at, false, t0);
+        s.press_at(&doc, at, P0, false, t0);
         s.release();
         assert!(s.sel.is_none());
-        s.press(&doc, at, false, t0 + Duration::from_millis(100));
+        s.press_at(&doc, at, P0, false, t0 + Duration::from_millis(100));
         s.release();
         assert_eq!(s.text(&doc).as_deref(), Some("beta"));
-        s.press(&doc, at, false, t0 + Duration::from_millis(200));
+        s.press_at(&doc, at, P0, false, t0 + Duration::from_millis(200));
         s.release();
         assert_eq!(s.text(&doc).as_deref(), Some("alpha beta gamma"));
         // A slow click starts over.
-        s.press(&doc, at, false, t0 + Duration::from_secs(5));
+        s.press_at(&doc, at, P0, false, t0 + Duration::from_secs(5));
         assert!(s.sel.is_none());
+    }
+
+    fn clocked() -> (SelState, Rc<std::cell::Cell<Instant>>) {
+        let now = Rc::new(std::cell::Cell::new(Instant::now()));
+        let c = now.clone();
+        (SelState::with_clock(Clock::new(move || c.get())), now)
+    }
+
+    fn click(s: &mut SelState, now: &Rc<std::cell::Cell<Instant>>, doc: &Doc, after_ms: u64, at: Anchor, p: iced::Point) {
+        now.set(now.get() + Duration::from_millis(after_ms));
+        s.press(doc, at, p, false);
+        s.release();
+    }
+
+    #[test]
+    fn injected_clock_decides_double_click_timing() {
+        let doc = doc_of(vec![prose(1, "alpha beta gamma")]);
+        let at = Anchor { id: 1, offset: 7 };
+        // Fast second click, 2 px away: word.
+        let (mut s, now) = clocked();
+        click(&mut s, &now, &doc, 0, at, iced::Point::new(100.0, 50.0));
+        click(&mut s, &now, &doc, 200, at, iced::Point::new(102.0, 50.0));
+        assert_eq!(s.text(&doc).as_deref(), Some("beta"));
+        // Slow second click: single click, no selection.
+        let (mut s, now) = clocked();
+        click(&mut s, &now, &doc, 0, at, iced::Point::new(100.0, 50.0));
+        click(&mut s, &now, &doc, 900, at, iced::Point::new(100.0, 50.0));
+        assert!(s.sel.is_none());
+        // Fast but far away (40 px): single click.
+        let (mut s, now) = clocked();
+        click(&mut s, &now, &doc, 0, at, iced::Point::new(100.0, 50.0));
+        click(&mut s, &now, &doc, 100, at, iced::Point::new(140.0, 50.0));
+        assert!(s.sel.is_none());
+        // Exactly at the interval still counts.
+        let (mut s, now) = clocked();
+        click(&mut s, &now, &doc, 0, at, iced::Point::ORIGIN);
+        click(&mut s, &now, &doc, MULTI_CLICK.as_millis() as u64, at, iced::Point::ORIGIN);
+        assert_eq!(s.text(&doc).as_deref(), Some("beta"));
     }
 
     #[test]
@@ -535,11 +618,11 @@ mod tests {
         let doc = doc_of(vec![prose(1, "alpha beta gamma"), prose(2, "second paragraph")]);
         let mut s = SelState::default();
         let t0 = Instant::now();
-        s.press(&doc, Anchor { id: 1, offset: 6 }, false, t0);
+        s.press_at(&doc, Anchor { id: 1, offset: 6 }, P0, false, t0);
         s.drag_to(&doc, Anchor { id: 1, offset: 10 });
         s.release();
         assert_eq!(s.text(&doc).as_deref(), Some("beta"));
-        s.press(&doc, Anchor { id: 2, offset: 6 }, true, t0 + Duration::from_secs(3));
+        s.press_at(&doc, Anchor { id: 2, offset: 6 }, P0, true, t0 + Duration::from_secs(3));
         s.release();
         assert_eq!(s.text(&doc).as_deref(), Some("beta gamma\n\nsecond"));
     }
@@ -550,8 +633,8 @@ mod tests {
         let mut s = SelState::default();
         let t0 = Instant::now();
         let at = Anchor { id: 1, offset: 8 }; // inside "beta"
-        s.press(&doc, at, false, t0);
-        s.press(&doc, at, false, t0 + Duration::from_millis(50));
+        s.press_at(&doc, at, P0, false, t0);
+        s.press_at(&doc, at, P0, false, t0 + Duration::from_millis(50));
         s.drag_to(&doc, Anchor { id: 1, offset: 13 }); // inside "gamma"
         assert_eq!(s.text(&doc).as_deref(), Some("beta gamma"));
         s.drag_to(&doc, Anchor { id: 1, offset: 1 }); // back into "alpha"
@@ -595,5 +678,23 @@ mod tests {
         let cells = ["a", "b", "c", "d"].iter().map(|s| Para::text(*s)).collect();
         let r = Row::new(1, RowKind::Table { cols: 2 }, cells, "\n\n", 12.0);
         assert_eq!(r.plain, "a\tb\nc\td");
+    }
+}
+
+#[cfg(test)]
+mod empty_tests {
+    use super::*;
+
+    #[test]
+    fn empty_doc_never_panics_in_the_selection_state() {
+        let doc = Doc::default();
+        let mut s = SelState::default();
+        s.press(&doc, Anchor { id: 1, offset: 0 }, iced::Point::ORIGIN, false);
+        s.drag_to(&doc, Anchor { id: 1, offset: 5 });
+        s.release();
+        s.select_all(&doc);
+        assert!(s.text(&doc).is_none());
+        s.validate(&doc);
+        assert!(doc.rows.is_empty());
     }
 }

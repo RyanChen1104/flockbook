@@ -38,6 +38,7 @@
 pub mod composer;
 pub mod conversation;
 pub mod demo;
+pub mod links;
 pub mod overview;
 pub mod sidebar;
 pub mod snapshot;
@@ -77,13 +78,15 @@ pub enum Message {
 pub struct App {
     pub state: State,
     pub source: Box<dyn DataSource>,
+    /// Opens clicked links. A recorder by default; `main.rs` installs the system opener for a real window.
+    pub opener: Box<dyn links::LinkOpener>,
 }
 
 impl App {
     pub fn new(source: Box<dyn DataSource>, mode: Mode, screen: Screen) -> App {
         let mut state = State::new(mode, screen);
         state.session_label = source.label();
-        let mut app = App { state, source };
+        let mut app = App { state, source, opener: Box::new(links::RecordingOpener::default()) };
         app.refresh();
         app
     }
@@ -116,8 +119,13 @@ impl App {
 
     /// Pulls the tree and the selected conversation from the source.
     pub fn refresh(&mut self) {
-        self.state.reload(self.source.as_ref());
-        conversation::sync_markdown(self);
+        let changed = self.state.reload(self.source.as_ref());
+        let pane = self.state.selected_pane().map(|p| p.id.clone());
+        self.state.composer.switch_pane(pane.as_deref());
+        // Rows are rebuilt only when the conversation changed or another pane is shown.
+        if changed || self.state.conversation.pane != pane {
+            conversation::sync_markdown(self);
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -163,8 +171,9 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let t = self.tokens();
         let main: Element<Message> = match self.state.screen {
-            Screen::Conversation => column![conversation::view(self), composer::view(self)].into(),
-            Screen::Overview | Screen::NeedsYou | Screen::Search => overview::view(self),
+            Screen::Conversation => column![style::with_top_fade(t, conversation::view(self)), composer::view(self)].into(),
+            Screen::Overview => style::with_top_fade(t, overview::view(self)),
+            Screen::NeedsYou | Screen::Search => overview::view(self),
         };
         let right = column![container(toprow::view(self)).height(Length::Fixed(fb_ui::theme::TOPROW_H)), container(main).width(Length::Fill).height(Length::Fill)];
         let body = row![

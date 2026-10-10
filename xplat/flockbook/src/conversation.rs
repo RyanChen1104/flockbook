@@ -47,9 +47,13 @@ pub struct ConversationState {
     pub sink: MeasureSink,
     pub more_earlier: bool,
     pub loading_earlier: bool,
+    /// Number of "load earlier" reads started. A result with an older number is stale.
+    pub earlier_seq: u64,
+    /// How many times the rows were rebuilt (tests: an idle tick must not rebuild).
+    pub rebuilds: u64,
     /// Last text copied (also written to the clipboard).
     pub last_copied: Option<String>,
-    /// Last link the user clicked (opened in the system browser unless `FB_NO_OPEN` is set).
+    /// Last link the user clicked (handed to `App::opener`).
     pub last_link: Option<String>,
     /// Layout facts for tests.
     pub probe: Option<Rc<RefCell<Probe>>>,
@@ -70,6 +74,8 @@ impl Default for ConversationState {
             sink: Default::default(),
             more_earlier: false,
             loading_earlier: false,
+            earlier_seq: 0,
+            rebuilds: 0,
             last_copied: None,
             last_link: None,
             probe: None,
@@ -82,6 +88,8 @@ pub enum ConversationMsg {
     Flow(FlowEvent),
     /// Timer tick of the drag auto-scroll.
     AutoScroll,
+    /// A "load earlier" read finished. `more`: older content remains (`None`: the worker died).
+    EarlierLoaded { pane: String, ticket: u64, more: Option<bool> },
 }
 
 /// Lucide icon for a herdr tool chip symbol (the symbols are SF Symbol names kept from the Swift model).
@@ -175,16 +183,21 @@ pub fn update(app: &mut App, msg: ConversationMsg) -> Task<Message> {
             Task::none()
         }
         ConversationMsg::Flow(ev) => flow_event(app, ev),
+        ConversationMsg::EarlierLoaded { pane, ticket, more } => {
+            earlier_loaded(app, pane, ticket, more);
+            Task::none()
+        }
     }
 }
 
 fn flow_event(app: &mut App, ev: FlowEvent) -> Task<Message> {
     let mut task = Task::none();
     let (mut scrolled, mut resync, mut load) = (false, false, false);
+    let mut link: Option<String> = None;
     {
         let cs = &mut app.state.conversation;
         match ev {
-            FlowEvent::Press { at, shift } => cs.sel.press(&cs.doc, at, shift, std::time::Instant::now()),
+            FlowEvent::Press { at, point, shift } => cs.sel.press(&cs.doc, at, point, shift),
             FlowEvent::Drag { at, edge } => {
                 cs.sel.drag_to(&cs.doc, at);
                 cs.edge = edge;
@@ -197,7 +210,7 @@ fn flow_event(app: &mut App, ev: FlowEvent) -> Task<Message> {
                 cs.sel.blur();
                 cs.edge = None;
             }
-            FlowEvent::Link(url) => open_link(cs, &url),
+            FlowEvent::Link(url) => link = Some(url),
             FlowEvent::Chip(id) => {
                 if !cs.expanded.remove(&id) {
                     cs.expanded.insert(id);
@@ -260,42 +273,73 @@ fn flow_event(app: &mut App, ev: FlowEvent) -> Task<Message> {
             load = true;
         }
     }
+    if let Some(url) = link {
+        open_link(app, &url);
+    }
     if resync {
         sync_markdown(app);
     }
     if load {
-        load_earlier(app);
+        task = Task::batch([task, load_earlier(app)]);
     }
     let cs = &mut app.state.conversation;
     cs.sel.validate(&cs.doc);
     task
 }
 
-fn open_link(cs: &mut ConversationState, url: &str) {
-    cs.last_link = Some(url.to_string());
-    let ok = ["http://", "https://", "mailto:"].iter().any(|p| url.starts_with(p));
-    if !ok || std::env::var_os("FB_NO_OPEN").is_some() {
-        return;
+fn open_link(app: &mut App, url: &str) {
+    app.state.conversation.last_link = Some(url.to_string());
+    if crate::links::allowed(url) {
+        app.opener.open(url);
     }
-    #[cfg(target_os = "macos")]
-    let cmd = ("open", vec![url.to_string()]);
-    #[cfg(target_os = "windows")]
-    let cmd = ("rundll32", vec!["url.dll,FileProtocolHandler".to_string(), url.to_string()]);
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let cmd = ("xdg-open", vec![url.to_string()]);
-    let _ = std::process::Command::new(cmd.0).args(&cmd.1).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 }
 
-/// Reads an older part of the pane's log through the data source, then rebuilds the rows. The reader's place
-/// stays: rows added above move the offset by their height.
-fn load_earlier(app: &mut App) {
-    let Some(pane) = app.state.selected_pane().cloned() else { return };
-    app.state.conversation.loading_earlier = true;
-    let more = app.source.load_earlier(&pane);
-    app.state.reload(app.source.as_ref());
+/// Reads an older part of the pane's log. A source with a job runs it on a blocking thread; the result comes back
+/// as `EarlierLoaded`, which is dropped when the pane changed or a newer load started in the meantime. A source
+/// without a job reads on the UI thread. The reader's place stays: rows added above move the offset by their height.
+fn load_earlier(app: &mut App) -> Task<Message> {
+    let Some(pane) = app.state.selected_pane().cloned() else { return Task::none() };
+    if app.state.conversation.loading_earlier {
+        return Task::none();
+    }
     let cs = &mut app.state.conversation;
+    cs.loading_earlier = true;
+    cs.earlier_seq += 1;
+    let ticket = cs.earlier_seq;
+    match app.source.load_earlier_job(&pane) {
+        Some(job) => {
+            sync_markdown(app); // shows "Loading earlier..."
+            let pane_id = pane.id.clone();
+            Task::perform(
+                async move {
+                    let (tx, rx) = iced::futures::channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(job());
+                    });
+                    rx.await.ok()
+                },
+                move |more| Message::Conversation(ConversationMsg::EarlierLoaded { pane: pane_id.clone(), ticket, more }),
+            )
+        }
+        None => {
+            let more = app.source.load_earlier(&pane);
+            earlier_loaded(app, pane.id, ticket, Some(more));
+            Task::none()
+        }
+    }
+}
+
+fn earlier_loaded(app: &mut App, pane: String, ticket: u64, more: Option<bool>) {
+    let cs = &mut app.state.conversation;
+    if cs.pane.as_deref() != Some(pane.as_str()) || cs.earlier_seq != ticket {
+        return; // stale: another pane is shown, or a newer load owns the flags
+    }
     cs.loading_earlier = false;
-    cs.more_earlier = more;
+    if let Some(m) = more {
+        cs.more_earlier = m;
+    }
+    app.state.invalidate(&pane);
+    app.refresh();
     sync_markdown(app);
 }
 
@@ -309,11 +353,12 @@ pub fn sync_markdown(app: &mut App) {
     let st = &mut app.state;
     let cs = &mut st.conversation;
     if cs.pane.as_deref() != Some(pane.id.as_str()) {
-        *cs = ConversationState { probe: cs.probe.take(), viewport: cs.viewport, sink: cs.sink.clone(), pane: Some(pane.id.clone()), more_earlier: can_more, ..Default::default() };
+        *cs = ConversationState { probe: cs.probe.take(), viewport: cs.viewport, sink: cs.sink.clone(), pane: Some(pane.id.clone()), more_earlier: can_more, earlier_seq: cs.earlier_seq + 1, rebuilds: cs.rebuilds, ..Default::default() };
         cs.sink.borrow_mut().measures.clear();
     }
     let empty: Vec<herdr_core::ConversationItem> = Vec::new();
     let items = st.conversations.get(&pane.id).unwrap_or(&empty);
+    cs.rebuilds += 1;
     let rows = build::build_rows(items, &cs.expanded, &mut cs.cache, cs.more_earlier, cs.loading_earlier);
     match cs.doc.set_rows(rows) {
         fb_ui::selectable::flow::Change::Prepended(k) => {

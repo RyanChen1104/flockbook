@@ -12,16 +12,11 @@ use std::cell::Cell;
 use iced_test::Simulator;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 const W: f32 = 1280.0;
 const H: f32 = 852.0;
-
-fn demo_app() -> App {
-    std::env::set_var("FB_NO_OPEN", "1");
-    let mut app = App::demo(Mode::Light, Screen::Conversation);
-    app.state.conversation.probe = Some(Rc::new(RefCell::new(Probe::default())));
-    app
-}
 
 fn probe(app: &App) -> Probe {
     app.state.conversation.probe.as_ref().unwrap().borrow().clone()
@@ -90,7 +85,6 @@ impl DataSource for Fake {
 type Items = Rc<RefCell<Vec<ConversationItem>>>;
 
 fn fake_app(items: Vec<ConversationItem>, earlier: usize) -> (App, Items, Rc<Cell<usize>>) {
-    std::env::set_var("FB_NO_OPEN", "1");
     let demo = DemoSource::new();
     let (ws, tab) = demo.default_selection();
     let items = Rc::new(RefCell::new(items));
@@ -451,4 +445,222 @@ fn five_thousand_messages_middle_snapshot() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("evidence/app-conversation-5k-mid.png");
         flockbook::snapshot::write_png(&img, &path).unwrap();
     }
+}
+
+// ------------------------------------------------------------------ links
+
+#[test]
+fn clicking_a_link_records_the_url_and_spawns_nothing() {
+    let items = vec![
+        item("u".into(), ItemKind::UserText("hi".into())),
+        item("a".into(), ItemKind::AssistantText("Read [the docs](https://example.com/docs) and [bad](javascript:alert(1)) first.".into())),
+    ];
+    let (mut app, _, _) = fake_app(items, 0);
+    // App::new installs a recorder, not the system opener.
+    assert!(app.opener.recorded().is_empty());
+    settle(&mut app);
+    let r = row_of(&app, "Read the docs");
+    let off = app.state.conversation.doc.rows[r].plain.find("docs").unwrap() + 1;
+    let p = at(&app, r, off);
+    click_at(&mut app, p);
+    assert_eq!(app.opener.recorded(), vec!["https://example.com/docs".to_string()]);
+    assert_eq!(app.state.conversation.last_link.as_deref(), Some("https://example.com/docs"));
+    // A scheme that is not web or mail is remembered as clicked but never handed to the opener.
+    let off = app.state.conversation.doc.rows[r].plain.find("bad").unwrap() + 1;
+    let p = at(&app, r, off);
+    click_at(&mut app, p);
+    assert_eq!(app.opener.recorded().len(), 1);
+}
+
+// ------------------------------------------------------------------ idle ticks
+
+struct Counting {
+    inner: DemoSource,
+    fetches: Rc<Cell<usize>>,
+    rev: Rc<Cell<u64>>,
+}
+
+impl DataSource for Counting {
+    fn label(&self) -> String {
+        "counting".into()
+    }
+    fn workspaces(&self) -> Vec<Workspace> {
+        self.inner.workspaces()
+    }
+    fn connected(&self) -> bool {
+        true
+    }
+    fn conversation(&self, pane: &Pane) -> Vec<ConversationItem> {
+        self.fetches.set(self.fetches.get() + 1);
+        self.inner.conversation(pane)
+    }
+    fn revision(&self, _pane: &Pane) -> Option<u64> {
+        Some(self.rev.get())
+    }
+}
+
+#[test]
+fn idle_ticks_do_not_fetch_or_rebuild_when_the_source_has_a_revision() {
+    let demo = DemoSource::new();
+    let (ws, tab) = demo.default_selection();
+    let (fetches, rev) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(1u64)));
+    let mut app = App::new(Box::new(Counting { inner: demo, fetches: fetches.clone(), rev: rev.clone() }), Mode::Light, Screen::Conversation);
+    app.state.select_tab(&ws, &tab);
+    app.refresh();
+    let (f0, b0) = (fetches.get(), app.state.conversation.rebuilds);
+    assert!(f0 >= 1 && b0 >= 1);
+    for _ in 0..20 {
+        let _ = app.update(Message::Tick);
+    }
+    assert_eq!((fetches.get(), app.state.conversation.rebuilds), (f0, b0), "idle ticks are free");
+    // A new revision fetches and rebuilds once.
+    rev.set(2);
+    let _ = app.update(Message::Tick);
+    assert_eq!((fetches.get(), app.state.conversation.rebuilds), (f0 + 1, b0 + 1));
+    let _ = app.update(Message::Tick);
+    assert_eq!((fetches.get(), app.state.conversation.rebuilds), (f0 + 1, b0 + 1));
+}
+
+#[test]
+fn idle_ticks_do_not_rebuild_without_a_revision_and_a_new_item_does() {
+    let (mut app, items, _) = fake_app(chat(8), 0);
+    let b0 = app.state.conversation.rebuilds;
+    for _ in 0..20 {
+        let _ = app.update(Message::Tick);
+    }
+    assert_eq!(app.state.conversation.rebuilds, b0);
+    items.borrow_mut().push(item("m8".into(), ItemKind::UserText("new".into())));
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.state.conversation.rebuilds, b0 + 1);
+    // The last item grows in place (same id): that counts as a change too.
+    items.borrow_mut().last_mut().unwrap().kind = ItemKind::UserText("new and longer".into());
+    let _ = app.update(Message::Tick);
+    assert_eq!(app.state.conversation.rebuilds, b0 + 2);
+}
+
+// ------------------------------------------------------------------ async load earlier
+
+struct Paged {
+    inner: DemoSource,
+    items: Arc<Mutex<Vec<ConversationItem>>>,
+    jobs_run: Arc<AtomicUsize>,
+}
+
+impl DataSource for Paged {
+    fn label(&self) -> String {
+        "paged".into()
+    }
+    fn workspaces(&self) -> Vec<Workspace> {
+        self.inner.workspaces()
+    }
+    fn connected(&self) -> bool {
+        true
+    }
+    fn conversation(&self, _pane: &Pane) -> Vec<ConversationItem> {
+        self.items.lock().unwrap().clone()
+    }
+    fn can_load_earlier(&self, _pane: &Pane) -> bool {
+        true
+    }
+    fn load_earlier_job(&self, _pane: &Pane) -> Option<flockbook::source::EarlierJob> {
+        let runs = self.jobs_run.clone();
+        Some(Box::new(move || {
+            runs.fetch_add(1, Ordering::SeqCst);
+            false
+        }))
+    }
+}
+
+#[test]
+fn load_earlier_runs_off_the_ui_thread_and_stale_results_are_dropped() {
+    let demo = DemoSource::new();
+    let (ws, tab) = demo.default_selection();
+    let items = Arc::new(Mutex::new(chat(30)));
+    let jobs_run = Arc::new(AtomicUsize::new(0));
+    let mut app = App::new(Box::new(Paged { inner: demo, items: items.clone(), jobs_run: jobs_run.clone() }), Mode::Light, Screen::Conversation);
+    app.state.select_tab(&ws, &tab);
+    app.state.conversation.probe = Some(Rc::new(RefCell::new(Probe::default())));
+    app.refresh();
+    settle(&mut app);
+    let pane = app.state.conversation.pane.clone().unwrap();
+    assert!(app.state.conversation.more_earlier);
+
+    // Scroll to the top: the update starts the load but does not run it.
+    let _ = app.update(Message::Conversation(ConversationMsg::Flow(FlowEvent::Key(fb_ui::selectable::flow::FlowKey::Home))));
+    assert_eq!(jobs_run.load(Ordering::SeqCst), 0, "the read is not done inside update");
+    let ticket = app.state.conversation.earlier_seq;
+    assert!(app.state.conversation.loading_earlier);
+    assert!(app.state.conversation.doc.rows.iter().any(|r| matches!(r.kind, fb_ui::selectable::flow::RowKind::LoadEarlier { loading: true })));
+
+    // The job finishes: older items appeared in the source.
+    items.lock().unwrap().insert(0, item("old0".into(), ItemKind::AssistantText("Older note 0".into())));
+    // A result of an older load, or for another pane, changes nothing.
+    let _ = app.update(Message::Conversation(ConversationMsg::EarlierLoaded { pane: pane.clone(), ticket: ticket - 1, more: Some(false) }));
+    let _ = app.update(Message::Conversation(ConversationMsg::EarlierLoaded { pane: "other".into(), ticket, more: Some(false) }));
+    assert!(app.state.conversation.loading_earlier, "stale results are ignored");
+    assert!(app.state.conversation.more_earlier);
+    // The matching result lands.
+    let _ = app.update(Message::Conversation(ConversationMsg::EarlierLoaded { pane, ticket, more: Some(false) }));
+    assert!(!app.state.conversation.loading_earlier);
+    assert!(!app.state.conversation.more_earlier);
+    assert!(app.state.conversation.doc.rows.iter().any(|r| r.plain.contains("Older note 0")));
+}
+
+#[test]
+fn a_load_that_finishes_after_a_pane_switch_is_dropped() {
+    let demo = DemoSource::new();
+    let (ws, tab) = demo.default_selection();
+    let other_tab = demo.workspaces().iter().find(|w| w.id == ws).unwrap().tabs[1].id.clone();
+    let items = Arc::new(Mutex::new(chat(30)));
+    let mut app = App::new(Box::new(Paged { inner: demo, items, jobs_run: Arc::new(AtomicUsize::new(0)) }), Mode::Light, Screen::Conversation);
+    app.state.select_tab(&ws, &tab);
+    app.refresh();
+    settle(&mut app);
+    let pane = app.state.conversation.pane.clone().unwrap();
+    let _ = app.update(Message::Conversation(ConversationMsg::Flow(FlowEvent::Key(fb_ui::selectable::flow::FlowKey::Home))));
+    let ticket = app.state.conversation.earlier_seq;
+    let _ = app.update(Message::SelectTab { workspace: ws, tab: other_tab });
+    let _ = app.update(Message::Conversation(ConversationMsg::EarlierLoaded { pane, ticket, more: Some(false) }));
+    assert!(app.state.conversation.more_earlier, "the other pane's flags are untouched");
+    assert!(!app.state.conversation.loading_earlier);
+}
+
+// ------------------------------------------------------------------ empty document, syntax rows
+
+#[test]
+fn an_empty_flow_document_survives_draw_click_and_copy() {
+    use fb_ui::selectable::flow::{Doc, Flow};
+    let doc = Doc::default();
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    let settings = Settings { fonts: fb_ui::fonts::bytes(), default_font: fb_ui::fonts::default_font(), ..Settings::default() };
+    let t = fb_ui::Tokens::LIGHT;
+    let msgs: Vec<flockbook::conversation::ConversationMsg> = {
+        let mut s = Simulator::with_size(settings, Size::new(W, H), iced::Element::from(Flow::new(&doc, t, ConversationMsg::Flow)));
+        s.point_at(Point::new(300.0, 300.0));
+        s.simulate([down(), moved(Point::new(500.0, 500.0)), up(), key("a", true), key("c", true), redraw()]);
+        let _ = s.snapshot(&iced::Theme::Light).expect("draws");
+        s.into_messages().collect()
+    };
+    let mut sel = fb_ui::selectable::flow::SelState::default();
+    for m in msgs {
+        if let ConversationMsg::Flow(FlowEvent::Press { at, point, shift }) = m {
+            sel.press(&doc, at, point, shift);
+        }
+    }
+    assert!(sel.text(&doc).is_none());
+}
+
+#[test]
+fn demo_code_block_has_syntax_colored_runs() {
+    use fb_ui::highlight::Tone;
+    use fb_ui::selectable::flow::RowKind;
+    let app = App::demo(Mode::Light, Screen::Conversation);
+    let row = app.state.conversation.doc.rows.iter().find(|r| matches!(&r.kind, RowKind::Code { lang } if lang.as_deref() == Some("python"))).expect("python block in the demo");
+    let tones: std::collections::HashSet<Tone> = row.paras[0].inlines.iter().map(|i| i.tone).collect();
+    for t in [Tone::Keyword, Tone::Number, Tone::Function, Tone::Comment, Tone::Plain] {
+        assert!(tones.contains(&t), "{t:?}");
+    }
+    assert!(row.plain.starts_with("def score(doc, bm25, now):"), "copy gives the code without markup");
+    let last = app.state.conversation.doc.rows.iter().rposition(|r| matches!(r.kind, RowKind::Code { .. })).unwrap();
+    assert!(last + 4 >= app.state.conversation.doc.rows.len(), "the block sits near the end");
 }

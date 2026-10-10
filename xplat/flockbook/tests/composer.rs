@@ -187,7 +187,7 @@ fn failed_send_gives_the_text_back_with_a_note() {
     h.key(Named::Enter, Modifiers::empty());
     h.calls(1);
     // The task result is delivered by the runtime; deliver it by hand.
-    let _ = h.app.update(Message::Composer(ComposerMsg::Sent { text: "hello".into(), error: Some("pane gone".into()) }));
+    let _ = h.app.update(Message::Composer(ComposerMsg::Sent { pane: h.app.state.selected_pane().unwrap().id.clone(), text: "hello".into(), error: Some("pane gone".into()) }));
     assert_eq!(h.text(), "hello");
     assert!(h.app.state.composer.error.as_deref().unwrap().contains("pane gone"));
     // Typing clears the note.
@@ -200,7 +200,7 @@ fn failed_send_does_not_overwrite_new_typing() {
     let mut app = App::demo(Mode::Light, Screen::Conversation);
     app.state.composer.sender = Some(Arc::new(Fake::default()));
     app.state.composer.set_text("new text");
-    let _ = app.update(Message::Composer(ComposerMsg::Sent { text: "old".into(), error: Some("x".into()) }));
+    let _ = app.update(Message::Composer(ComposerMsg::Sent { pane: app.state.selected_pane().unwrap().id.clone(), text: "old".into(), error: Some("x".into()) }));
     assert_eq!(app.state.composer.text(), "new text");
 }
 
@@ -249,4 +249,55 @@ fn snapshots() {
     snap("composer-dark", Mode::Dark, "", true);
     snap("composer-filled-light", Mode::Light, "Try the new decay and show me the same query.\nThen run the bench.", true);
     snap("composer-filled-dark", Mode::Dark, "Try the new decay and show me the same query.\nThen run the bench.", true);
+}
+
+// ------------------------------------------------------------------ drafts per pane
+
+fn two_panes(app: &App) -> (Message, Message, String, String) {
+    let ws = app.state.workspaces.iter().find(|w| w.label == "Quarry").unwrap();
+    let a = &ws.tabs[0];
+    let b = &ws.tabs[1];
+    (
+        Message::SelectTab { workspace: ws.id.clone(), tab: a.id.clone() },
+        Message::SelectTab { workspace: ws.id.clone(), tab: b.id.clone() },
+        a.panes[0].id.clone(),
+        b.panes[0].id.clone(),
+    )
+}
+
+#[test]
+fn each_pane_keeps_its_own_draft() {
+    let mut app = App::demo(Mode::Light, Screen::Conversation);
+    app.state.composer.sender = Some(Arc::new(Fake::default()));
+    let (to_a, to_b, pane_a, pane_b) = two_panes(&app);
+    assert_eq!(app.state.selected_pane().unwrap().id, pane_a);
+    app.state.composer.set_text("draft for A");
+    let _ = app.update(to_b.clone());
+    assert_eq!(app.state.selected_pane().unwrap().id, pane_b);
+    assert_eq!(app.state.composer.text(), "", "pane B starts empty");
+    app.state.composer.set_text("draft for B\nsecond line");
+    let _ = app.update(to_a.clone());
+    assert_eq!(app.state.composer.text(), "draft for A");
+    let _ = app.update(to_b);
+    assert_eq!(app.state.composer.text(), "draft for B\nsecond line");
+    // Clearing a draft forgets it.
+    app.state.composer.set_text("");
+    let _ = app.update(to_a);
+    let _ = app.update(Message::SelectTab { workspace: app.state.selected_workspace.clone().unwrap(), tab: app.state.workspaces.iter().find(|w| w.label == "Quarry").unwrap().tabs[1].id.clone() });
+    assert_eq!(app.state.composer.text(), "");
+    assert!(!app.state.composer.drafts.contains_key(&pane_b));
+}
+
+#[test]
+fn a_failed_send_returns_to_the_pane_it_was_for() {
+    let mut app = App::demo(Mode::Light, Screen::Conversation);
+    app.state.composer.sender = Some(Arc::new(Fake::default()));
+    let (to_a, to_b, pane_a, _) = two_panes(&app);
+    let _ = app.update(to_b);
+    // The send for pane A fails while B is shown: B's box stays as it is, A gets the text back as its draft.
+    let _ = app.update(Message::Composer(ComposerMsg::Sent { pane: pane_a, text: "lost".into(), error: Some("gone".into()) }));
+    assert_eq!(app.state.composer.text(), "");
+    assert!(app.state.composer.error.is_none());
+    let _ = app.update(to_a);
+    assert_eq!(app.state.composer.text(), "lost");
 }

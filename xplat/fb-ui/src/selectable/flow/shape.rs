@@ -81,7 +81,8 @@ pub fn spans_of(para: &super::model::Para, size: f32, t: &Tokens, color: Color, 
             if !inl.code && !mono_all && !inl.bold && !bold_all {
                 font.weight = weight;
             }
-            let mut sp = Span::new(run.to_string()).font(font).color(color);
+            let run_color = if mono_all && inl.tone != crate::highlight::Tone::Plain { t.syntax(inl.tone) } else { color };
+            let mut sp = Span::new(run.to_string()).font(font).color(run_color);
             if inl.code && !mono_all {
                 sp = sp
                     .color(t.label)

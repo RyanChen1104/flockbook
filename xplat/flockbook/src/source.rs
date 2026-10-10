@@ -20,7 +20,20 @@ pub trait DataSource {
     fn load_earlier(&self, _pane: &Pane) -> bool {
         false
     }
+    /// A job that does the same as `load_earlier` but can run on a worker thread (the read is blocking file I/O).
+    /// `None` means the source has no such job; the app then calls `load_earlier` on the UI thread.
+    fn load_earlier_job(&self, _pane: &Pane) -> Option<EarlierJob> {
+        None
+    }
+    /// A cheap change counter of the pane's conversation: while it is equal, the conversation did not change, and
+    /// the app does not fetch or rebuild it. `None` = unknown (the app falls back to comparing the fetched tail).
+    fn revision(&self, _pane: &Pane) -> Option<u64> {
+        None
+    }
 }
+
+/// See [`DataSource::load_earlier_job`]. Returns true while older content remains.
+pub type EarlierJob = Box<dyn FnOnce() -> bool + Send + 'static>;
 
 pub use crate::demo::DemoSource;
 
@@ -38,7 +51,7 @@ mod live {
 
     /// The live herdr session. Read-only: `HerdrStore` sends `session.snapshot` and `events.subscribe` only.
     pub struct LiveSource {
-        store: HerdrStore<UnixConnector>,
+        store: std::sync::Arc<HerdrStore<UnixConnector>>,
         label: String,
     }
 
@@ -49,13 +62,18 @@ mod live {
             let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
             let session = HerdrSession::resolve(args, &env, Path::new(&home));
             let label = session.name.clone().unwrap_or_else(|| "default".to_string());
-            let store = HerdrStore::new(&session);
+            let store = std::sync::Arc::new(HerdrStore::new(&session));
             store.start();
             LiveSource { store, label }
         }
     }
 
     impl DataSource for LiveSource {
+        fn load_earlier_job(&self, pane: &Pane) -> Option<super::EarlierJob> {
+            let id = pane.agent.as_ref().and_then(|a| a.session_id.clone())?;
+            let store = self.store.clone();
+            Some(Box::new(move || store.load_earlier(Some(&id), 256 * 1024)))
+        }
         fn label(&self) -> String {
             self.label.clone()
         }
@@ -64,6 +82,9 @@ mod live {
         }
         fn connected(&self) -> bool {
             self.store.connected()
+        }
+        fn revision(&self, pane: &Pane) -> Option<u64> {
+            self.store.conversation_revision(pane.agent.as_ref().and_then(|a| a.session_id.as_deref()))
         }
         fn conversation(&self, pane: &Pane) -> Vec<ConversationItem> {
             self.store.conversation(pane.agent.as_ref().and_then(|a| a.session_id.as_deref()))

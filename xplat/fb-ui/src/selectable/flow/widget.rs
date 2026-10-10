@@ -46,7 +46,7 @@ pub enum FlowKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FlowEvent {
     /// Left press on text. The app decides char, word or paragraph from its click count.
-    Press { at: Anchor, shift: bool },
+    Press { at: Anchor, point: Point, shift: bool },
     /// Pointer moved (or a redraw happened) while the button is down. `edge` is the auto-scroll speed in px per
     /// tick when the pointer is beyond the top (negative) or bottom (positive) edge.
     Drag { at: Anchor, edge: Option<f32> },
@@ -498,7 +498,7 @@ impl<'a, M> Widget<M, Theme, iced::Renderer> for Flow<'a, M> {
                     state.press_point = p;
                     state.press_link = link;
                     state.last_drag = None;
-                    publish(shell, FlowEvent::Press { at, shift: state.mods.shift() });
+                    publish(shell, FlowEvent::Press { at, point: p, shift: state.mods.shift() });
                     shell.capture_event();
                     shell.request_redraw();
                 }

@@ -40,7 +40,7 @@ impl B {
         if text.is_empty() {
             return;
         }
-        self.inl.push(Inline { text: text.to_string(), bold: self.bold > 0, italic: self.italic > 0, code, strike: self.strike > 0, link: self.link.clone() });
+        self.inl.push(Inline { text: text.to_string(), bold: self.bold > 0, italic: self.italic > 0, code, strike: self.strike > 0, link: self.link.clone(), ..Default::default() });
     }
 
     fn flush(&mut self) {
@@ -78,6 +78,15 @@ fn level(l: HeadingLevel) -> u8 {
         HeadingLevel::H3 => 3,
         _ => 4,
     }
+}
+
+/// One paragraph of highlighted code: one inline per run, so `plain()` is the code itself.
+pub fn code_para(lang: Option<&str>, code: &str) -> Para {
+    let runs = fb_ui::highlight::tokenize(lang, code);
+    if runs.is_empty() {
+        return Para::text(code);
+    }
+    Para { inlines: runs.into_iter().map(|(tone, text)| Inline { text: text.to_string(), tone, ..Default::default() }).collect() }
 }
 
 /// Parses markdown. `preserve_breaks` keeps single newlines (user bubbles).
@@ -130,7 +139,7 @@ pub fn parse(text: &str, preserve_breaks: bool) -> Vec<Spec> {
                 TagEnd::CodeBlock => {
                     if let Some((lang, code)) = b.code.take() {
                         let code = code.trim_end_matches('\n').to_string();
-                        b.out.push(Spec { kind: RowKind::Code { lang }, paras: vec![Para::text(code)], separator: "\n\n", gap: 14.0 });
+                        b.out.push(Spec { kind: RowKind::Code { lang: lang.clone() }, paras: vec![code_para(lang.as_deref(), &code)], separator: "\n\n", gap: 14.0 });
                     }
                 }
                 TagEnd::List(_) => {
@@ -211,6 +220,19 @@ mod tests {
         let RowKind::Code { lang } = &s[4].kind else { panic!() };
         assert_eq!(lang.as_deref(), Some("python"));
         assert_eq!(s[4].paras[0].plain(), "x = 1");
+    }
+
+    #[test]
+    fn code_blocks_carry_syntax_tones_and_keep_the_text() {
+        use fb_ui::highlight::Tone;
+        let s = parse("```python\ndef f(a):\n    return a + 1  # one\n```", false);
+        let p = &s[0].paras[0];
+        assert_eq!(p.plain(), "def f(a):\n    return a + 1  # one");
+        let has = |t: Tone, x: &str| p.inlines.iter().any(|i| i.tone == t && i.text == x);
+        assert!(has(Tone::Keyword, "def") && has(Tone::Function, "f") && has(Tone::Number, "1") && has(Tone::Comment, "# one"));
+        // No language: plain.
+        let s = parse("```\ndef f(a): pass\n```", false);
+        assert!(s[0].paras[0].inlines.iter().all(|i| i.tone == Tone::Plain));
     }
 
     #[test]

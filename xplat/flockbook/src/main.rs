@@ -56,11 +56,13 @@ fn main() -> iced::Result {
 }
 
 fn boot(demo: bool, args: &[String]) -> (App, Task<Message>) {
-    let app = if demo {
+    let mut app = if demo {
         App::demo(Mode::Light, Screen::Conversation)
     } else {
         live_app(args)
     };
+    // A real window opens links in the system browser. Snapshots and tests keep the recording opener.
+    app.opener = Box::new(flockbook::links::SystemOpener);
     (app, Task::none())
 }
 

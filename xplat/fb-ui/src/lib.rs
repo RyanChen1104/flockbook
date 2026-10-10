@@ -8,6 +8,7 @@
 //! - [`virt`] and [`keyed_body`]: virtual list window math and the keyed column (from spike-virt / rmdv).
 
 pub mod fonts;
+pub mod highlight;
 pub mod icons;
 pub mod keyed_body;
 pub mod selectable;

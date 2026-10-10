@@ -46,6 +46,12 @@ pub struct Counts {
     pub idle: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum Seen {
+    Rev(u64),
+    Tail { len: usize, first: Option<String>, last: Option<ConversationItem> },
+}
+
 pub struct State {
     pub screen: Screen,
     pub mode: Mode,
@@ -56,6 +62,8 @@ pub struct State {
     pub selected_pane: Option<String>,
     /// Conversation items per pane id. Filled for the selected pane on `refresh`.
     pub conversations: HashMap<String, Vec<ConversationItem>>,
+    /// What `conversations` held when it was last fetched, per pane: the source's revision, or the tail of the items.
+    seen: HashMap<String, Seen>,
     pub connected: bool,
     pub session_label: String,
 
@@ -77,6 +85,7 @@ impl State {
             selected_tab: None,
             selected_pane: None,
             conversations: HashMap::new(),
+            seen: HashMap::new(),
             connected: false,
             session_label: String::new(),
             sidebar: Default::default(),
@@ -155,8 +164,16 @@ impl State {
         self.workspaces.iter().map(|w| w.tabs.len()).sum()
     }
 
+    /// Forgets what was fetched for `pane`, so the next `reload` fetches and reports a change.
+    pub fn invalidate(&mut self, pane: &str) {
+        self.seen.remove(pane);
+    }
+
     /// Pulls the tree and the selected pane's conversation from the source. Keeps the selection when it is still valid.
-    pub fn reload(&mut self, source: &dyn DataSource) {
+    /// Returns true when the conversation of the selected pane is new or changed. An idle tick costs one
+    /// `source.revision` call; a source without revisions costs one fetch plus a compare of the first id and the last
+    /// item, with no hashing and no row rebuild.
+    pub fn reload(&mut self, source: &dyn DataSource) -> bool {
         self.workspaces = source.workspaces();
         self.connected = source.connected();
         let valid = self.selected_tab().is_some();
@@ -166,10 +183,25 @@ impl State {
                 self.select_workspace(&id);
             }
         }
-        if let Some(p) = self.selected_pane().cloned() {
-            let items = source.conversation(&p);
-            self.conversations.insert(p.id, items);
+        let Some(p) = self.selected_pane().cloned() else { return false };
+        let rev = source.revision(&p);
+        if let (Some(r), Some(Seen::Rev(old))) = (rev, self.seen.get(&p.id)) {
+            if *old == r && self.conversations.contains_key(&p.id) {
+                return false;
+            }
         }
+        let items = source.conversation(&p);
+        let now = match rev {
+            Some(r) => Seen::Rev(r),
+            None => Seen::Tail { len: items.len(), first: items.first().map(|i| i.id.clone()), last: items.last().cloned() },
+        };
+        let same = self.seen.get(&p.id) == Some(&now) && self.conversations.contains_key(&p.id);
+        self.seen.insert(p.id.clone(), now);
+        if same {
+            return false;
+        }
+        self.conversations.insert(p.id, items);
+        true
     }
 }
 

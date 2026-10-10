@@ -82,6 +82,12 @@ pub struct Tokens {
     pub label_3_glass: Color,
     /// Soft orange pill behind the blocked edge marker and the blocked card border.
     pub blocked_soft: Color,
+    // Syntax colors of code blocks.
+    pub syn_keyword: Color,
+    pub syn_string: Color,
+    pub syn_number: Color,
+    pub syn_comment: Color,
+    pub syn_function: Color,
 }
 
 impl Tokens {
@@ -114,6 +120,11 @@ impl Tokens {
         label_2_glass: black(0.62),
         label_3_glass: black(0.45),
         blocked_soft: rgba(0xFF, 0x95, 0x00, 0.12),
+        syn_keyword: hex(0x9B2393),
+        syn_string: hex(0xC41A16),
+        syn_number: hex(0x1C00CF),
+        syn_comment: black(0.28),
+        syn_function: hex(0x326D74),
     };
 
     pub const DARK: Tokens = Tokens {
@@ -145,6 +156,11 @@ impl Tokens {
         label_2_glass: white(0.60),
         label_3_glass: white(0.42),
         blocked_soft: rgba(0xFF, 0x9F, 0x0A, 0.16),
+        syn_keyword: hex(0xFC5FA3),
+        syn_string: hex(0xFC6A5D),
+        syn_number: hex(0x9686F5),
+        syn_comment: white(0.28),
+        syn_function: hex(0x67B7A4),
     };
 
     pub fn of(mode: Mode) -> Tokens {
@@ -245,6 +261,27 @@ pub fn shadow_e2(t: &Tokens) -> Shadow {
     Shadow { color: black(a), offset: Vector::new(0.0, 4.0), blur_radius: 10.0 }
 }
 
+/// `fg` composited over an opaque `bg`. The tiny-skia svg renderer drops the alpha of an icon color, so icons that
+/// should look translucent get their color pre-blended with what is behind them.
+pub fn over(fg: Color, bg: Color) -> Color {
+    Color { r: fg.r * fg.a + bg.r * (1.0 - fg.a), g: fg.g * fg.a + bg.g * (1.0 - fg.a), b: fg.b * fg.a + bg.b * (1.0 - fg.a), a: 1.0 }
+}
+
+impl Tokens {
+    /// Color of a code run.
+    pub fn syntax(&self, tone: crate::highlight::Tone) -> Color {
+        use crate::highlight::Tone;
+        match tone {
+            Tone::Plain => self.label,
+            Tone::Keyword => self.syn_keyword,
+            Tone::String => self.syn_string,
+            Tone::Number => self.syn_number,
+            Tone::Comment => self.syn_comment,
+            Tone::Function => self.syn_function,
+        }
+    }
+}
+
 /// A weight-only font helper kept here so call sites do not need `iced::font` imports.
 pub fn weighted(family: &'static str, weight: Weight) -> Font {
     Font { family: Family::Name(family), weight, ..Font::DEFAULT }
@@ -269,6 +306,23 @@ mod tests {
         // Glass label tokens are stronger than the plain ones.
         assert!(Tokens::LIGHT.label_2_glass.a > Tokens::LIGHT.label_2.a);
         assert!(Tokens::DARK.label_3_glass.a > Tokens::DARK.label_3.a);
+    }
+
+    #[test]
+    fn syntax_tokens_exist_in_both_modes_and_differ() {
+        use crate::highlight::Tone;
+        for tone in [Tone::Keyword, Tone::String, Tone::Number, Tone::Comment, Tone::Function] {
+            assert_ne!(Tokens::LIGHT.syntax(tone), Tokens::DARK.syntax(tone));
+            assert_ne!(Tokens::LIGHT.syntax(tone), Tokens::LIGHT.label);
+        }
+        assert_eq!(Tokens::LIGHT.syntax(Tone::Plain), Tokens::LIGHT.label);
+        assert_eq!(Tokens::LIGHT.syn_comment, Tokens::LIGHT.label_3);
+    }
+
+    #[test]
+    fn over_blends_alpha() {
+        let c = over(black(0.5), hex(0xFFFFFF));
+        assert!((c.r - 0.5).abs() < 1e-6 && c.a == 1.0);
     }
 
     #[test]

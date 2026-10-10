@@ -365,3 +365,25 @@ fn layout_cost_of_40_and_400_messages() {
         );
     }
 }
+
+#[test]
+fn empty_document_does_not_panic_on_layout_draw_click_or_copy() {
+    let mut app = App::new(&[]);
+    assert!(app.blocks.is_empty());
+    // Layout.
+    let geom = Geometry::build(&app.blocks, &app.style(), WIDTH);
+    assert!(geom.point_of(0, 0).is_none());
+    // Draw, click, drag, select all, copy, all on the empty document.
+    run(&mut app, |sim| {
+        let p = Point::new(100.0, 100.0);
+        sim.point_at(p);
+        sim.simulate([Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+        sim.simulate([Event::Mouse(mouse::Event::CursorMoved { position: Point::new(300.0, 400.0) })]);
+        sim.simulate([Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+        sim.simulate([key_event("a")]);
+        sim.simulate([key_event("c")]);
+        let _ = sim.snapshot(&Theme::Light).expect("draws an empty document");
+    });
+    assert!(app.selection.is_none());
+    assert!(app.last_copied.is_none());
+}

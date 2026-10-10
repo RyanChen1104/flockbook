@@ -284,22 +284,25 @@ fn card<'a>(app: &App, e: Entry<'a>, clock: Clock) -> Element<'a, Message> {
         .width(Length::Fill)
         .style(move |_, status| {
             let hover = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let bg = if blocked {
-                t.blocked_soft
-            } else if hover {
-                t.fill_1
-            } else {
-                t.bg
-            };
+            let (bg, edge) = card_colors(&t, st, hover);
             button::Style {
                 background: Some(Background::Color(bg)),
-                border: Border { color: if blocked { with_alpha(t.blocked, 0.5) } else { t.sep_strong }, width: 1.0, radius: R_CARD.into() },
+                border: Border { color: edge, width: 1.0, radius: R_CARD.into() },
                 text_color: t.label,
-                shadow: shadow_e1(&t),
                 ..Default::default()
             }
         })
         .into()
+}
+
+/// Card fill and hairline per state (DESIGN.md: cards inside the content take a plain `fill`, not a white box).
+/// Needs you: a light orange tint (about 8%) with an orange hairline. Working: `fill_2`. Done and resting: `fill_1`.
+pub fn card_colors(t: &Tokens, st: AgentStatus, hover: bool) -> (Color, Color) {
+    match st {
+        AgentStatus::Blocked => (with_alpha(t.blocked, if hover { 0.12 } else { 0.08 }), with_alpha(t.blocked, 0.5)),
+        AgentStatus::Working => (if hover { t.fill_3 } else { t.fill_2 }, t.sep),
+        _ => (if hover { t.fill_2 } else { t.fill_1 }, t.sep),
+    }
 }
 
 fn grid<'a>(app: &App, entries: &[Entry<'a>], cols: usize, clock: Clock) -> Element<'a, Message> {
@@ -477,4 +480,21 @@ pub fn view(app: &App) -> Element<'_, Message> {
         scrollable(centered).height(Length::Fill).into()
     })
     .into()
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+
+    #[test]
+    fn card_fills_follow_the_design() {
+        for t in [Tokens::LIGHT, Tokens::DARK] {
+            let (bg, edge) = card_colors(&t, AgentStatus::Blocked, false);
+            assert!((bg.a - 0.08).abs() < 1e-6 && bg.r == t.blocked.r, "needs-you is an 8% orange tint");
+            assert!((edge.a - 0.5).abs() < 1e-6 && edge.g == t.blocked.g, "orange hairline");
+            assert_eq!(card_colors(&t, AgentStatus::Working, false), (t.fill_2, t.sep));
+            assert_eq!(card_colors(&t, AgentStatus::Done, false).0, t.fill_1);
+            assert_ne!(card_colors(&t, AgentStatus::Working, true).0, t.fill_2, "hover is stronger");
+        }
+    }
 }
