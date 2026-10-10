@@ -72,7 +72,10 @@
 				</div>
 				<figure class="shot">
 					{#if f.image}
-						<img src="{base}/media/{f.image}" alt={f.alt} loading="lazy" decoding="async" />
+						<picture>
+							<source srcset="{base}/media/{f.image}-dark.png" media="(prefers-color-scheme: dark)" />
+							<img src="{base}/media/{f.image}-light.png" alt={f.alt} loading="lazy" decoding="async" />
+						</picture>
 					{:else}
 						<div class="placeholder" role="img" aria-label="Screenshot placeholder: {f.alt}">
 							<span>Screenshot</span>
