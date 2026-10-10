@@ -4,9 +4,9 @@ version = "0.0.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "Spike: windowed (virtual) chat list for iced, rmdv style"
 
 [dependencies]
 iced.workspace = true
-
-[dev-dependencies]
 iced_test.workspace = true
+libc = "0.2"
