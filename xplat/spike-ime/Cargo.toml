@@ -10,3 +10,4 @@ iced.workspace = true
 
 [dev-dependencies]
 iced_test.workspace = true
+png = "0.18"
