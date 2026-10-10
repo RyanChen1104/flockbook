@@ -8,6 +8,7 @@ use base64::Engine;
 use herdr_core::scrollback::{ScrollKind, Scrollback, ScrollInfo};
 use herdr_core::store::HerdrStore;
 use herdr_core::terminal::{MouseEncoding, TerminalEvent, TerminalFrame, TerminalMode, TerminalSession};
+use herdr_core::session_log::ConversationLoadState;
 use herdr_core::HerdrSession;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -369,6 +370,8 @@ fn store_conversation_revision_moves_only_on_new_snapshots() {
     assert!(st.conversation_revision(None).is_none(), "revision: none for no session");
     let _ = st.conversation(Some("rev-session"));
     assert!(until(3.0, || st.conversation_revision(Some("rev-session")).is_some_and(|r| r > 0)), "revision: first snapshot counted");
+    // Loading, then Ready: both are new snapshots. Under load Ready can come late, so wait for it.
+    assert!(until(5.0, || st.conversation_state(Some("rev-session")) == ConversationLoadState::Ready), "revision: log loaded");
     std::thread::sleep(Duration::from_millis(300));
     let r1 = st.conversation_revision(Some("rev-session")).unwrap();
     std::thread::sleep(Duration::from_millis(700));
