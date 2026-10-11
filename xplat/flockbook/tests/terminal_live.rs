@@ -4,6 +4,8 @@
 //! `FLOCKBOOK_LIVE_SESSION=<test session> FLOCKBOOK_LIVE_TERMINAL=<terminal id> cargo test -p flockbook --test terminal_live -- --ignored`
 //! It refuses to run without both, and never touches the default session. Headless: no window.
 
+#![cfg(unix)]
+
 use fb_ui::Mode;
 use flockbook::state::Screen;
 use flockbook::terminal::{self, TerminalMsg};

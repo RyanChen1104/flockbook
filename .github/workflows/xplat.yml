@@ -1,0 +1,102 @@
+name: xplat
+
+# The cross-platform port (Rust + iced) in xplat/. Runs only when xplat/ or this file changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "xplat/**"
+      - ".github/workflows/xplat.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "xplat/**"
+      - ".github/workflows/xplat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xplat-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    working-directory: xplat
+
+jobs:
+  linux:
+    name: Linux build + test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: xplat -> target
+
+      # winit links these for X11 and Wayland.
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev
+
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+
+      # Headless: iced_test on tiny-skia (CPU), a fake herdr, fixtures. No window, no herdr server.
+      # The live terminal tests are #[ignore] and need a named test session: they do not run here.
+      - name: Test
+        run: cargo test --workspace --locked
+
+  windows:
+    name: Windows compile check
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: xplat -> target
+          key: x86_64-pc-windows-msvc
+
+      # The app crates only: the spikes and most tests use Unix sockets or getrusage. flockbook's lib holds the
+      # window glass, so this compiles the Mica path (window_vibrancy::apply_mica) for Windows.
+      - name: Check
+        run: cargo check -p herdr-core -p fb-ui -p flockbook --lib --bins --locked --target x86_64-pc-windows-msvc
+
+  macos:
+    name: macOS build
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: xplat -> target
+
+      # Includes the AppKit glass (NSVisualEffectView) path.
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
