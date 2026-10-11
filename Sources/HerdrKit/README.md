@@ -147,6 +147,9 @@ changes. `HerdrKitChecks --agents-live <kinds>` prints `session=id|path|none` pe
 
 Notification buttons (`ApprovalNotice`): a blocked Claude with a permission prompt on screen gets Allow / Deny (input on, no question picker). The buttons are bound to the log's pending tool call, else to `screenPrompt` (a hash of the tool name and the whole prompt box), so a Claude without a transcript works too. `outcome(...)` re-reads the pane (`approvalState`) and sends (`respond`) only when that same id is still current, else opens the tab. `screenRequest` gives the approval card the same prompt when the log has none.
 
+## Remote protocol
+`HubProtocol.swift`: the wire types of remote protocol v1 (spec `docs/design/remote-protocol.md`, fixtures `Tests/HerdrKitTests/Fixtures/hub/`). Codable only, no listener. Clients send intent (`send`, `approve`, `answer`), never keys. `Hub.openApproval` gives the open prompt with the `ApprovalNotice` id.
+
 ## Testing
 - `HerdrKitChecks` (executable): `swift run HerdrKitChecks` is the real done check; `swift test` does not run under the Command Line Tools.
   Layout: `main.swift` only dispatches; modes live in `ModesBench.swift` / `ModesLive.swift`, checks in `Checks*.swift` (one `@MainActor` function per area), shared fixtures in `Support.swift`. Keep new checks in functions: as one 1500-line top-level body, `main.swift` took over 4 GB to compile.

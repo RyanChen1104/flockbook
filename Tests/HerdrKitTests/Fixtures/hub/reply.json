@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "stale",
+    "message": "The prompt changed. Nothing was sent."
+  },
+  "ok": false,
+  "re": "c6",
+  "type": "reply",
+  "v": 1
+}

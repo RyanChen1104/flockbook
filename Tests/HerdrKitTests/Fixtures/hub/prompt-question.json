@@ -1,0 +1,31 @@
+{
+  "pane": "w1:p2",
+  "question": {
+    "agent": "claude",
+    "delivery": "picker",
+    "headers": [
+      "Target",
+      "Notes"
+    ],
+    "id": "screen-1a2b3c",
+    "questions": [
+      {
+        "header": "Target",
+        "id": "Which target?",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "Staging"
+          },
+          {
+            "label": "Production"
+          }
+        ],
+        "text": "Which target?"
+      }
+    ],
+    "state": "pending"
+  },
+  "type": "prompt",
+  "v": 1
+}

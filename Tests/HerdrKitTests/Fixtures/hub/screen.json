@@ -1,0 +1,6 @@
+{
+  "pane": "w1:p1",
+  "text": " Bash command\n   npm run build -- --force\n Do you want to proceed?\n ❯ 1. Yes\n   2. No",
+  "type": "screen",
+  "v": 1
+}

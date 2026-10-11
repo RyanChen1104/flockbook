@@ -1,0 +1,18 @@
+{
+  "answers": [
+    {
+      "picks": [
+        0
+      ]
+    },
+    {
+      "other": "Use the staging host",
+      "picks": []
+    }
+  ],
+  "id": "c7",
+  "pane": "w1:p2",
+  "question": "screen-1a2b3c",
+  "type": "answer",
+  "v": 1
+}

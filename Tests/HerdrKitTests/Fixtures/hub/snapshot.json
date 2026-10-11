@@ -1,0 +1,36 @@
+{
+  "type": "snapshot",
+  "v": 1,
+  "workspaces": [
+    {
+      "id": "w1",
+      "label": "web",
+      "tabs": [
+        {
+          "id": "w1:t1",
+          "label": "build",
+          "number": 1,
+          "panes": [
+            {
+              "agent": {
+                "kind": "claude",
+                "name": "claude",
+                "session": "5f0c2b7e-0000-4000-8000-000000000001",
+                "status": "blocked",
+                "title": "Fix the build"
+              },
+              "cwd": "/work/web",
+              "id": "w1:p1",
+              "label": "build"
+            },
+            {
+              "cwd": "/work/web",
+              "id": "w1:p2"
+            }
+          ],
+          "status": "blocked"
+        }
+      ]
+    }
+  ]
+}

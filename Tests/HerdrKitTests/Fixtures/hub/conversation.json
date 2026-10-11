@@ -1,0 +1,91 @@
+{
+  "hasEarlier": true,
+  "items": [
+    {
+      "id": "u-12",
+      "kind": "user",
+      "text": "Fix the build",
+      "time": "2026-10-12T08:00:00.000Z"
+    },
+    {
+      "id": "a-13",
+      "kind": "assistant",
+      "text": "The build fails in **app.ts**. I will run it.",
+      "time": "2026-10-12T08:00:04.250Z"
+    },
+    {
+      "id": "t-14",
+      "kind": "tools",
+      "tools": [
+        {
+          "calls": [
+            {
+              "done": true,
+              "error": true,
+              "id": "toolu_01AAA",
+              "summary": "npm run build",
+              "tool": "Bash"
+            }
+          ],
+          "symbol": "terminal",
+          "text": "Ran 1 command"
+        }
+      ]
+    },
+    {
+      "approval": {
+        "command": "npm run build -- --force",
+        "id": "toolu_01ABCDEF",
+        "state": "pending",
+        "title": "Wants to run a command",
+        "tool": "Bash"
+      },
+      "id": "perm-toolu_01ABCDEF",
+      "kind": "approval"
+    },
+    {
+      "id": "q-15",
+      "kind": "question",
+      "question": {
+        "agent": "claude",
+        "answers": [
+          "Staging"
+        ],
+        "delivery": "picker",
+        "headers": [
+          "Target"
+        ],
+        "id": "toolu_01QQQ",
+        "questions": [
+          {
+            "header": "Target",
+            "id": "Which target?",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Staging",
+                "recommended": true
+              },
+              {
+                "detail": "Live users",
+                "label": "Production"
+              }
+            ],
+            "text": "Which target?"
+          }
+        ],
+        "state": "answered"
+      }
+    },
+    {
+      "id": "s-16",
+      "kind": "status",
+      "text": "Interrupted"
+    }
+  ],
+  "mode": "replace",
+  "pane": "w1:p1",
+  "session": "5f0c2b7e-0000-4000-8000-000000000001",
+  "type": "conversation",
+  "v": 1
+}

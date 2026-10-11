@@ -1,0 +1,387 @@
+import Foundation
+
+/// Remote protocol v1: the messages between a hub (the machine that runs herdr) and its clients (the phone PWA, the
+/// Mac app in remote mode). Spec: docs/design/remote-protocol.md. Fixtures: Tests/HerdrKitTests/Fixtures/hub/.
+/// Wire types only; no listener here. Clients send intent (send, approve, answer), never raw keys.
+public enum Hub {
+    public static let version = 1
+    /// Every client message type. Intent only: there is no type for keys or bytes.
+    public static let clientTypes = ["hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"]
+    public static let hubTypes = ["welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "pong"]
+
+    public enum DecodeError: Error, Equatable, Sendable {
+        case missingVersion
+        case unsupportedVersion(Int)
+        /// A client message of this type is refused (`badRequest`); a client skips a hub message of this type.
+        case unknownType(String)
+    }
+
+    public static func encode<T: Encodable>(_ value: T) throws -> Data {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try e.encode(value)
+    }
+
+    public static func decodeClient(_ data: Data) throws -> ClientMessage {
+        try checkHeader(data, types: clientTypes)
+        return try JSONDecoder().decode(ClientMessage.self, from: data)
+    }
+
+    public static func decodeHub(_ data: Data) throws -> HubMessage {
+        try checkHeader(data, types: hubTypes)
+        return try JSONDecoder().decode(HubMessage.self, from: data)
+    }
+
+    private struct Header: Decodable { var v: Int?; var type: String }
+    private static func checkHeader(_ data: Data, types: [String]) throws {
+        let h = try JSONDecoder().decode(Header.self, from: data)
+        guard let v = h.v else { throw DecodeError.missingVersion }
+        guard v == version else { throw DecodeError.unsupportedVersion(v) }
+        guard types.contains(h.type) else { throw DecodeError.unknownType(h.type) }
+    }
+
+    /// The open permission prompt of a pane for a `prompt` push. Its id is `ApprovalNotice.prompt` (the log's pending
+    /// call, else the prompt box on screen), the same id the notification buttons and the in-app card use, so an
+    /// `approve` from any client is checked by the same rule. Nil: no approval open.
+    public static func openApproval(_ s: ApprovalNotice.PaneState, logged: PermissionRequest?) -> HubApproval? {
+        guard let id = ApprovalNotice.prompt(s, writes: true) else { return nil }
+        let r = logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen)
+        guard let r else { return nil }
+        return HubApproval(id: id, tool: r.toolName, title: r.title, command: r.command, state: .pending)
+    }
+
+    /// ISO 8601 UTC with milliseconds.
+    static func time(_ d: Date?) -> String? {
+        guard let d else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: d)
+    }
+}
+
+private struct Envelope: Encodable { var v = Hub.version; var type: String; var id: String? }
+
+// MARK: - Client to hub
+
+public struct HubAnswer: Codable, Hashable, Sendable {
+    public var picks: [Int]
+    public var other: String?
+    public init(picks: [Int], other: String? = nil) { self.picks = picks; self.other = other }
+}
+
+public struct ClientMessage: Codable, Hashable, Sendable {
+    public enum Body: Hashable, Sendable {
+        case hello(token: String, client: String, clientVersion: String)
+        case watch(pane: String)
+        case unwatch(pane: String)
+        case loadEarlier(session: String, before: String)
+        /// Type the text and submit it, as the composer does.
+        case send(pane: String, text: String)
+        /// `prompt` = the approval id from the last `prompt` push.
+        case approve(pane: String, prompt: String, allow: Bool)
+        case answer(pane: String, question: String, answers: [HubAnswer])
+        case ping
+
+        public var type: String {
+            switch self {
+            case .hello: "hello"
+            case .watch: "watch"
+            case .unwatch: "unwatch"
+            case .loadEarlier: "loadEarlier"
+            case .send: "send"
+            case .approve: "approve"
+            case .answer: "answer"
+            case .ping: "ping"
+            }
+        }
+    }
+    public var id: String
+    public var body: Body
+    public init(id: String, body: Body) { self.id = id; self.body = body }
+
+    private enum K: String, CodingKey { case v, type, id, token, client, clientVersion, pane, session, before, text, prompt, allow, question, answers }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        id = try c.decode(String.self, forKey: .id)
+        let s = { (k: K) in try c.decode(String.self, forKey: k) }
+        switch try c.decode(String.self, forKey: .type) {
+        case "hello": body = .hello(token: try s(.token), client: try s(.client), clientVersion: try s(.clientVersion))
+        case "watch": body = .watch(pane: try s(.pane))
+        case "unwatch": body = .unwatch(pane: try s(.pane))
+        case "loadEarlier": body = .loadEarlier(session: try s(.session), before: try s(.before))
+        case "send": body = .send(pane: try s(.pane), text: try s(.text))
+        case "approve": body = .approve(pane: try s(.pane), prompt: try s(.prompt), allow: try c.decode(Bool.self, forKey: .allow))
+        case "answer": body = .answer(pane: try s(.pane), question: try s(.question), answers: try c.decode([HubAnswer].self, forKey: .answers))
+        case "ping": body = .ping
+        case let t: throw Hub.DecodeError.unknownType(t)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: K.self)
+        try c.encode(Hub.version, forKey: .v)
+        try c.encode(body.type, forKey: .type)
+        try c.encode(id, forKey: .id)
+        switch body {
+        case .hello(let token, let client, let version):
+            try c.encode(token, forKey: .token); try c.encode(client, forKey: .client); try c.encode(version, forKey: .clientVersion)
+        case .watch(let pane), .unwatch(let pane):
+            try c.encode(pane, forKey: .pane)
+        case .loadEarlier(let session, let before):
+            try c.encode(session, forKey: .session); try c.encode(before, forKey: .before)
+        case .send(let pane, let text):
+            try c.encode(pane, forKey: .pane); try c.encode(text, forKey: .text)
+        case .approve(let pane, let prompt, let allow):
+            try c.encode(pane, forKey: .pane); try c.encode(prompt, forKey: .prompt); try c.encode(allow, forKey: .allow)
+        case .answer(let pane, let question, let answers):
+            try c.encode(pane, forKey: .pane); try c.encode(question, forKey: .question); try c.encode(answers, forKey: .answers)
+        case .ping:
+            break
+        }
+    }
+}
+
+// MARK: - Hub to client
+
+public enum HubLevel: String, Codable, Hashable, Sendable { case read, input }
+
+public struct HubWelcome: Codable, Hashable, Sendable {
+    public var hub: String
+    public var hubVersion: String
+    public var level: HubLevel
+    /// herdr session name; nil = the default session.
+    public var session: String?
+    public init(hub: String, hubVersion: String, level: HubLevel, session: String? = nil) {
+        self.hub = hub; self.hubVersion = hubVersion; self.level = level; self.session = session
+    }
+}
+
+public struct HubError: Codable, Hashable, Sendable {
+    public enum Code: String, Codable, Hashable, Sendable { case unauthorized, readOnly, stale, notFound, badRequest, unsupportedVersion, failed }
+    public var code: Code
+    public var message: String
+    public init(code: Code, message: String) { self.code = code; self.message = message }
+}
+
+public struct HubReply: Codable, Hashable, Sendable {
+    public var re: String
+    public var ok: Bool
+    public var error: HubError?
+    public init(re: String, ok: Bool, error: HubError? = nil) { self.re = re; self.ok = ok; self.error = error }
+}
+
+public struct HubConversation: Codable, Hashable, Sendable {
+    public enum Mode: String, Codable, Hashable, Sendable { case replace, append, prepend }
+    public var pane: String
+    public var session: String
+    public var mode: Mode
+    public var items: [HubItem]
+    public var hasEarlier: Bool
+    public init(pane: String, session: String, mode: Mode, items: [HubItem], hasEarlier: Bool) {
+        self.pane = pane; self.session = session; self.mode = mode; self.items = items; self.hasEarlier = hasEarlier
+    }
+}
+
+/// The open prompt of a watched pane. Both nil: none open.
+public struct HubPrompt: Codable, Hashable, Sendable {
+    public var pane: String
+    public var approval: HubApproval?
+    public var question: HubQuestion?
+    public init(pane: String, approval: HubApproval? = nil, question: HubQuestion? = nil) { self.pane = pane; self.approval = approval; self.question = question }
+}
+
+public enum HubMessage: Codable, Hashable, Sendable {
+    case welcome(HubWelcome)
+    case reply(HubReply)
+    case snapshot([HubWorkspace])
+    case status(pane: String, status: AgentStatus)
+    case conversation(HubConversation)
+    case screen(pane: String, text: String)
+    case prompt(HubPrompt)
+    case pong
+
+    public var type: String {
+        switch self {
+        case .welcome: "welcome"
+        case .reply: "reply"
+        case .snapshot: "snapshot"
+        case .status: "status"
+        case .conversation: "conversation"
+        case .screen: "screen"
+        case .prompt: "prompt"
+        case .pong: "pong"
+        }
+    }
+
+    private enum K: String, CodingKey { case v, type, workspaces, pane, status, text }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "welcome": self = .welcome(try HubWelcome(from: decoder))
+        case "reply": self = .reply(try HubReply(from: decoder))
+        case "snapshot": self = .snapshot(try c.decode([HubWorkspace].self, forKey: .workspaces))
+        case "status": self = .status(pane: try c.decode(String.self, forKey: .pane), status: try c.decode(AgentStatus.self, forKey: .status))
+        case "conversation": self = .conversation(try HubConversation(from: decoder))
+        case "screen": self = .screen(pane: try c.decode(String.self, forKey: .pane), text: try c.decode(String.self, forKey: .text))
+        case "prompt": self = .prompt(try HubPrompt(from: decoder))
+        case "pong": self = .pong
+        case let t: throw Hub.DecodeError.unknownType(t)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .welcome(let w): try w.encode(to: encoder)
+        case .reply(let r): try r.encode(to: encoder)
+        case .conversation(let m): try m.encode(to: encoder)
+        case .prompt(let p): try p.encode(to: encoder)
+        case .snapshot, .status, .screen, .pong: break
+        }
+        var c = encoder.container(keyedBy: K.self)
+        try c.encode(Hub.version, forKey: .v)
+        try c.encode(type, forKey: .type)
+        switch self {
+        case .snapshot(let ws): try c.encode(ws, forKey: .workspaces)
+        case .status(let pane, let status): try c.encode(pane, forKey: .pane); try c.encode(status, forKey: .status)
+        case .screen(let pane, let text): try c.encode(pane, forKey: .pane); try c.encode(text, forKey: .text)
+        default: break
+        }
+    }
+}
+
+// MARK: - Shared objects
+
+public struct HubAgent: Codable, Hashable, Sendable {
+    public var name: String
+    public var kind: String
+    public var status: AgentStatus
+    public var session: String?
+    public var title: String
+    public init(_ a: Agent) { name = a.name; kind = a.kind; status = a.status; session = a.sessionId; title = a.title }
+}
+
+/// A pane without its terminal id (that stays inside the hub).
+public struct HubPane: Codable, Hashable, Sendable {
+    public var id: String
+    public var cwd: String
+    public var label: String?
+    public var agent: HubAgent?
+    public init(_ p: Pane) { id = p.id; cwd = p.cwd; label = p.label; agent = p.agent.map(HubAgent.init) }
+}
+
+public struct HubTab: Codable, Hashable, Sendable {
+    public var id: String
+    public var label: String
+    public var number: Int
+    public var status: AgentStatus
+    public var panes: [HubPane]
+    public init(_ t: Tab) { id = t.id; label = t.label; number = t.number; status = t.status; panes = t.panes.map(HubPane.init) }
+}
+
+public struct HubWorkspace: Codable, Hashable, Sendable {
+    public var id: String
+    public var label: String
+    public var tabs: [HubTab]
+    public init(_ w: Workspace) { id = w.id; label = w.label; tabs = w.tabs.map(HubTab.init) }
+}
+
+/// A tool call without its input and output (size; the phone shows the summary).
+public struct HubToolCall: Codable, Hashable, Sendable {
+    public var id: String
+    public var tool: String
+    public var summary: String
+    public var done: Bool
+    public var error: Bool
+    public init(id: String, tool: String, summary: String, done: Bool, error: Bool) {
+        self.id = id; self.tool = tool; self.summary = summary; self.done = done; self.error = error
+    }
+    public init(_ c: ToolCall) { self.init(id: c.id, tool: c.toolName, summary: c.summary, done: c.output != nil, error: c.isError) }
+}
+
+public struct HubTool: Codable, Hashable, Sendable {
+    public var symbol: String
+    public var text: String
+    public var calls: [HubToolCall]
+    public init(_ c: ToolChip) { symbol = c.symbol; text = c.text; calls = c.calls.map(HubToolCall.init) }
+}
+
+public struct HubApproval: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Hashable, Sendable { case pending, resolved }
+    public var id: String
+    public var tool: String
+    public var title: String
+    public var command: String
+    public var state: State
+    public init(id: String, tool: String, title: String, command: String, state: State) {
+        self.id = id; self.tool = tool; self.title = title; self.command = command; self.state = state
+    }
+    public init(_ r: PermissionRequest) {
+        self.init(id: r.toolUseId, tool: r.toolName, title: r.title, command: r.command, state: r.state == .pending ? .pending : .resolved)
+    }
+}
+
+public struct HubOption: Codable, Hashable, Sendable {
+    public var label: String
+    public var detail: String?
+    public var recommended: Bool?
+    public init(label: String, detail: String? = nil, recommended: Bool? = nil) { self.label = label; self.detail = detail; self.recommended = recommended }
+    public init(_ o: QuestionRequest.Option) { self.init(label: o.label, detail: o.detail.isEmpty ? nil : o.detail, recommended: o.recommended ? true : nil) }
+}
+
+public struct HubQuestionItem: Codable, Hashable, Sendable {
+    public var id: String
+    public var header: String
+    public var text: String
+    public var multiSelect: Bool
+    public var options: [HubOption]
+    public init(_ q: QuestionRequest.Question) { id = q.id; header = q.header; text = q.text; multiSelect = q.multiSelect; options = q.options.map(HubOption.init) }
+}
+
+public struct HubQuestion: Codable, Hashable, Sendable {
+    public enum Delivery: String, Codable, Hashable, Sendable { case picker, message }
+    public enum State: String, Codable, Hashable, Sendable { case pending, answered, declined }
+    public var id: String
+    public var agent: String
+    public var delivery: Delivery
+    public var state: State
+    public var headers: [String]
+    public var questions: [HubQuestionItem]
+    /// One per question when answered and known.
+    public var answers: [String]?
+    public init(_ q: QuestionRequest) {
+        id = q.toolUseId; agent = q.agent; delivery = q.delivery == .picker ? .picker : .message
+        headers = q.headers; questions = q.questions.map(HubQuestionItem.init)
+        switch q.state {
+        case .pending: state = .pending
+        case .answered(let a): state = .answered; answers = a
+        case .declined: state = .declined
+        }
+    }
+}
+
+public struct HubItem: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Hashable, Sendable { case user, assistant, tools, approval, question, status }
+    public var id: String
+    public var kind: Kind
+    public var time: String?
+    public var text: String?
+    public var tools: [HubTool]?
+    public var approval: HubApproval?
+    public var question: HubQuestion?
+    public init(id: String, kind: Kind, time: String? = nil, text: String? = nil, tools: [HubTool]? = nil, approval: HubApproval? = nil, question: HubQuestion? = nil) {
+        self.id = id; self.kind = kind; self.time = time; self.text = text; self.tools = tools; self.approval = approval; self.question = question
+    }
+    public init(_ item: ConversationItem) {
+        let t = Hub.time(item.timestamp)
+        switch item.kind {
+        case .userText(let s): self.init(id: item.id, kind: .user, time: t, text: s)
+        case .assistantText(let s): self.init(id: item.id, kind: .assistant, time: t, text: s)
+        case .toolChips(let c): self.init(id: item.id, kind: .tools, time: t, tools: c.map(HubTool.init))
+        case .permissionRequest(let r): self.init(id: item.id, kind: .approval, time: t, approval: HubApproval(r))
+        case .question(let q): self.init(id: item.id, kind: .question, time: t, question: HubQuestion(q))
+        case .status(let s): self.init(id: item.id, kind: .status, time: t, text: s)
+        }
+    }
+}

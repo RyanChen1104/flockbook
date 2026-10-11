@@ -1,0 +1,12 @@
+{
+  "approval": {
+    "command": "npm run build -- --force",
+    "id": "screen-9e3779b97f4a7c15",
+    "state": "pending",
+    "title": "Bash command",
+    "tool": "Bash"
+  },
+  "pane": "w1:p1",
+  "type": "prompt",
+  "v": 1
+}
