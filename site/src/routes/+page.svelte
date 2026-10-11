@@ -18,6 +18,18 @@
 		name="description"
 		content="A native macOS reading view for your Herdr agents. Read what each agent did, see which one needs you, and reply in one place."
 	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://flockbook.mclee.dev/" />
+	<meta property="og:title" content="Flockbook for Herdr" />
+	<meta
+		property="og:description"
+		content="A native macOS reading view for your Herdr agents. Read what each agent did, see which one needs you, and reply in one place."
+	/>
+	<meta property="og:image" content="https://flockbook.mclee.dev/og.png" />
+	<meta property="og:image:width" content="1280" />
+	<meta property="og:image:height" content="640" />
+	<meta property="og:image:alt" content="Flockbook for Herdr: the app icon next to the conversation view" />
+	<meta name="twitter:card" content="summary_large_image" />
 	<script src="{base}/carousel.js" defer></script>
 	<script src="{base}/flock.js" defer></script>
 </svelte:head>

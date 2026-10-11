@@ -6,6 +6,9 @@ the icon's arrowheads drift as boids, settle into a V, break up; paused offscree
 frame for reduced motion). The flock lives in the footer card; without JS the card shows the
 resting V as inline SVG. `node scripts/flock-sim.mjs static/flock.js` prints the drift spread and
 the break-up speed and acceleration curve (canvas size via `W=` and `H=`).
+Social preview (GitHub and Open Graph, 1280x640): source `scripts/social/social-preview.html`;
+`node scripts/social/render.mjs` writes `shots/social-preview.png` (1x) and `@2x`; copy the 1x to
+`static/og.png`.
 
 ```sh
 npm install
