@@ -93,8 +93,19 @@ fn fake_app(items: Vec<ConversationItem>, earlier: usize) -> (App, Items, Rc<Cel
     let mut app = App::new(Box::new(src), Mode::Light, Screen::Conversation);
     app.state.select_tab(&ws, &tab);
     app.state.conversation.probe = Some(Rc::new(RefCell::new(Probe::default())));
+    app.state.conversation.sel = test_clock();
     app.refresh();
     (app, items, earlier)
+}
+
+/// A selection whose clock moves 50 ms per read (one read per press). On the wall clock a slow runner can put more
+/// than the multi-click time between two simulated clicks, and a double-click becomes two single clicks.
+fn test_clock() -> fb_ui::selectable::flow::SelState {
+    let t = Rc::new(Cell::new(std::time::Instant::now()));
+    fb_ui::selectable::flow::SelState::with_clock(fb_ui::selectable::flow::Clock::new(move || {
+        t.set(t.get() + std::time::Duration::from_millis(50));
+        t.get()
+    }))
 }
 
 // ------------------------------------------------------------------ driving
@@ -194,6 +205,9 @@ fn double_click_selects_a_word() {
     let off = app.state.conversation.doc.rows[r].plain.find("first").unwrap() + 2;
     let p = at(&app, r, off);
     click_at(&mut app, p);
+    // A slow machine (the debug build on a CI runner): the second click lands after the system's multi-click time.
+    // The clicks still count as one double-click: the test clock, not the wall clock, decides.
+    std::thread::sleep(fb_ui::selectable::flow::MULTI_CLICK + std::time::Duration::from_millis(100));
     click_at(&mut app, p);
     assert_eq!(sel_text(&app).as_deref(), Some("first"));
 }
@@ -380,6 +394,9 @@ fn selection_survives_an_append() {
     let off = app.state.conversation.doc.rows[r].plain.find("first").unwrap() + 1;
     let p = at(&app, r, off);
     click_at(&mut app, p);
+    // A slow machine (the debug build on a CI runner): the second click lands after the system's multi-click time.
+    // The clicks still count as one double-click: the test clock, not the wall clock, decides.
+    std::thread::sleep(fb_ui::selectable::flow::MULTI_CLICK + std::time::Duration::from_millis(100));
     click_at(&mut app, p);
     assert_eq!(sel_text(&app).as_deref(), Some("first"));
     items.borrow_mut().push(item("m6".into(), ItemKind::UserText("one more".into())));

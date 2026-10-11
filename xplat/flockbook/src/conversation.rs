@@ -353,7 +353,7 @@ pub fn sync_markdown(app: &mut App) {
     let st = &mut app.state;
     let cs = &mut st.conversation;
     if cs.pane.as_deref() != Some(pane.id.as_str()) {
-        *cs = ConversationState { probe: cs.probe.take(), viewport: cs.viewport, sink: cs.sink.clone(), pane: Some(pane.id.clone()), more_earlier: can_more, earlier_seq: cs.earlier_seq + 1, rebuilds: cs.rebuilds, ..Default::default() };
+        *cs = ConversationState { probe: cs.probe.take(), viewport: cs.viewport, sink: cs.sink.clone(), pane: Some(pane.id.clone()), more_earlier: can_more, earlier_seq: cs.earlier_seq + 1, rebuilds: cs.rebuilds, sel: SelState::with_clock(cs.sel.clock()), ..Default::default() };
         cs.sink.borrow_mut().measures.clear();
     }
     let items: &[herdr_core::ConversationItem] = st.conversations.get(&pane.id).map(|v| v.as_slice()).unwrap_or(&[]);

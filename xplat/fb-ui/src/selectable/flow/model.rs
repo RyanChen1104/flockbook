@@ -456,6 +456,11 @@ impl SelState {
         SelState { clock, ..Default::default() }
     }
 
+    /// The clock this state reads, to keep it when the state is replaced.
+    pub fn clock(&self) -> Clock {
+        self.clock.clone()
+    }
+
     /// Mouse press at `at`, pointer at `point` (widget coordinates). Reads the injected clock.
     pub fn press(&mut self, doc: &Doc, at: Anchor, point: iced::Point, shift: bool) {
         let now = self.clock.now();
