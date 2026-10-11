@@ -17,7 +17,7 @@ extension SnapshotRunner {
         let pairing = RemoteHub.preview(running: true, devices: [], offer: true)
 
         step("off: nothing listens, no url", !off.enabled && !off.running && off.url == nil)
-        step("on: url wss://100.101.102.103:7480 (\(on.url ?? "nil"))", on.url == "wss://100.101.102.103:7480")
+        step("on: url https://100.101.102.103:7480 (\(on.url ?? "nil"))", on.url == "https://100.101.102.103:7480")
         step("on: the default address is the Tailscale one", on.host == "100.101.102.103")
         let link = pairing.pairLink?.absoluteString ?? ""
         step("pairing: QR link https + secret + fingerprint in the fragment (\(link.prefix(48))…)",

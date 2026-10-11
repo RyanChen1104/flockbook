@@ -87,8 +87,9 @@ enum HubLiveTest {
         step("off by default", !hub.enabled && !hub.running)
         hub.enabled = true
         for _ in 0..<50 where !hub.running && hub.problem == nil { try? await Task.sleep(for: .milliseconds(100)) }
-        step("on: \(hub.url ?? hub.problem ?? "nothing")", hub.running && hub.url?.hasPrefix("wss://127.0.0.1:") == true)
-        guard let url = hub.url.flatMap(URL.init(string:)), let fp = hub.fingerprint else { finish(false); return }
+        step("on: \(hub.url ?? hub.problem ?? "nothing")", hub.running && hub.url?.hasPrefix("https://127.0.0.1:") == true)
+        guard let page = hub.url.flatMap(URL.init(string:)), let url = URL(string: page.absoluteString.replacingOccurrences(of: "https://", with: "wss://") + "/ws"),
+              let fp = hub.fingerprint else { finish(false); return }
         let offer = hub.startPairing()
         step("QR link carries the fingerprint", hub.pairLink?.absoluteString.hasSuffix("&fp=\(fp)") == true)
 
@@ -103,6 +104,10 @@ enum HubLiveTest {
             }
         }
         let session = URLSession(configuration: .ephemeral, delegate: Pin(fp), delegateQueue: nil)
+        let index = try? await session.data(from: page)
+        let body = index.map { String(decoding: $0.0, as: UTF8.self) } ?? ""
+        step("page over pinned https: \((index?.1 as? HTTPURLResponse)?.statusCode ?? 0)",
+             (index?.1 as? HTTPURLResponse)?.statusCode == 200 && body.contains("app.js"))
         let c = Client(task: session.webSocketTask(with: url))
         try? await c.send(#"{"v":1,"type":"pair","id":"p","secret":"\#(offer.code)","name":"Test phone"}"#)
         let paired = await c.untilReply()
@@ -137,7 +142,7 @@ enum HubLiveTest {
 
     @MainActor final class Client {
         let task: URLSessionWebSocketTask
-        convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)) }
+        convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!)) }
         init(task: URLSessionWebSocketTask) {
             self.task = task
             task.resume()

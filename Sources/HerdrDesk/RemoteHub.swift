@@ -72,10 +72,10 @@ final class RemoteHub {
         let p = AppDefaults.store.integer(forKey: Self.portKey)
         return p > 0 && p < 65536 ? UInt16(p) : Self.defaultPort
     }
-    /// The address to connect to, for the status line.
+    /// The page address (the PWA; its socket is `/ws` on the same origin), for the status line and the QR link.
     var url: String? {
         guard running, let host, let port else { return nil }
-        return "wss://\(host.contains(":") ? "[\(host)]" : host):\(port)"
+        return "https://\(host.contains(":") ? "[\(host)]" : host):\(port)"
     }
 
     func refreshAddresses() { if previewEnabled == nil { addresses = HubBind.local() } }
@@ -158,7 +158,7 @@ final class RemoteHub {
     /// The QR code's link for the open offer.
     var pairLink: URL? {
         guard let offer, let url else { return nil }
-        return offer.link(base: URL(string: url.replacingOccurrences(of: "wss://", with: "https://"))!, fingerprint: fingerprint)
+        return URL(string: url).map { offer.link(base: $0, fingerprint: fingerprint) }
     }
 
     func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); deviceList = devices.all }

@@ -1,8 +1,9 @@
 import Foundation
 import Network
 
-/// Carries `HubSession` over WebSocket (`Network.framework`, no dependency). One session per connection; messages of a
-/// connection are handled one at a time, and every `tickInterval` the session's pushes go out.
+/// Carries `HubSession` over WebSocket, and serves the PWA's files from the same origin (`HubHTTP.swift`; TCP and TLS
+/// from Network.framework, no dependency). `GET /ws` with an upgrade is the socket: one session per connection,
+/// messages handled one at a time, and every `tickInterval` the session's pushes go out. Other GETs get a file.
 ///
 /// It listens on one address the owner picks (`HubBind`): loopback, or a Tailscale/LAN address with TLS. Never all
 /// addresses. Off unless the app starts it.
@@ -33,8 +34,11 @@ import Network
     private var conns: [ObjectIdentifier: Conn] = [:]
     private let queue = DispatchQueue(label: "hub.server")
 
-    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, tickInterval: Duration = .seconds(1)) {
-        self.backend = backend; self.devices = devices; self.pairing = pairing; self.tickInterval = tickInterval
+    private let assets: HubWeb.Assets
+
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, assets: HubWeb.Assets = HubWeb.bundled,
+                tickInterval: Duration = .seconds(1)) {
+        self.backend = backend; self.devices = devices; self.pairing = pairing; self.assets = assets; self.tickInterval = tickInterval
     }
 
     public var running: Bool { listener != nil }
@@ -48,9 +52,6 @@ import Network
     public func start(host: String = "127.0.0.1", port: UInt16, tls: HubIdentity? = nil, local: [HubAddress]? = nil) async throws -> UInt16 {
         stop()
         if let e = HubBind.check(host: host, tls: tls != nil, local: local ?? HubBind.local()) { throw e }
-        let ws = NWProtocolWebSocket.Options()
-        ws.autoReplyPing = true
-        ws.maximumMessageSize = Self.maxMessage
         let params: NWParameters
         if let tls, let sid = sec_identity_create(tls.identity) {
             let t = NWProtocolTLS.Options()
@@ -62,7 +63,6 @@ import Network
         } else {
             params = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
         }
-        params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
         params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? .any)
         let l: NWListener
         do { l = try NWListener(using: params) } catch { throw StartError.failed("\(error)") }
@@ -95,13 +95,16 @@ import Network
     // MARK: - Connections
 
     private final class Conn {
+        enum Mode { case head(Data), socket(WebSocketFrames), done }
         let nw: NWConnection
         let session: HubSession
+        var mode: Mode = .head(Data())
         var chain: Task<Void, Never>?
         var ticker: Task<Void, Never>?
         var deadline: Task<Void, Never>?
         var closed = false
         init(nw: NWConnection, session: HubSession) { self.nw = nw; self.session = session }
+        var isSocket: Bool { if case .socket = mode { true } else { false } }
         func close() {
             guard !closed else { return }
             closed = true
@@ -124,6 +127,7 @@ import Network
         }
         nw.start(queue: queue)
         receive(key)
+        // A socket that has not said hello in time, or a request head that never ends, is closed.
         let timeout = helloTimeout, interval = tickInterval
         c.deadline = Task { @MainActor [weak self] in
             try? await Task.sleep(for: timeout)
@@ -134,7 +138,7 @@ import Network
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 guard let self, let c = self.conns[key], !c.closed else { return }
-                if c.session.device != nil { self.serially(key) { await $0.session.tick() } }
+                if c.isSocket, c.session.device != nil { self.serially(key) { await $0.session.tick() } }
             }
         }
     }
@@ -145,18 +149,80 @@ import Network
 
     private func receive(_ key: ObjectIdentifier) {
         guard let c = conns[key] else { return }
-        c.nw.receiveMessage { [weak self] data, context, _, error in
-            let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
-            let opcode = meta?.opcode
+        c.nw.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, end, error in
             Task { @MainActor in
-                guard let self else { return }
-                guard error == nil, opcode != .close, let data else { self.drop(key); return }
-                if opcode == .text || opcode == .binary {
-                    self.serially(key) { await $0.session.receive(data) }
-                }
-                self.receive(key)
+                guard let self, self.conns[key] != nil else { return }
+                if let data, !data.isEmpty { self.take(data, key) }
+                if end || error != nil { self.drop(key) } else { self.receive(key) }
             }
         }
+    }
+
+    private func take(_ data: Data, _ key: ObjectIdentifier) {
+        guard let c = conns[key] else { return }
+        switch c.mode {
+        case .done:
+            return
+        case .head(var buf):
+            buf.append(data)
+            guard let end = HTTPHead.end(in: buf) else {
+                if buf.count > HTTPHead.maxHead { finish(c, HTTPHead.response("431 Request Header Fields Too Large")) } else { c.mode = .head(buf) }
+                return
+            }
+            guard end - buf.startIndex <= HTTPHead.maxHead, let head = HTTPHead.parse(buf[buf.startIndex..<(end - 4)]) else {
+                finish(c, HTTPHead.response(end - buf.startIndex > HTTPHead.maxHead ? "431 Request Header Fields Too Large" : "400 Bad Request")); return
+            }
+            request(head, rest: Data(buf[end...]), c, key)
+        case .socket(var frames):
+            let events = frames.feed(data)
+            c.mode = .socket(frames)
+            handle(events, key)
+        }
+    }
+
+    private func request(_ head: HTTPHead, rest: Data, _ c: Conn, _ key: ObjectIdentifier) {
+        guard head.method == "GET" || head.method == "HEAD" else { finish(c, HTTPHead.response("405 Method Not Allowed", extra: [("Allow", "GET")])); return }
+        if head.header("upgrade")?.lowercased() == "websocket" {
+            guard head.path == "/ws" else { finish(c, HTTPHead.response("404 Not Found")); return }
+            guard let wsKey = head.header("sec-websocket-key"), head.header("sec-websocket-version") == "13",
+                  head.header("connection")?.lowercased().contains("upgrade") == true else { finish(c, HTTPHead.response("400 Bad Request")); return }
+            // A page from another origin must not use a paired browser's socket (the token is still needed, too).
+            if let origin = head.header("origin") {
+                let authority = origin.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+                guard authority == head.header("host") else { finish(c, HTTPHead.response("403 Forbidden")); return }
+            }
+            let accept = WebSocketFrames.accept(key: wsKey)
+            c.mode = .socket(WebSocketFrames(maxMessage: Self.maxMessage))
+            write(c, Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8))
+            if !rest.isEmpty { take(rest, key) }
+            return
+        }
+        guard let f = assets.file(head.path) else { finish(c, HTTPHead.response("404 Not Found", type: "text/plain; charset=utf-8", body: Data("Not found".utf8))); return }
+        let full = HTTPHead.response("200 OK", type: f.type, body: f.body, extra: HubWeb.headers)
+        finish(c, head.method == "HEAD" ? full.prefix(full.count - f.body.count) : full)
+    }
+
+    private func handle(_ events: [WebSocketFrames.Event], _ key: ObjectIdentifier) {
+        guard let c = conns[key] else { return }
+        for e in events {
+            switch e {
+            case .message(let d): serially(key) { await $0.session.receive(d) }
+            case .ping(let d): write(c, WebSocketFrames.encode(opcode: 10, d))
+            case .close: finish(c, WebSocketFrames.close(1000))
+            case .fail(let code): finish(c, WebSocketFrames.close(code))
+            }
+        }
+    }
+
+    /// Writes the last bytes of a connection, then closes it.
+    private func finish(_ c: Conn, _ data: Data) {
+        c.mode = .done
+        let key = ObjectIdentifier(c)
+        c.nw.send(content: data, completion: .contentProcessed { [weak self] _ in Task { @MainActor in self?.drop(key) } })
+    }
+
+    private func write(_ c: Conn, _ data: Data) {
+        c.nw.send(content: data, completion: .idempotent)
     }
 
     /// Runs one session step after the previous one, sends its messages, and closes when the session closed.
@@ -165,19 +231,18 @@ import Network
         let prev = c.chain
         c.chain = Task { @MainActor [weak self] in
             await prev?.value
-            guard let self, let c = self.conns[key], !c.closed else { return }
+            guard let self, let c = self.conns[key], !c.closed, c.isSocket else { return }
             let out = await step(c)
             for m in out { await self.send(m, on: c) }
-            if c.session.closed { self.drop(key) }
+            if c.session.closed { self.finish(c, WebSocketFrames.close(1008)) }
         }
     }
 
     private func send(_ m: HubMessage, on c: Conn) async {
         guard let data = try? Hub.encode(m) else { return }
-        let meta = NWProtocolWebSocket.Metadata(opcode: .text)
-        let ctx = NWConnection.ContentContext(identifier: "hub", metadata: [meta])
+        let frame = WebSocketFrames.encode(opcode: 1, data)
         await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
-            c.nw.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in k.resume() })
+            c.nw.send(content: frame, completion: .contentProcessed { _ in k.resume() })
         }
     }
 }

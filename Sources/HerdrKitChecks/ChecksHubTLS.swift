@@ -90,7 +90,7 @@ final class PinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     let pin = PinDelegate(pin: id.fingerprint)
     let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
-    let c = HubTestClient(task: session.webSocketTask(with: URL(string: "wss://127.0.0.1:\(port)/")!))
+    let c = HubTestClient(task: session.webSocketTask(with: URL(string: "wss://127.0.0.1:\(port)/ws")!))
     try? await c.send(#"{"v":1,"type":"hello","id":"h","token":"tok","client":"check","clientVersion":"1"}"#)
     let hello = await c.untilReply()
     check(hello.map(\.type) == ["welcome", "snapshot", "reply"], "tls: wss hello with the pinned certificate (\(hello.map(\.type)))")
@@ -98,7 +98,7 @@ final class PinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     let wrong = PinDelegate(pin: String(repeating: "0", count: 64))
     let ws = URLSession(configuration: .ephemeral, delegate: wrong, delegateQueue: nil)
-    let w = HubTestClient(task: ws.webSocketTask(with: URL(string: "wss://127.0.0.1:\(port)/")!))
+    let w = HubTestClient(task: ws.webSocketTask(with: URL(string: "wss://127.0.0.1:\(port)/ws")!))
     try? await w.send(#"{"v":1,"type":"ping","id":"p"}"#)
     check(await w.next(2) == nil && wrong.seen == id.fingerprint, "tls: a client with another pin refuses the hub")
     w.close()

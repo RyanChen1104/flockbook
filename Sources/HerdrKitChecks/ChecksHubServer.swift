@@ -4,7 +4,7 @@ import Foundation
 /// A WebSocket test client (Foundation only).
 @MainActor final class HubTestClient {
     let task: URLSessionWebSocketTask
-    convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)) }
+    convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!)) }
     init(task: URLSessionWebSocketTask) {
         self.task = task
         task.resume()

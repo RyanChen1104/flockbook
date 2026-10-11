@@ -107,7 +107,7 @@ Risk: two implementations of the same rules. Mitigation: the fixtures, and the h
   - Bind: one address of this Mac, chosen in Settings > Remote access (default: the first Tailscale address). Never all addresses (`0.0.0.0`, `::` are refused, not only off by default). Public addresses are refused. Every address except loopback needs TLS.
   - Certificate: self-signed P-256, made once with the system `/usr/bin/openssl` and kept in `Application Support/Flockbook/hub/tls` (mode 600 files in a mode 700 folder). It is imported in memory only, never into a keychain. A new certificate changes the fingerprint, so devices pair again.
   - Tailscale certificate: when the owner runs `tailscale cert --cert-file <hub>/tailscale/cert.pem --key-file <hub>/tailscale/key.pem <name>.ts.net` and the hub uses a Tailscale address, the hub uses that pair. The app never runs `tailscale cert` itself (it requests a public certificate, and the name goes into public certificate logs). An EC certificate with explicit curve parameters is refused, because the in-memory import crashes on it.
-  - State in sight: the Settings row says "Off. Nothing listens." or "On at wss://…", and while on, the sidebar foot shows "Remote access on".
+  - State in sight: the Settings row says "Off. Nothing listens." or "On at https://…" (the PWA; its socket is `/ws`), and while on, the sidebar foot shows "Remote access on".
 
 ## 6. Pairing and auth
 
