@@ -79,6 +79,12 @@ jobs:
           SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: scripts/bundle.sh
 
+      # scripts/package.sh builds the dmg window with dmgbuild (hash-pinned in scripts/dmg/requirements.txt, own venv).
+      - name: Python for dmgbuild
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Notarize and package
         env:
           SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
