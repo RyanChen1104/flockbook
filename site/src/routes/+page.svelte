@@ -308,11 +308,12 @@
 		display: block;
 		width: 100%;
 		height: auto;
-		filter: drop-shadow(0 6px 14px rgb(0 0 0 / 0.12));
+		/* Only an edge, no halo: around the window the page background shows through. */
+		filter: drop-shadow(0 0 0.5px rgb(0 0 0 / 0.22)) drop-shadow(0 2px 6px rgb(0 0 0 / 0.05));
 	}
 	@media (prefers-color-scheme: dark) {
 		.shot img {
-			filter: drop-shadow(0 6px 14px rgb(0 0 0 / 0.5));
+			filter: drop-shadow(0 0 0.5px rgb(255 255 255 / 0.16));
 		}
 	}
 	figcaption {
