@@ -77,6 +77,24 @@ import Foundation
     if case .reply(let rep)? = r { check(rep.error?.code == .unauthorized, "hub server: unknown token -> unauthorized") } else { check(false, "hub server: unknown token -> a reply") }
     check(await bad.next(2) == nil, "hub server: closes after unauthorized")
 
+    // Pairing over the socket, then hello with the new token on a new connection.
+    let pairing = HubPairing(devices: devices)
+    server.pairing = pairing
+    let offer = pairing.offer()
+    let pc = HubTestClient(port: port)
+    try await pc.send(#"{"v":1,"type":"pair","id":"p","secret":"\#(offer.code)","name":"Laptop"}"#)
+    let paired = await pc.untilReply()
+    if case .paired(let pd)? = paired.first {
+        pc.close()
+        let nc = HubTestClient(port: port)
+        try await nc.send(#"{"v":1,"type":"hello","id":"h","token":"\#(pd.token)","client":"check","clientVersion":"1"}"#)
+        let w = await nc.untilReply()
+        check(w.map(\.type) == ["welcome", "snapshot", "reply"] && devices.device(token: pd.token)?.level == .read, "hub server: pair with the 6 words, then hello with the token")
+        nc.close()
+    } else { check(false, "hub server: pair -> paired (\(paired.map(\.type)))") }
+    server.pairing = nil
+    try? await Task.sleep(for: .milliseconds(200))
+
     // No hello in time: closed.
     server.helloTimeout = .milliseconds(300)
     let silent = HubTestClient(port: port)

@@ -30,7 +30,7 @@ import Foundation
     check(hubSeen == Set(Hub.hubTypes), "hub: a fixture for every hub type (missing \(Set(Hub.hubTypes).subtracting(hubSeen).sorted()))")
 
     // Intent only: no client message carries keys or bytes.
-    check(Hub.clientTypes == ["hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"], "hub: client types are the intent list")
+    check(Hub.clientTypes == ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"], "hub: client types are the intent list")
     check(Hub.version == 1, "hub: protocol version 1")
 
     // Decoded values.

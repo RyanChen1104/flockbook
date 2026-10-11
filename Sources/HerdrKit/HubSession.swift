@@ -36,33 +36,6 @@ public struct HubDevice: Codable, Hashable, Sendable {
     public init(id: String, name: String, level: HubLevel) { self.id = id; self.name = name; self.level = level }
 }
 
-/// Paired devices. Looked up on every message, so a revoke or a level change applies to open connections at once.
-@MainActor public protocol HubDeviceStore: AnyObject {
-    func device(token: String) -> HubDevice?
-    func device(id: String) -> HubDevice?
-}
-
-public enum HubToken {
-    /// SHA-256 hex. Stores keep only this, never the token.
-    public static func hash(_ token: String) -> String {
-        SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-/// Devices in memory (tests, and the hub before pairing is wired). Keyed by token hash.
-@MainActor public final class MemoryDeviceStore: HubDeviceStore {
-    private var byHash: [String: HubDevice] = [:]
-    public init() {}
-    public var hashes: [String] { Array(byHash.keys) }
-    public func add(token: String, device: HubDevice) { byHash[HubToken.hash(token)] = device }
-    public func setLevel(_ level: HubLevel, device id: String) {
-        for (h, d) in byHash where d.id == id { byHash[h]?.level = level }
-    }
-    public func revoke(device id: String) { byHash = byHash.filter { $0.value.id != id } }
-    public func device(token: String) -> HubDevice? { byHash[HubToken.hash(token)] }
-    public func device(id: String) -> HubDevice? { byHash.values.first { $0.id == id } }
-}
-
 extension ApprovalNotice {
     /// The approval card's request from the log: the last permission request, when it is still pending.
     public static func pendingRequest(in items: [ConversationItem]) -> PermissionRequest? {
@@ -98,7 +71,12 @@ extension Hub {
     private var lastScreen: [String: String] = [:]
     private var lastPrompt: [String: HubPrompt] = [:]
 
-    public init(backend: HubBackend, devices: HubDeviceStore) { self.backend = backend; self.devices = devices }
+    private let pairing: HubPairing?
+
+    /// `pairing` nil: `pair` is refused (the hub shows no offer).
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil) {
+        self.backend = backend; self.devices = devices; self.pairing = pairing
+    }
 
     /// The device of this connection, looked up again each time (nil after a revoke).
     public var device: HubDevice? { deviceID.flatMap { devices.device(id: $0) } }
@@ -114,6 +92,14 @@ extension Hub {
         } catch {
             return [fail(rid, .badRequest, "Not a protocol \(Hub.version) client message.")]
         }
+        if case .pair(let secret, let name) = m.body {
+            guard deviceID == nil else { return [fail(m.id, .badRequest, "This connection is already paired.")] }
+            guard let (token, d) = pairing?.redeem(secret, name: name) else {
+                closed = true
+                return [fail(m.id, .unauthorized, "Wrong or expired pairing code. Start pairing again on the hub.")]
+            }
+            return [.paired(HubPaired(token: token, device: d)), ok(m.id)]
+        }
         if case .hello(let token, _, _) = m.body {
             guard let d = devices.device(token: token) else { closed = true; return [fail(m.id, .unauthorized, "Unknown device. Pair it on the hub.")] }
             deviceID = d.id
@@ -124,7 +110,7 @@ extension Hub {
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
         let canInput = device.level == .input && backend.writesEnabled
         switch m.body {
-        case .hello:
+        case .hello, .pair:
             return []   // handled above
         case .ping:
             return [.pong, ok(m.id)]

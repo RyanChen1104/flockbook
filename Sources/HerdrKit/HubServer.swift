@@ -15,6 +15,8 @@ import Network
 
     private let backend: HubBackend
     private let devices: HubDeviceStore
+    /// Set while the hub may pair devices (`pair` is refused without it).
+    public var pairing: HubPairing?
     private let tickInterval: Duration
     /// A connection that has not said hello by then is closed.
     public var helloTimeout: Duration = .seconds(10)
@@ -25,8 +27,8 @@ import Network
     private var conns: [ObjectIdentifier: Conn] = [:]
     private let queue = DispatchQueue(label: "hub.server")
 
-    public init(backend: HubBackend, devices: HubDeviceStore, tickInterval: Duration = .seconds(1)) {
-        self.backend = backend; self.devices = devices; self.tickInterval = tickInterval
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, tickInterval: Duration = .seconds(1)) {
+        self.backend = backend; self.devices = devices; self.pairing = pairing; self.tickInterval = tickInterval
     }
 
     public var running: Bool { listener != nil }
@@ -92,7 +94,7 @@ import Network
 
     private func accept(_ nw: NWConnection) {
         guard listener != nil else { nw.cancel(); return }
-        let c = Conn(nw: nw, session: HubSession(backend: backend, devices: devices))
+        let c = Conn(nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing))
         let key = ObjectIdentifier(c)
         conns[key] = c
         nw.stateUpdateHandler = { [weak self] state in

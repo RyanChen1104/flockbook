@@ -6,8 +6,8 @@ import Foundation
 public enum Hub {
     public static let version = 1
     /// Every client message type. Intent only: there is no type for keys or bytes.
-    public static let clientTypes = ["hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"]
-    public static let hubTypes = ["welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "pong"]
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "pong"]
 
     public enum DecodeError: Error, Equatable, Sendable {
         case missingVersion
@@ -71,6 +71,8 @@ public struct HubAnswer: Codable, Hashable, Sendable {
 
 public struct ClientMessage: Codable, Hashable, Sendable {
     public enum Body: Hashable, Sendable {
+        /// Before hello, on a new device: the pairing secret (from the QR) or the 6 words, and a device name.
+        case pair(secret: String, name: String)
         case hello(token: String, client: String, clientVersion: String)
         case watch(pane: String)
         case unwatch(pane: String)
@@ -84,6 +86,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
 
         public var type: String {
             switch self {
+            case .pair: "pair"
             case .hello: "hello"
             case .watch: "watch"
             case .unwatch: "unwatch"
@@ -99,13 +102,14 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, token, client, clientVersion, pane, session, before, text, prompt, allow, question, answers }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, prompt, allow, question, answers }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
         let s = { (k: K) in try c.decode(String.self, forKey: k) }
         switch try c.decode(String.self, forKey: .type) {
+        case "pair": body = .pair(secret: try s(.secret), name: try s(.name))
         case "hello": body = .hello(token: try s(.token), client: try s(.client), clientVersion: try s(.clientVersion))
         case "watch": body = .watch(pane: try s(.pane))
         case "unwatch": body = .unwatch(pane: try s(.pane))
@@ -124,6 +128,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         try c.encode(body.type, forKey: .type)
         try c.encode(id, forKey: .id)
         switch body {
+        case .pair(let secret, let name):
+            try c.encode(secret, forKey: .secret); try c.encode(name, forKey: .name)
         case .hello(let token, let client, let version):
             try c.encode(token, forKey: .token); try c.encode(client, forKey: .client); try c.encode(version, forKey: .clientVersion)
         case .watch(let pane), .unwatch(let pane):
@@ -145,6 +151,12 @@ public struct ClientMessage: Codable, Hashable, Sendable {
 // MARK: - Hub to client
 
 public enum HubLevel: String, Codable, Hashable, Sendable { case read, input }
+
+public struct HubPaired: Codable, Hashable, Sendable {
+    public var token: String
+    public var device: HubDevice
+    public init(token: String, device: HubDevice) { self.token = token; self.device = device }
+}
 
 public struct HubWelcome: Codable, Hashable, Sendable {
     public var hub: String
@@ -192,6 +204,8 @@ public struct HubPrompt: Codable, Hashable, Sendable {
 }
 
 public enum HubMessage: Codable, Hashable, Sendable {
+    /// The answer to a good `pair`: the new device token, shown once. The client sends `hello` with it next.
+    case paired(HubPaired)
     case welcome(HubWelcome)
     case reply(HubReply)
     case snapshot([HubWorkspace])
@@ -203,6 +217,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
 
     public var type: String {
         switch self {
+        case .paired: "paired"
         case .welcome: "welcome"
         case .reply: "reply"
         case .snapshot: "snapshot"
@@ -219,6 +234,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         switch try c.decode(String.self, forKey: .type) {
+        case "paired": self = .paired(try HubPaired(from: decoder))
         case "welcome": self = .welcome(try HubWelcome(from: decoder))
         case "reply": self = .reply(try HubReply(from: decoder))
         case "snapshot": self = .snapshot(try c.decode([HubWorkspace].self, forKey: .workspaces))
@@ -233,6 +249,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
+        case .paired(let p): try p.encode(to: encoder)
         case .welcome(let w): try w.encode(to: encoder)
         case .reply(let r): try r.encode(to: encoder)
         case .conversation(let m): try m.encode(to: encoder)

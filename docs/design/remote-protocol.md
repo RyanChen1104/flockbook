@@ -29,7 +29,8 @@ The client sends **intent only**. There is no message that carries raw keys or b
 
 | `type` | Fields | Effect |
 |---|---|---|
-| `hello` | `token`, `client` (name), `clientVersion` | First message. The hub checks the device token, then sends `welcome` + `snapshot`. Anything before `hello` gets `unauthorized`. |
+| `pair` | `secret`, `name` | New device only, before `hello`. `secret`: the pairing secret from the QR code, or the 6 words the hub shows (any case, any separators). A good one gets `paired` with a new device token. A wrong or expired one gets `unauthorized` and a close. After `hello` it gets `badRequest`. See 3.2. |
+| `hello` | `token`, `client` (name), `clientVersion` | First message of a paired device. The hub checks the device token, then sends `welcome` + `snapshot`. Anything else before `hello` (except `pair`) gets `unauthorized`. |
 | `watch` | `pane` | Start pushes for this pane: `conversation` (tail), `screen`, `prompt`. |
 | `unwatch` | `pane` | Stop them. |
 | `loadEarlier` | `session`, `before` (item id) | Push older items as `conversation` with `mode: "prepend"`. |
@@ -51,10 +52,24 @@ The hub re-reads the pane when `approve` arrives (`ApprovalNotice.outcome`). It 
 
 Order of checks for all three: device level and the app-wide "Allow input" (`readOnly`), the pane exists (`notFound`), then the rule above.
 
+### 3.2 Pairing
+
+The hub owner starts pairing on the hub. The hub then holds **one offer**: a secret (256-bit, base64url) for the QR code and 6 words (from a fixed list of 256, so 48 bits) to type. The offer:
+
+- lasts 5 minutes;
+- is single use: a good `pair` ends it;
+- ends after 5 wrong `pair` messages (on any connection), and every wrong `pair` closes its connection;
+- is replaced by a new offer.
+
+A good `pair` adds a device with level `read`. Input is turned on per device on the hub. The hub stores only the SHA-256 of the token, the device id, name, level and pair date. The token is shown once, in `paired`; the client keeps it and sends `hello` with it, on this connection or a new one.
+
+The QR code holds a link: `<hub URL>/#pair=<secret>&fp=<certificate SHA-256>`. Both values are in the fragment, which a browser never sends to a server.
+
 ## 4. Hub to client
 
 | `type` | Fields | When |
 |---|---|---|
+| `paired` | `token`, `device` (`{id, name, level}`) | After a good `pair`. The token is shown only here. |
 | `welcome` | `hub` (name), `hubVersion`, `level` (`read` / `input`), `session?` (herdr session name; absent = default) | After a good `hello`. |
 | `reply` | `re`, `ok`, `error?` {`code`, `message`} | Once per client message. |
 | `snapshot` | `workspaces` | After `welcome`, and on every change of workspaces, tabs, panes or agents. Full list each time (it is small). |

@@ -68,6 +68,7 @@ try await checksSessionFallback()
 try await checksApprovalNotice()
 try await checksHubProtocol()
 try await checksHubSession()
+try await checksHubPairing()
 try await checksHubServer()
 try await checksUpdater()
 

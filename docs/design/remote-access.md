@@ -108,7 +108,7 @@ Risk: two implementations of the same rules. Mitigation: the fixtures, and the h
 
 1. On the hub machine: Settings > Remote access > "Pair a device" (Mac), or `flockbook-hub pair` (Linux). It shows a QR code and a 6-word code.
 2. The QR holds: hub URL, certificate fingerprint, a one-time pairing secret (valid 5 minutes, single use).
-3. The client opens the URL, sends the secret, and gets a **device token** (random 256-bit). The hub stores only a hash of it, with a device name and the date.
+3. The client opens the URL, sends the secret, and gets a **device token** (random 256-bit). The hub stores only a hash of it, with a device name and the date. (Mac hub: a JSON file, mode 600, in Application Support. A hash is not a secret; the Keychain would ask again after every rebuild of an ad-hoc signed app.)
 4. Every WebSocket opens with the device token. The hub lists paired devices and can revoke one.
 5. Each device has a **permission level**: `read` (default) or `input`. `input` must be turned on per device, on the hub, not on the client.
 
@@ -151,7 +151,7 @@ Phone for the Mac first. The Linux remote follows as one block.
 | Phase | Content | Size |
 |---|---|---|
 | 1 | Protocol spec + JSON fixtures for every message type. Checked by HerdrKitChecks now and by `cargo test` later. | S (3–5 days) |
-| 2 | Swift hub in the Mac app: Settings > Remote access (off by default), `NWListener` on the Tailscale address, TLS (`tailscale cert`), pairing (QR + 6-word code), device tokens (hash in the Keychain), per-device `read`/`input`, revoke. Serves snapshot, events, conversation, screen, `send`/`approve`/`answer`. Headless tests with a test client against a named session. | L (2–3 weeks) |
+| 2 | Swift hub in the Mac app: Settings > Remote access (off by default), `NWListener` on the Tailscale address, TLS (`tailscale cert`), pairing (QR + 6-word code), device tokens (hash only, in a mode-600 file), per-device `read`/`input`, revoke. Serves snapshot, events, conversation, screen, `send`/`approve`/`answer`. Headless tests with a test client against a named session. | L (2–3 weeks) |
 | 3 | PWA served by the hub: agent list, conversation, approval and question cards, composer (only with `input`). Phone check by the owner. | M (1–2 weeks) |
 | 4 | Web Push for "Needs you" (installed PWA, iOS 16.4+), with Allow / Deny only for `input` devices. | S–M (1 week) |
 | 5 | Linux remote, one block: option 0 (`--socket` + `ssh -L`, the limited mode), the Rust `flockbook-hub` on Linux (same protocol and fixtures), and the Mac app remote mode (host list, Keychain token, a `RemoteStore` that feeds the same views as `HerdrStore`). | L (3–4 weeks) |
