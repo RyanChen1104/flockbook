@@ -1,14 +1,13 @@
-// Footer flock: the app icon's small V arrowheads drift as boids, then settle into a V
-// formation, hold, and break up again. No libraries. Paused while offscreen or hidden;
-// one static frame (the formation) when the viewer prefers reduced motion.
+// Footer flock: the app icon's small arrowheads drift as boids, settle into a V, hold, break up.
+// Paused offscreen or hidden; one static frame (the V) for reduced motion. No libraries.
 (() => {
 	const cv = document.querySelector('.flock');
 	if (!cv) return;
 	const g = cv.getContext('2d');
 	const still = matchMedia('(prefers-reduced-motion: reduce)');
 	const dark = matchMedia('(prefers-color-scheme: dark)');
-	const N = 11, CYCLE = 18, GAP = 24;
-	let W = 0, H = 0, dpr = 1, on = false, raf = 0, last = 0, t = 0, placed = false;
+	const N = 11, CYCLE = 18;
+	let W = 0, H = 0, GAP = 24, K = 0.2, dpr = 1, on = false, raf = 0, last = 0, t = 0, placed = false;
 	const birds = Array.from({ length: N }, (_, i) => ({ x: 0, y: 0, vx: 0, vy: 0, s: i }));
 
 	// Slot k of the V: 0 is the leader, then alternate wings, one step back each pair.
@@ -29,7 +28,7 @@
 		}
 	}
 	function settle() {
-		const cx = W / 2 + 80, cy = H / 2;
+		const cx = W / 2 + 2.5 * GAP, cy = H / 2;
 		birds.forEach((b, k) => {
 			[b.x, b.y] = slot((b.s = k), cx, cy);
 			b.vx = 30; b.vy = 0;
@@ -49,16 +48,17 @@
 	function step(dt) {
 		t += dt;
 		const w = weight((t % CYCLE) / CYCLE);
-		const cx = W / 2 + 80 + Math.sin(t * 0.3) * 40, cy = H / 2 + Math.sin(t * 0.7) * 8;
+		const cx = W / 2 + 2.5 * GAP + Math.sin(t * 0.3) * 40, cy = H / 2 + Math.sin(t * 0.7) * 8;
 		if (!w) placed = false;
 		else if (!placed) assign();
+		const sep = (GAP * 0.6) ** 2;
 		for (const b of birds) {
 			let ax = 0, ay = 0, n = 0, mx = 0, my = 0, px = 0, py = 0;
 			for (const o of birds) {
 				if (o === b) continue;
 				const dx = o.x - b.x, dy = o.y - b.y, d2 = dx * dx + dy * dy;
 				if (d2 < 3600) { n++; mx += o.vx; my += o.vy; px += dx; py += dy; }
-				if (d2 < 400 && d2 > 0) { ax -= (dx / d2) * 600; ay -= (dy / d2) * 600; }
+				if (d2 < sep && d2 > 0) { ax -= (dx / d2) * 600; ay -= (dy / d2) * 600; }
 			}
 			const f = 1 - w;
 			if (n) {
@@ -86,7 +86,7 @@
 		g.setTransform(dpr, 0, 0, dpr, 0, 0);
 		g.clearRect(0, 0, W, H);
 		for (const b of birds) {
-			const k = b.s ? 0.2 : 0.27;
+			const k = b.s ? K : K * 1.35;
 			g.setTransform(dpr * k, 0, 0, dpr * k, b.x * dpr, b.y * dpr);
 			g.rotate((b.h ?? 0) + Math.PI / 2);
 			// The icon's small arrowhead: two facets around a notch, tip at (0, -28).
@@ -112,6 +112,9 @@
 		const fresh = !W;
 		dpr = Math.min(devicePixelRatio || 1, 2);
 		W = r.width; H = r.height;
+		// Spread the V and size the birds to the canvas height: the wings (5 deep) fill it.
+		GAP = Math.min(40, (H / 2 - 30) / 2.75);
+		K = 0.2 * Math.sqrt(H / 160);
 		cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
 		if (fresh) seed();
 		if (still.matches) settle();

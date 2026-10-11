@@ -81,6 +81,7 @@
 </main>
 
 <footer class="foot">
+	<div class="foot-in">
 	<dl class="facts">
 		<div>
 			<dt>Requires</dt>
@@ -114,6 +115,7 @@
 		{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not affiliated
 		with, endorsed by, or supported by Herdr, Inc.
 	</p>
+	</div>
 	<canvas class="flock" aria-hidden="true"></canvas>
 </footer>
 
@@ -126,6 +128,7 @@
 		--soft: #f5f5f7;
 		--accent: #0066d6;
 		--dot: #c7c7cc;
+		--zone: #fafafb;
 		color-scheme: light dark;
 	}
 	@media (prefers-color-scheme: dark) {
@@ -137,6 +140,7 @@
 			--soft: #222224;
 			--accent: #3b9bff;
 			--dot: #48484c;
+			--zone: #1b1b1d;
 		}
 	}
 	:global(*, *::before, *::after) {
@@ -304,11 +308,11 @@
 		display: block;
 		width: 100%;
 		height: auto;
-		filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.12));
+		filter: drop-shadow(0 6px 14px rgb(0 0 0 / 0.12));
 	}
 	@media (prefers-color-scheme: dark) {
 		.shot img {
-			filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.5));
+			filter: drop-shadow(0 6px 14px rgb(0 0 0 / 0.5));
 		}
 	}
 	figcaption {
@@ -357,13 +361,17 @@
 		background: var(--fg);
 	}
 
+	/* The footer is its own zone: full width, a hairline on top, a barely different surface. */
 	.foot {
 		border-top: 1px solid var(--line);
-		max-width: 1120px;
-		margin: 0 auto;
-		padding: 40px 20px 48px;
+		background: var(--zone);
 		font-size: 14px;
 		color: var(--fg-2);
+	}
+	.foot-in {
+		max-width: 1120px;
+		margin: 0 auto;
+		padding: 56px 20px 0;
 	}
 	.facts {
 		margin: 0 0 32px;
@@ -399,8 +407,8 @@
 	.flock {
 		display: block;
 		width: 100%;
-		height: 160px;
-		margin-top: 32px;
+		height: 300px;
+		margin-top: 72px;
 	}
 
 	@media (max-width: 760px) {
@@ -421,6 +429,13 @@
 		.facts {
 			grid-template-columns: minmax(0, 1fr);
 			gap: 20px;
+		}
+		.foot-in {
+			padding-top: 40px;
+		}
+		.flock {
+			height: 220px;
+			margin-top: 48px;
 		}
 	}
 </style>
