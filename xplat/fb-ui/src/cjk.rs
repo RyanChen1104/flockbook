@@ -84,10 +84,12 @@ pub fn region(locale: &str) -> Region {
 pub fn han_candidates(platform: Platform, region: Region) -> Vec<&'static str> {
     let (tc, hk, sc, ja, ko): (&[&str], &[&str], &[&str], &[&str], &[&str]) = match platform {
         Platform::MacOs => (
-            // PingFang first for macOS releases that ship it with drawable outlines. Hiragino Sans GB covers all
-            // of Big5 level 1 and has a real bold (W6); Heiti TC has no bold.
-            &["PingFang TC", "Hiragino Sans GB", "Heiti TC"],
-            &["PingFang HK", "Hiragino Sans GB", "Heiti TC"],
+            // PingFang first for macOS releases that ship it with drawable outlines (macOS 26 has only `hvgl`
+            // ones, which nothing here can draw). Traditional: Heiti TC, which draws the Taiwan glyph forms and
+            // centers the full-width punctuation (，：。、) as Traditional text does; its bold is Medium. Hiragino
+            // Sans GB is a Simplified face (punctuation low left): it comes next, for anything Heiti TC lacks.
+            &["PingFang TC", "Heiti TC", "Hiragino Sans GB"],
+            &["PingFang HK", "Heiti TC", "Hiragino Sans GB"],
             &["PingFang SC", "Hiragino Sans GB", "Heiti SC"],
             &["Hiragino Sans", "Hiragino Kaku Gothic ProN"],
             &["Apple SD Gothic Neo"],
@@ -176,10 +178,20 @@ pub fn alias(db: &mut fontdb::Database, family: &str, alias: &str) -> usize {
     if faces.is_empty() {
         return 0;
     }
+    // A family without a face at 600 or above (Heiti TC: Light 300, Medium 400) has no bold. Nearest weight would
+    // give its heaviest face to regular and bold alike, and bold text would look regular. So its heaviest face is
+    // kept for 600 and above, and the lighter faces serve the rest.
+    let heaviest = faces.iter().map(|f| f.weight.0).max().expect("not empty");
+    let no_bold = heaviest < 600 && faces.iter().any(|f| f.weight.0 < heaviest);
     for w in (100..=900).step_by(100) {
+        let usable: Vec<&fontdb::FaceInfo> = if no_bold {
+            faces.iter().filter(|f| (f.weight.0 == heaviest) == (w >= 600)).collect()
+        } else {
+            faces.iter().collect()
+        };
         // Nearest weight; on a tie the heavier face above Medium, the lighter one below.
-        let best = faces
-            .iter()
+        let best = usable
+            .into_iter()
             .min_by_key(|f| (f.weight.0.abs_diff(w), if w >= 500 { u16::MAX - f.weight.0 } else { f.weight.0 }))
             .expect("not empty");
         let mut info = best.clone();

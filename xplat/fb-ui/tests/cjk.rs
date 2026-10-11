@@ -90,6 +90,29 @@ fn an_alias_covers_every_weight_with_the_nearest_face() {
     assert_eq!(cjk::alias(&mut db, "No Such Family", "Nothing"), 0);
 }
 
+/// Heiti TC has only Light (300) and Medium (400). Nearest-weight would give Medium to both regular and bold, so
+/// bold Chinese would look regular. A family without a face at 600 or above uses its heaviest face as the bold.
+#[test]
+fn a_family_without_a_bold_keeps_its_heaviest_face_for_bold() {
+    let mut db = bundled_db();
+    let inter = db.faces().find(|f| f.families[0].0 == "Inter" && f.weight.0 == 400).unwrap().clone();
+    for (w, ps) in [(300, "Two-Light"), (400, "Two-Medium")] {
+        let mut f = inter.clone();
+        f.families = vec![("Two Faces".into(), fontdb::Language::English_UnitedStates)];
+        f.weight = fontdb::Weight(w);
+        f.post_script_name = ps.into();
+        db.push_face_info(f);
+    }
+    cjk::alias(&mut db, "Two Faces", "Two Alias");
+    let ps = |w: u16| db.faces().find(|f| f.families[0].0 == "Two Alias" && f.weight.0 == w).unwrap().post_script_name.clone();
+    for w in [100, 300, 400, 500] {
+        assert!(ps(w).starts_with("Two-Light-"), "{w}: {}", ps(w));
+    }
+    for w in [600, 700, 900] {
+        assert!(ps(w).starts_with("Two-Medium-"), "{w}: {}", ps(w));
+    }
+}
+
 #[test]
 fn nothing_is_aliased_when_no_candidate_is_installed() {
     let mut db = bundled_db();
@@ -148,15 +171,15 @@ fn han_text_uses_the_picked_face_at_every_weight() {
 }
 
 /// The bug: on macOS 26 Chinese fell to Arial Unicode MS. PingFang there has only `hvgl` outlines, so it is
-/// skipped; Hiragino Sans GB draws Chinese now.
+/// skipped; Heiti TC draws Traditional Chinese now (Hiragino Sans GB Simplified).
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_draws_chinese_with_hiragino_not_arial_unicode() {
+fn macos_draws_chinese_with_a_system_cjk_sans_not_arial_unicode() {
     let (mut before, _) = system(false, "en-TW");
     assert_eq!(families(&mut before, "排名清單", Weight::NORMAL), vec!["Arial Unicode MS".to_string()], "the old fallback");
     let (_, choice) = system(true, "en-TW");
     assert!(!choice.han.iter().any(|f| f.contains("PingFang")), "PingFang draws nothing here: {choice:?}");
-    assert_eq!(choice.han.first().map(String::as_str), Some("Hiragino Sans GB"), "{choice:?}");
+    assert_eq!(choice.han.first().map(String::as_str), Some("Heiti TC"), "{choice:?}");
     assert_eq!(choice.kana.first().map(String::as_str), Some("Hiragino Sans"), "{choice:?}");
     assert_eq!(choice.hangul.first().map(String::as_str), Some("Apple SD Gothic Neo"), "{choice:?}");
 }
@@ -169,9 +192,13 @@ const WIDTH: usize = 620;
 
 /// One line at 13 pt and scale 2 (26 px), dark text on white, as iced draws it (swash, alpha mask, hinting on).
 fn line(fs: &mut FontSystem, weight: Weight) -> Vec<u8> {
+    line_in(fs, "Inter", weight)
+}
+
+fn line_in(fs: &mut FontSystem, family: &str, weight: Weight) -> Vec<u8> {
     let mut buf = Buffer::new(fs, Metrics::new(26.0, LINE as f32));
     buf.set_size(fs, Some(WIDTH as f32 * 2.0), None);
-    buf.set_text(fs, TEXT, &Attrs::new().family(Family::Name("Inter")).weight(weight), Shaping::Advanced, None);
+    buf.set_text(fs, TEXT, &Attrs::new().family(Family::Name(family)).weight(weight), Shaping::Advanced, None);
     buf.shape_until_scroll(fs, false);
     let mut px = vec![255u8; WIDTH * LINE];
     let mut cache = SwashCache::new();
@@ -246,4 +273,40 @@ fn crops_before_and_after_at_2x() {
         eprintln!("hard edge share: before {b:.3}, after {a:.3}");
         assert!(a < b * 0.8, "the new face has softer edges: before {b:.3}, after {a:.3}");
     }
+}
+
+/// Where the ink of `ch` sits in its cell, as a share of the advance (0.5 = centered), and the face that drew it.
+fn ink_center(fs: &mut FontSystem, ch: char, weight: Weight) -> (f32, String) {
+    let mut buf = Buffer::new(fs, Metrics::new(40.0, 56.0));
+    buf.set_text(fs, &format!("中{ch}文"), &Attrs::new().family(Family::Name("Inter")).weight(weight), Shaping::Advanced, None);
+    buf.shape_until_scroll(fs, false);
+    let mut cache = SwashCache::new();
+    let run = buf.layout_runs().next().unwrap();
+    let g = run.glyphs.iter().find(|g| run.text[g.start..g.end].starts_with(ch)).unwrap();
+    let face = fs.db().face(g.font_id).unwrap().families[0].0.clone();
+    let pg = g.physical((0.0, 0.0), 1.0);
+    let img = cache.get_image_uncached(fs, pg.cache_key).unwrap();
+    let center = img.placement.left as f32 + img.placement.width as f32 / 2.0;
+    (center / g.w, face)
+}
+
+/// Traditional Chinese centers the full-width comma and colon in the cell; Simplified puts them low left.
+/// Hiragino Sans GB is a Simplified face, so on macOS Traditional text uses Heiti TC first.
+#[cfg(target_os = "macos")]
+#[test]
+fn full_width_punctuation_follows_the_region() {
+    for locale in ["en-TW", "zh-HK"] {
+        let (mut fs, choice) = system(true, locale);
+        assert_eq!(choice.han.first().map(String::as_str), Some("Heiti TC"), "{locale}: {choice:?}");
+        for ch in ['，', '：', '。', '、'] {
+            for w in [Weight::NORMAL, Weight::BOLD] {
+                let (x, face) = ink_center(&mut fs, ch, w);
+                assert!((0.4..0.6).contains(&x), "{locale} {ch} {w:?}: centered, got {x:.2} ({face})");
+            }
+        }
+    }
+    let (mut fs, choice) = system(true, "zh-CN");
+    assert_eq!(choice.han.first().map(String::as_str), Some("Hiragino Sans GB"), "{choice:?}");
+    let (x, face) = ink_center(&mut fs, '，', Weight::NORMAL);
+    assert!(x < 0.35, "zh-CN keeps the Simplified comma: {x:.2} ({face})");
 }
