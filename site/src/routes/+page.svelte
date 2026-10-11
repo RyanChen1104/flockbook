@@ -90,7 +90,7 @@
 				<dt>Requires</dt>
 				<dd>
 					macOS 26 or later (Apple silicon and Intel) and a running <a href="https://herdr.dev">Herdr</a>
-					with {agents.slice(0, -1).join(', ')} or {agents.at(-1)} agents.
+					with {agents.slice(0, -1).join(', ')} or {agents.at(-1)} agents. Linux and Windows versions are in progress.
 				</dd>
 			</div>
 			<div>
