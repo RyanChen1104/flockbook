@@ -1,4 +1,4 @@
-"""Demo content for scripts/demo/gen.py: six fictional projects, their tabs, panes and conversations.
+"""Demo content for scripts/demo/gen.py: nine fictional projects, their tabs, panes and conversations.
 
 All names, code and data here are made up. Turn forms:
   ("u", text)                      user message
@@ -9,6 +9,9 @@ All names, code and data here are made up. Turn forms:
   Claude only: ("task", description, prompt, result)  ("todo", [(text, status)])  ("fetch", url, prompt, result)
                ("ask", questions, answers)  an answered AskUserQuestion
 Agent status: idle | working | done | question | approval. `start`/`end`: minutes ago of the first/last turn.
+Prompts answer keys (Claude only; see gen.interactive):
+  approval: the last turn is ("bash", cmd, None); "allow" = {"output", "then": [turns after it], "verb"}.
+  question: "question" = one single-choice question; "answers" = {option label: follow-up text}.
 """
 
 # ------------------------------------------------------------------ Orchard: storefront web app
@@ -356,6 +359,22 @@ harbor apply --env "$env" "build/$env.yaml"'''),
     ("bash", "sh scripts/deploy.sh staging", None),
 ]
 
+HARBOR_DEPLOY_ALLOW = {"output": '''rendering manifests for staging
+~ deployment/harbor-api   image harbor:0.14.1 -> harbor:0.14.2
+~ configmap/harbor-env    LOG_LEVEL info -> warn
++ cronjob/harbor-prune    schedule "0 3 * * *"
+3 changes (2 modified, 1 added), dry run: nothing applied''', "verb": "Reading the diff", "then": [
+    ("a", '''The dry run would change three things on staging. Nothing was applied.
+
+| Resource | Change |
+|---|---|
+| `deployment/harbor-api` | image `0.14.1` → `0.14.2` |
+| `configmap/harbor-env` | `LOG_LEVEL` `info` → `warn` |
+| `cronjob/harbor-prune` | new, runs daily at 03:00 |
+
+The image bump and the prune job are expected. The log level change is not in the release notes; check it is wanted before a real deploy.'''),
+]}
+
 HARBOR_CI = [
     ("u", '''CI broke on main after the dependency bump. Log below.
 
@@ -432,6 +451,12 @@ LIGHTHOUSE_START_Q = {
         {"label": "Operators who deploy", "description": "People who run deploys: the Harbor flow, environment setup, and what to check after a deploy."},
         {"label": "API users", "description": "Consumers of the services: calling Orchard and Atlas, with request and response basics."},
     ],
+}
+
+LIGHTHOUSE_START_A = {
+    "New contributors": "New contributors it is. I'll write `docs/getting-started.md`: clone, `make docs-serve`, the repo layout, and a first small change, then link it from the index.",
+    "Operators who deploy": "Operators it is. I'll write the page around the Harbor flow: credentials, `scripts/deploy.sh` with a dry run first, and the checks after a deploy.",
+    "API users": "API users it is. I'll start from the OpenAPI pages and write one worked request per service, with the auth header and a sample response.",
 }
 
 LIGHTHOUSE_API = [
@@ -621,6 +646,261 @@ QUARRY_NOTES = [
 - **Synonyms:** expansion is capped at 5 terms, which cut p95 latency on long queries.'''),
 ]
 
+# ------------------------------------------------------------------ more Orchard / Harbor tabs
+
+ORCHARD_A11Y = [
+    ("u", "The cart drawer fails the accessibility check: focus is not trapped and the close button has no label in Safari. Fix both and refresh the a11y snapshots."),
+    ("bash", "npx playwright test a11y.spec.ts", '''Running 6 tests using 3 workers
+  2 failed
+    [webkit] › a11y.spec.ts:21:3 › cart drawer › traps focus
+    [webkit] › a11y.spec.ts:34:3 › cart drawer › close button has a name
+  4 passed (9.8s)''', True),
+    ("read", "web/src/components/CartDrawer.tsx", '''<aside className={open ? "drawer drawer--open" : "drawer"} aria-hidden={!open}>
+  <header>
+    <h2>Your cart</h2>
+    <button onClick={onClose}>×</button>
+  </header>'''),
+    ("edit", "web/src/components/CartDrawer.tsx", '''<aside className={open ? "drawer drawer--open" : "drawer"} aria-hidden={!open}>''',
+     '''<aside className={open ? "drawer drawer--open" : "drawer"} role="dialog" aria-modal="true" aria-labelledby="cart-title" ref={trapRef}>'''),
+    ("edit", "web/src/components/CartDrawer.tsx", "    <button onClick={onClose}>×</button>", '''    <button aria-label="Close cart" onClick={onClose}>×</button>'''),
+    ("a", "Both fixes are in: the drawer is a modal dialog with a focus trap, and the close button has an accessible name. The two snapshot baselines are now out of date, so I'll regenerate them."),
+    ("bash", "npx playwright test a11y.spec.ts --update-snapshots", None),
+]
+
+ORCHARD_A11Y_ALLOW = {"output": '''Running 6 tests using 3 workers
+  6 passed (10.4s)
+  2 snapshots updated: cart-drawer-open.aria.yml, cart-drawer-empty.aria.yml''', "verb": "Updating snapshots", "then": [
+    ("a", '''All 6 accessibility tests pass on Chromium, Firefox and WebKit.
+
+- `CartDrawer.tsx`: `role="dialog"`, `aria-modal`, focus trap, and a labelled close button.
+- Two aria snapshots regenerated. The diff only adds the dialog role and the button name.'''),
+]}
+
+ORCHARD_PROMO = [
+    ("u", "Add promo codes to checkout. Codes can be a percentage or a fixed amount. Some carts will have two codes."),
+    ("read", "orchard/pricing.py", '''def order_total(lines):
+    subtotal = sum((line_total(l["price"], l["qty"]) for l in lines), Decimal(0))
+    return (subtotal * (1 + TAX_RATE)).quantize(CENT, rounding=ROUND_HALF_UP)'''),
+    ("grep", "promo", '''orchard/models.py:88:class PromoCode(Model):
+orchard/models.py:91:    kind = Enum("percent", "fixed")'''),
+    ("a", "The model already has `PromoCode` with a percent or fixed kind. The open question is how two codes combine, and it changes the totals, so I'll ask before I write the code."),
+]
+
+ORCHARD_PROMO_Q = {
+    "header": "Stacking",
+    "question": "When a cart has two promo codes, how should they combine?",
+    "options": [
+        {"label": "Best single code (Recommended)", "description": "Apply only the code that saves the most. Simple to explain, and it never stacks two discounts by accident."},
+        {"label": "Fixed first, then percent", "description": "Subtract fixed amounts, then apply percentages to what is left. Common in shops; slightly smaller discount."},
+        {"label": "Percent first, then fixed", "description": "Apply percentages to the full subtotal, then subtract fixed amounts. Gives the customer the larger discount."},
+    ],
+}
+
+ORCHARD_PROMO_A = {
+    "Best single code": "Best single code it is. I'll add `best_discount(lines, codes)` to `pricing.py`, apply it before tax, and add tests for a percent code beating a fixed one and the reverse.",
+    "Fixed first, then percent": "Fixed first, then percent. I'll apply fixed codes to the subtotal, then percentages to the remainder, never below zero, and test a cart with one of each.",
+    "Percent first, then fixed": "Percent first, then fixed. I'll apply percentages to the full subtotal, then fixed amounts, clamp at zero, and add a test with both kinds.",
+}
+
+HARBOR_SECRETS = [
+    ("u", "The staging database password is 90 days old. Rotate it with the harbor CLI and make sure the API pods pick up the new one."),
+    ("bash", "harbor secrets list --env staging", '''NAME          AGE    USED BY
+db-password   92d    harbor-api, harbor-worker
+smtp-token    31d    harbor-mailer
+signing-key   12d    harbor-api'''),
+    ("a", "`db-password` is 92 days old and used by `harbor-api` and `harbor-worker`. `harbor secrets rotate` writes a new value and restarts the pods that mount it, one at a time."),
+    ("bash", "harbor secrets rotate --env staging --key db-password --restart", None),
+]
+
+HARBOR_SECRETS_ALLOW = {"output": '''rotating db-password in staging
+  new version v7 written
+  restarting harbor-api (3 pods) ... ok
+  restarting harbor-worker (2 pods) ... ok
+old version v6 disabled''', "verb": "Watching the restart", "then": [
+    ("a", "Rotated. `db-password` is now version 7 on staging; all 5 pods restarted one at a time and are Ready. Version 6 is disabled, not deleted, so a rollback is one command if something still uses it."),
+]}
+
+HARBOR_CANARY = [
+    ("u", "Add a canary step to the production deploy: 10% of traffic for 15 minutes, roll back automatically if the error rate doubles."),
+    ("read", "deploy/production.yaml", '''strategy:
+  type: rolling
+  maxUnavailable: 1'''),
+    ("edit", "deploy/production.yaml", '''strategy:
+  type: rolling
+  maxUnavailable: 1''', '''strategy:
+  type: canary
+  steps:
+    - weight: 10
+      pause: 15m
+      abortIf: error_rate > 2 * baseline
+    - weight: 100'''),
+    ("bash", "harbor validate deploy/production.yaml", "ok: 1 file, strategy canary (2 steps)"),
+    ("bash", "harbor simulate --env production --fail-at step1", None),
+]
+
+# ------------------------------------------------------------------ Meadow: iOS app
+
+MEADOW_ONBOARD = [
+    ("u", "Rework the onboarding flow in the Meadow app. Three screens max, then sign in."),
+    ("glob", "Meadow/Onboarding/*.swift", '''Meadow/Onboarding/OnboardingView.swift
+Meadow/Onboarding/WelcomePage.swift
+Meadow/Onboarding/PermissionsPage.swift
+Meadow/Onboarding/SignInPage.swift'''),
+    ("read", "Meadow/Onboarding/SignInPage.swift", '''struct SignInPage: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            EmailField()
+            PasswordField()
+            Button("Sign in") { model.signIn() }
+        }
+    }
+}'''),
+    ("a", "Today sign-in is email and password only. The new flow ends on the sign-in screen, so which methods it offers decides its layout. I'll ask first."),
+]
+
+MEADOW_ONBOARD_Q = {
+    "header": "Sign in",
+    "question": "Which sign-in methods should the last onboarding screen offer?",
+    "options": [
+        {"label": "Sign in with Apple + email (Recommended)", "description": "Apple first, email link as the fallback. No passwords to store, and App Review expects Apple when other social logins exist."},
+        {"label": "Email link only", "description": "One field, a magic link by email. The simplest screen, but every sign-in needs the mail app."},
+        {"label": "Keep email + password", "description": "No backend change. The screen stays as it is today, only restyled."},
+    ],
+}
+
+MEADOW_ONBOARD_A = {
+    "Sign in with Apple + email": "Apple plus email link. I'll put `SignInWithAppleButton` at the top of `SignInPage`, the email link below it, and cut onboarding to Welcome, Permissions, Sign in.",
+    "Email link only": "Email link only. I'll replace both fields with one email field and a Send link button, and handle the link in `MeadowApp.onOpenURL`.",
+    "Keep email + password": "Keeping email and password. I'll restyle `SignInPage` to match the new onboarding pages and leave the auth calls untouched.",
+}
+
+MEADOW_WIDGETS = [
+    ("u", "Add a small home screen widget that shows today's harvest total."),
+    ("write", "MeadowWidget/HarvestWidget.swift", '''struct HarvestWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "harvest", provider: HarvestProvider()) { entry in
+            HarvestView(entry: entry)
+        }
+        .supportedFamilies([.systemSmall])
+    }
+}'''),
+    ("bash", "xcodebuild -scheme MeadowWidget -destination 'generic/platform=iOS Simulator' build 2>&1 | tail -1", "** BUILD SUCCEEDED **"),
+    ("a", "The widget builds. Next: a timeline provider that refreshes every 30 minutes from the shared app group."),
+    ("bash", "xcodebuild test -scheme MeadowWidget -destination 'platform=iOS Simulator,name=iPhone 17' 2>&1 | tail -3", None),
+]
+
+MEADOW_CRASH = [
+    ("u", "Crash reports show a crash on launch for users upgrading from 2.3. Find it."),
+    ("bash", "grep -A4 'Thread 0 Crashed' crashes/2.4.0-launch.crash | head -6", '''Thread 0 Crashed:
+0   Meadow    HarvestStore.migrate(from:) + 212
+1   Meadow    HarvestStore.init() + 96
+2   Meadow    MeadowApp.init() + 48'''),
+    ("read", "Meadow/Store/HarvestStore.swift", '''func migrate(from version: Int) {
+    if version < 4 {
+        let old = try! decoder.decode([LegacyHarvest].self, from: data)
+        save(old.map(Harvest.init))
+    }
+}'''),
+    ("a", "The 2.3 store can hold an empty file, and `try!` crashes on it. I'll decode with `try?` and treat an empty or unreadable store as no harvests."),
+    ("edit", "Meadow/Store/HarvestStore.swift", "        let old = try! decoder.decode([LegacyHarvest].self, from: data)", "        let old = (try? decoder.decode([LegacyHarvest].self, from: data)) ?? []"),
+    ("bash", "xcodebuild test -scheme Meadow -only-testing MeadowTests/MigrationTests 2>&1 | tail -1", "** TEST SUCCEEDED **"),
+    ("a", "Fixed. An empty 2.3 store no longer crashes the migration; it migrates to an empty list. I added a test with an empty legacy file."),
+]
+
+MEADOW_L10N = [
+    ("u", "Find strings in the onboarding screens that are not localized."),
+    ("bash", "rg -n 'Text\\(\"' Meadow/Onboarding", '''Meadow/Onboarding/WelcomePage.swift:12:        Text("Welcome to Meadow")
+Meadow/Onboarding/PermissionsPage.swift:20:        Text("Allow notifications")'''),
+    ("a", "Two hard-coded strings. Both are `Text` with a literal, which SwiftUI does localize, but neither key is in `Localizable.xcstrings` yet. I'll add them."),
+]
+
+# ------------------------------------------------------------------ Beacon: notification service (Go)
+
+BEACON_RETRY = [
+    ("u", "Push notifications that fail with a 429 are dropped. Add retries with backoff, and test it against a real Redis queue."),
+    ("read", "internal/push/send.go", '''func (s *Sender) Send(ctx context.Context, n Notification) error {
+	resp, err := s.client.Do(req(n))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("push failed: %d", resp.StatusCode)
+	}
+	return nil
+}'''),
+    ("edit", "internal/push/send.go", '''	if resp.StatusCode >= 400 {
+		return fmt.Errorf("push failed: %d", resp.StatusCode)
+	}''', '''	if resp.StatusCode == http.StatusTooManyRequests {
+		return s.queue.Retry(ctx, n, backoff(n.Attempt, resp.Header.Get("Retry-After")))
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("push failed: %d", resp.StatusCode)
+	}'''),
+    ("a", "Retries go back on the Redis queue with exponential backoff, and `Retry-After` wins when the server sends it. The integration test needs a local Redis, so I'll start one with Docker."),
+    ("bash", "docker compose up -d redis", None),
+]
+
+BEACON_RETRY_ALLOW = {"output": '''[+] Running 2/2
+ ✔ Network beacon_default  Created
+ ✔ Container beacon-redis  Started''', "verb": "Running integration tests", "then": [
+    ("a", '''Redis is up and the integration test passes.
+
+| Case | Result |
+|---|---|
+| 429 without `Retry-After` | retried after 1 s, 2 s, 4 s |
+| 429 with `Retry-After: 10` | retried after 10 s |
+| 5 failed attempts | moved to the dead-letter list |'''),
+]}
+
+BEACON_DIGEST = [
+    ("u", "Batch email notifications into one daily digest per user."),
+    ("write", "internal/digest/digest.go", '''func Build(user string, items []Item) Email {
+	sort.Slice(items, func(i, j int) bool { return items[i].At.Before(items[j].At) })
+	return Email{To: user, Subject: fmt.Sprintf("%d updates today", len(items)), Items: items}
+}'''),
+    ("bash", "go test ./internal/digest/...", "ok  	beacon/internal/digest	0.214s"),
+    ("a", "Digest builder done: one email per user per day, items in time order, subject with the count. Tests pass."),
+]
+
+BEACON_LOAD = [
+    ("u", "Load test the send path at 2,000 notifications per second for five minutes."),
+    ("bash", "k6 run --vus 200 --duration 5m load/send.js 2>&1 | tail -4", None),
+]
+
+# ------------------------------------------------------------------ Ledger: billing
+
+LEDGER_INVOICE = [
+    ("u", "Invoices for multi-currency accounts show the wrong totals. Look at how we convert and round."),
+    ("read", "ledger/invoice.py", '''def invoice_total(lines, currency):
+    return sum(convert(l.amount, l.currency, currency) for l in lines)'''),
+    ("bash", "python -m ledger.explain INV-2026-0918", '''line  amount      from  rate      converted
+1     120.00      EUR   1.0841    130.092
+2     89.50       GBP   1.2710    113.7545
+total (unrounded)                 243.8465'''),
+    ("a", "Each line is converted at full precision and the total is never rounded, so the PDF shows 243.85 while the ledger stores 243.8465. Before I fix it: rounding per line or once at the end gives different totals, and that is a billing policy decision."),
+]
+
+LEDGER_INVOICE_Q = {
+    "header": "Rounding",
+    "question": "Where should currency conversion round on invoices?",
+    "options": [
+        {"label": "Per line (Recommended)", "description": "Round each converted line to cents, then add. Every line on the PDF adds up to the total, which is what customers check."},
+        {"label": "Once at the end", "description": "Add at full precision, round the total. Slightly more exact, but lines may not add up to the total on the PDF."},
+    ],
+}
+
+LEDGER_INVOICE_A = {
+    "Per line": "Per line. I'll round each converted line with `ROUND_HALF_EVEN` to the currency's minor unit, sum the rounded lines, and add a test that the PDF lines add up to the total.",
+    "Once at the end": "Once at the end. I'll keep lines at full precision, round only the total, and add a note on the PDF that lines are shown rounded.",
+}
+
+LEDGER_RECON = [
+    ("u", "Reconcile September payouts against the bank export."),
+    ("bash", "python -m ledger.reconcile payouts-2026-09.csv bank-2026-09.csv", '''matched     1,482
+unmatched      3  (see reconcile-2026-09.csv)'''),
+    ("a", "1,482 payouts match the bank export. Three do not; all three are the same partner with a one-day settlement delay, so they will match in the October export."),
+]
+
 # ------------------------------------------------------------------ layout
 
 WORKSPACES = [
@@ -638,6 +918,15 @@ WORKSPACES = [
         {"label": "e2e", "panes": [
             {"name": "orchard-e2e-dev", "kind": "codex", "status": "done", "title": "Flaky checkout test",
              "start": 70, "end": 12, "turns": ORCHARD_E2E},
+        ]},
+        {"label": "a11y", "panes": [
+            {"name": "orchard-a11y-dev", "kind": "claude", "status": "approval", "title": "Cart drawer accessibility",
+             "start": 14, "end": 1, "turns": ORCHARD_A11Y, "approval_why": "Regenerate the a11y snapshot baselines",
+             "allow": ORCHARD_A11Y_ALLOW},
+        ]},
+        {"label": "promo codes", "panes": [
+            {"name": "orchard-promo-dev", "kind": "claude", "status": "question", "title": "Promo codes at checkout",
+             "start": 9, "end": 2, "turns": ORCHARD_PROMO, "question": ORCHARD_PROMO_Q, "answers": ORCHARD_PROMO_A},
         ]},
     ]},
     {"label": "Atlas", "dir": "atlas", "about": "Harvest data pipeline: CSV imports into the warehouse.", "tabs": [
@@ -659,7 +948,8 @@ WORKSPACES = [
     {"label": "Harbor", "dir": "harbor", "about": "Deploy tooling for the co-op services.", "tabs": [
         {"label": "deploy", "panes": [
             {"name": "harbor-deploy-ops", "kind": "claude", "status": "approval", "title": "Staging dry-run deploy",
-             "start": 8, "end": 2, "turns": HARBOR_DEPLOY, "approval_why": "Dry-run deploy of harbor to staging"},
+             "start": 8, "end": 2, "turns": HARBOR_DEPLOY, "approval_why": "Dry-run deploy of harbor to staging",
+             "allow": HARBOR_DEPLOY_ALLOW},
         ]},
         {"label": "ci", "panes": [
             {"name": "harbor-ci-dev", "kind": "codex", "status": "done", "title": "Fix locked build on main",
@@ -669,11 +959,21 @@ WORKSPACES = [
             {"name": "harbor-runbook-docs", "kind": "claude", "status": "idle", "title": "Rollback runbook",
              "start": 260, "end": 240, "turns": HARBOR_RUNBOOK, "focus": True},
         ]},
+        {"label": "secrets", "panes": [
+            {"name": "harbor-secrets-ops", "kind": "claude", "status": "approval", "title": "Rotate staging DB password",
+             "start": 11, "end": 3, "turns": HARBOR_SECRETS, "approval_why": "Rotate db-password in staging and restart its pods",
+             "allow": HARBOR_SECRETS_ALLOW},
+        ]},
+        {"label": "canary", "panes": [
+            {"name": "harbor-canary-ops", "kind": "codex", "status": "working", "title": "Canary deploy step",
+             "start": 24, "end": 0.5, "turns": HARBOR_CANARY, "elapsed": "1m 47s"},
+        ]},
     ]},
     {"label": "Lighthouse", "dir": "lighthouse", "about": "Docs site for the co-op services.", "tabs": [
         {"label": "getting started", "panes": [
             {"name": "lighthouse-start-docs", "kind": "claude", "status": "question", "title": "Getting Started page",
-             "start": 6, "end": 1, "turns": LIGHTHOUSE_START, "question": LIGHTHOUSE_START_Q},
+             "start": 6, "end": 1, "turns": LIGHTHOUSE_START, "question": LIGHTHOUSE_START_Q,
+             "answers": LIGHTHOUSE_START_A},
         ]},
         {"label": "api ref", "panes": [
             {"name": "lighthouse-api-docs", "kind": "pi", "status": "idle", "title": "Orchard API reference",
@@ -708,6 +1008,49 @@ WORKSPACES = [
         {"label": "notes", "panes": [
             {"name": "quarry-notes-docs", "kind": "claude", "status": "done", "title": "Weekly update",
              "start": 30, "end": 4, "turns": QUARRY_NOTES},
+        ]},
+    ]},
+    {"label": "Meadow", "dir": "meadow", "about": "iOS app for co-op members: harvest totals, pickups and news.", "tabs": [
+        {"label": "onboarding", "panes": [
+            {"name": "meadow-onboard-dev", "kind": "claude", "status": "question", "title": "Onboarding rework",
+             "start": 12, "end": 3, "turns": MEADOW_ONBOARD, "question": MEADOW_ONBOARD_Q, "answers": MEADOW_ONBOARD_A},
+        ]},
+        {"label": "widgets", "panes": [
+            {"name": "meadow-widget-dev", "kind": "codex", "status": "working", "title": "Harvest widget",
+             "start": 28, "end": 0.4, "turns": MEADOW_WIDGETS, "elapsed": "58s"},
+        ]},
+        {"label": "crash", "panes": [
+            {"name": "meadow-crash-dev", "kind": "claude", "status": "done", "title": "Launch crash after upgrade",
+             "start": 75, "end": 8, "turns": MEADOW_CRASH},
+        ]},
+        {"label": "l10n", "panes": [
+            {"name": "meadow-l10n-docs", "kind": "pi", "status": "idle", "title": "Unlocalized strings",
+             "start": 140, "end": 136, "turns": MEADOW_L10N},
+        ]},
+    ]},
+    {"label": "Beacon", "dir": "beacon", "about": "Notification service in Go: push, email and digests.", "tabs": [
+        {"label": "retries", "panes": [
+            {"name": "beacon-retry-dev", "kind": "claude", "status": "approval", "title": "Retry 429s with backoff",
+             "start": 22, "end": 2, "turns": BEACON_RETRY, "approval_why": "Start a local Redis for the integration test",
+             "allow": BEACON_RETRY_ALLOW},
+        ]},
+        {"label": "digest", "panes": [
+            {"name": "beacon-digest-dev", "kind": "codex", "status": "done", "title": "Daily email digest",
+             "start": 48, "end": 15, "turns": BEACON_DIGEST},
+        ]},
+        {"label": "load test", "panes": [
+            {"name": "beacon-load-perf", "kind": "pi", "status": "working", "title": "Send path load test",
+             "start": 6, "end": 0.3, "turns": BEACON_LOAD},
+        ]},
+    ]},
+    {"label": "Ledger", "dir": "ledger", "about": "Billing: invoices, payouts and reconciliation.", "tabs": [
+        {"label": "invoices", "panes": [
+            {"name": "ledger-invoice-dev", "kind": "claude", "status": "question", "title": "Multi-currency invoice totals",
+             "start": 18, "end": 2, "turns": LEDGER_INVOICE, "question": LEDGER_INVOICE_Q, "answers": LEDGER_INVOICE_A},
+        ]},
+        {"label": "reconcile", "panes": [
+            {"name": "ledger-recon-ops", "kind": "codex", "status": "idle", "title": "September reconciliation",
+             "start": 210, "end": 200, "turns": LEDGER_RECON},
         ]},
     ]},
 ]

@@ -12,7 +12,7 @@ Ids are fixed per agent, so a rerun overwrites the same files. Nothing is delete
 
 Rebuild = create the new workspaces, then close every workspace that existed before the run.
 """
-import argparse, datetime as dt, json, os, subprocess, sys, textwrap, time, uuid
+import argparse, datetime as dt, json, os, shutil, subprocess, sys, textwrap, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import content  # noqa: E402
@@ -115,11 +115,19 @@ def claude_log(agent, cwd, sid):
         line("user", {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text, "is_error": err}]},
              ts + dt.timedelta(seconds=4), extra)
 
+    last_tid = None
     for k, (t, ts) in enumerate(zip(turns, times)):
         tid = f"toolu_{uuid.uuid5(NS, f'{sid}-t{k}').hex[:24]}"
         op = t[0]
         if op == "u":
             line("user", {"role": "user", "content": t[1]}, ts)
+        elif op == "deny":   # Esc on the permission prompt for the tool call just before
+            result(last_tid, REJECTED, ts, True, extra={"toolUseResult": "User rejected tool use"})
+            line("user", {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]},
+                 ts + dt.timedelta(seconds=4))
+        elif op == "askno":  # Esc on the question picker
+            assistant([{"type": "tool_use", "id": tid, "name": "AskUserQuestion", "input": {"questions": t[1]}}], ts)
+            result(tid, REJECTED, ts, True, extra={"toolUseResult": "User rejected tool use"})
         elif op == "a":
             assistant([{"type": "text", "text": t[1]}], ts)
         elif op == "ask":
@@ -133,7 +141,12 @@ def claude_log(agent, cwd, sid):
             assistant([{"type": "tool_use", "id": tid, "name": name, "input": inp}], ts)
             if out is not None:
                 result(tid, out, ts, err)
+        last_tid = tid
     return lines
+
+
+REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, "
+            "the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.")
 
 
 def claude_tool(t, cwd):
@@ -326,6 +339,14 @@ def claude_body(agent, cwd_label):
         elif op == "ask":
             out += ["⏺ User answered Claude's questions:"]
             out += [f"  ⎿  · {shorten(q, 70)} → {a}" for q, a in t[2].items()] + [""]
+        elif op == "deny":
+            if out and out[-1] == "":
+                out.pop()
+            if out and "Running…" in out[-1]:
+                out.pop()
+            out += [f"  ⎿  {RED}No (tell Claude what to do differently){RESET}", ""]
+        elif op == "askno":
+            out += ["⏺ User declined to answer questions", ""]
         else:
             name, inp, res, err = claude_tool(t, "")
             arg = {"Bash": inp.get("command", ""), "Read": t[1], "Edit": t[1], "Write": t[1],
@@ -355,7 +376,7 @@ def claude_body(agent, cwd_label):
     return out
 
 
-def claude_screen(agent, cwd_label, state):
+def claude_screen(agent, cwd_label, state, cursor=0):
     body = claude_body(agent, cwd_label)
     title = agent["title"]
     if state == "working":
@@ -372,7 +393,7 @@ def claude_screen(agent, cwd_label, state):
         q = agent["question"]
         opts = []
         for i, o in enumerate(q["options"], 1):
-            mark = f"{ORANGE}❯{RESET} " if i == 1 else "  "
+            mark = f"{ORANGE}❯{RESET} " if i == cursor + 1 else "  "
             opts.append(f"{mark}{i}. {o['label']}")
             opts += wrap(o["description"], W - 8, "     ", "     ")
         n = len(q["options"])
@@ -480,7 +501,7 @@ def write(path, text):
         f.write(text)
 
 
-def prepare(root, state_dir):
+def prepare(root, state_dir, stub_bin, herdr_bin):
     """Writes project folders, logs and screens. Returns the plan: one entry per pane."""
     plan = []
     for ws in content.WORKSPACES:
@@ -501,8 +522,113 @@ def prepare(root, state_dir):
                 label = f"~/{os.path.relpath(cwd, os.path.expanduser('~'))}" if cwd.startswith(os.path.expanduser("~")) else cwd
                 screen = f"{state_dir}/screens/{name}.ans"
                 write(screen, draw(agent, label, "idle" if status == "done" else status))
-                plan.append({"ws": ws, "tab": tab, "agent": agent, "sid": sid, "log": path, "screen": screen, "cwd": cwd})
+                script = interactive(agent, cwd, sid, label, path, lines, state_dir, stub_bin, herdr_bin) \
+                    if status in ("approval", "question") else None
+                plan.append({"ws": ws, "tab": tab, "agent": agent, "sid": sid, "log": path, "screen": screen, "cwd": cwd,
+                             "script": script})
     return plan
+
+
+# After an answer the pane must end "done", as a real agent does when it finishes unseen. herdr gives done only for
+# reported states, and it ignores reports on a pane whose process it detects as an agent, or whose session is
+# reported. So the claude stub hands the pane to demo-agent as a new process group; once herdr drops the agent
+# (~20-25 s, its grace period, while the working screen stays up), demo-agent appends the follow-up, shows the idle
+# screen and reports working -> idle twice (the first idle after the agent reappears is plain idle), then the session.
+DONE = """@ start INIT
+run i=0; while [ $i -lt 400 ] && {herdr} pane get "$HERDR_PANE_ID" 2>/dev/null | grep -q '"pane":{{"agent":"claude"'; do sleep 0.2; i=$((i+1)); done
+{appends}show {idle}
+run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state working --seq @@SEQ@@ >/dev/null 2>&1
+run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state idle --seq @@SEQ@@ >/dev/null 2>&1
+sleep 0.05
+run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state working --seq @@SEQ@@ >/dev/null 2>&1
+sleep 0.05
+run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state idle --seq @@SEQ@@ >/dev/null 2>&1
+run {herdr} pane report-agent-session "$HERDR_PANE_ID" --source herdr:claude --agent claude --seq @@SEQ@@ --agent-session-id {sid} --session-start-source startup >/dev/null 2>&1
+state done
+"""
+
+
+def interactive(agent, cwd, sid, label, log, base, state_dir, stub_bin, herdr_bin):
+    """Writes the stub SCRIPT that answers the prompt: screens per step and the log lines to append.
+    Approval: 1, 2 or Enter = allow (tool result, working, then the follow-up and done); Esc or 3 = deny (idle).
+    Question: a digit or Enter on the highlighted option = pick (answer logged, working, follow-up, done);
+    Up/Down move the highlight; Esc = decline."""
+    if agent["kind"] != "claude":
+        raise SystemExit(f"{agent['name']}: only Claude panes answer prompts")
+    name, d = agent["name"], f"{state_dir}/interactive/{agent['name']}"
+    blocks, n_files = [], [0]
+
+    def screen(turns, state, **kw):
+        n_files[0] += 1
+        path = f"{d}/{n_files[0]:02d}-{state}.ans"
+        write(path, claude_screen({**agent, **kw, "turns": turns}, label, state, **({"cursor": kw["cursor"]} if "cursor" in kw else {})))
+        return path
+
+    def tail(turns):
+        """Log lines that `turns` adds after the seeded log, one file per line, with the time left to the stub."""
+        lines = claude_log({**agent, "turns": turns}, cwd, sid)[len(base):]
+        out = []
+        for l in lines:
+            n_files[0] += 1
+            path = f"{d}/{n_files[0]:02d}-line.jsonl"
+            write(path, json.dumps({**l, "timestamp": "@@NOW@@"}, ensure_ascii=False) + "\n")
+            out.append(path)
+        return out
+
+    def finish(head, done_turns, verb):
+        """Block body for an answer: show working and append the answer's lines, then hand the pane to a
+        demo-agent that appends the follow-up and reports done (see DONE)."""
+        lines = tail(done_turns)
+        k = len(claude_log({**agent, "turns": head}, cwd, sid)) - len(base)
+        first, rest = lines[:k], lines[k:]
+        working = screen(head, "working", verb=verb, elapsed="3s")
+        n_files[0] += 1
+        post = f"{d}/{n_files[0]:02d}-done.txt"
+        write(post, DONE.format(herdr=herdr_bin, appends="".join(f"append {p} {log}\n" for p in rest),
+                                idle=screen(done_turns, "idle"), sid=sid))
+        return [f"show {working}"] + [f"append {p} {log}" for p in first] + [f"spawn {stub_bin}/demo-agent {working} {post}"]
+
+    turns = agent["turns"]
+    if agent["status"] == "approval":
+        cmd = turns[-1][1]
+        ran = turns[:-1] + [("bash", cmd, agent["allow"]["output"], agent["allow"].get("error", False))]
+        allow = finish(ran, ran + agent["allow"]["then"], agent["allow"].get("verb", "Thinking"))
+        denied = turns + [("deny",)]
+        deny = [f"append {p} {log}" for p in tail(denied)] + [f"show {screen(denied, 'idle')}", "state denied"]
+        for key in ("1", "2", "ENTER"):
+            blocks.append([f"@ start {key}"] + allow)
+        for key in ("ESC", "3"):
+            blocks.append([f"@ start {key}"] + deny)
+    else:
+        q = agent["question"]
+        qs = [{"question": q["question"], "header": q["header"], "options": q["options"], "multiSelect": False}]
+        opts = q["options"]
+        states = ["start"] + [f"c{k}" for k in range(1, len(opts))]
+        for k, st in enumerate(states):
+            if k:
+                blocks.append([f"@ {states[k - 1]} DOWN", f"show {screen(turns, 'question', cursor=k)}", f"state {st}"])
+                blocks.append([f"@ {st} UP", f"show {screen(turns, 'question', cursor=k - 1)}", f"state {states[k - 1]}"])
+        picks = []
+        for k, o in enumerate(opts):
+            head = turns + [("ask", qs, {q["question"]: o["label"]})]
+            follow = agent.get("answers", {}).get(o["label"].replace(" (Recommended)", "")) or \
+                agent.get("answer_default", "Got it: {label}. I'll start on that now.").format(label=o["label"].replace(" (Recommended)", ""))
+            picks.append(finish(head, head + [("a", follow)], "Thinking"))
+            blocks.append([f"@ {states[0]} {k + 1}"] + picks[k])
+            for st in states[1:]:
+                blocks.append([f"@ {st} {k + 1}"] + picks[k])
+        for k, st in enumerate(states):
+            blocks.append([f"@ {st} ENTER"] + picks[k])
+        declined = turns + [("askno", qs)]
+        decline = [f"append {p} {log}" for p in tail(declined)] + [f"show {screen(declined, 'idle')}", "state declined"]
+        for st in states:
+            blocks.append([f"@ {st} ESC"] + decline)
+    # No session is reported for this pane until it is done (a reported session would block the done report).
+    # Flockbook finds the log as the one agent log the pane's process holds open.
+    blocks.insert(0, ["@ start INIT", f"hold {log}"])
+    path = f"{d}/script.txt"
+    write(path, "\n".join("\n".join(b) for b in blocks) + "\n")
+    return path
 
 
 def main():
@@ -516,7 +642,7 @@ def main():
         raise SystemExit(f"refusing to seed session '{a.session}': the name must contain 'demo'")
     root = os.path.abspath(a.root)
     state_dir = f"{root}/.flockbook-demo"
-    plan = prepare(root, state_dir)
+    plan = prepare(root, state_dir, os.path.abspath(a.bin), shutil.which("herdr") or "herdr")
     print(f"wrote {len(plan)} logs and screens under {state_dir}")
     if a.files_only:
         return
@@ -543,7 +669,7 @@ def main():
             r = h("pane", "split", roots[tkey], "--direction", agent.get("split", "right"), "--cwd", entry["cwd"], "--no-focus")
             pid = find_pane_id(r)
         stub = f"{a.bin}/{'demo-agent' if agent['status'] == 'done' else agent['kind']}"
-        h("pane", "run", pid, "exec " + " ".join(sh_quote(x) for x in [stub, entry["screen"]]))
+        h("pane", "run", pid, "exec " + " ".join(sh_quote(x) for x in [stub, entry["screen"]] + ([entry["script"]] if entry["script"] else [])))
         panes.append((pid, entry))
     if old:
         for wid in old:
@@ -561,7 +687,8 @@ def main():
                 time.sleep(0.25)
             else:
                 print(f"warning: herdr did not detect {kind} in {pid}")
-            report_session(h, pid, entry)
+            if not entry["script"]:
+                report_session(h, pid, entry)
         h("agent", "rename", pid, agent["name"])
 
     focus = next(pid for pid, e in panes if e["agent"].get("focus"))
@@ -603,7 +730,8 @@ def summary(h):
     print("status: " + " ".join(f"{k}={v}" for k, v in sorted(by_status.items())))
     print("kinds:  " + " ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
     if missing:
-        print("no session reported: " + ", ".join(missing))
+        print("no session reported (prompt panes report it once answered; until then Flockbook finds the log by the "
+              "open file): " + ", ".join(missing))
 
 
 if __name__ == "__main__":
