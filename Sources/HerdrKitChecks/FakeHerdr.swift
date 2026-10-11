@@ -13,11 +13,17 @@ final class FakeHerdr: @unchecked Sendable {
     private var open: [Int32] = []
     private var _label = "v0"
     private var _snapshots = 0
+    private var _screen = ""
+    private var _requests: [(method: String, params: [String: Any])] = []
 
     init(path: String) { self.path = path }
 
     var label: String { get { lock.withLock { _label } } set { lock.withLock { _label = newValue } } }
     var snapshotCount: Int { lock.withLock { _snapshots } }
+    /// What `pane.read` returns as the visible screen.
+    var screen: String { get { lock.withLock { _screen } } set { lock.withLock { _screen = newValue } } }
+    /// Every request received, in order.
+    var requests: [(method: String, params: [String: Any])] { lock.withLock { _requests } }
 
     func start() throws {
         unlink(path)
@@ -69,6 +75,7 @@ final class FakeHerdr: @unchecked Sendable {
                 let line = Data(buf[..<nl]); buf.removeSubrange(...nl)
                 guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                 let id = o["id"] as? String ?? ""
+                lock.withLock { _requests.append((o["method"] as? String ?? "", o["params"] as? [String: Any] ?? [:])) }
                 let reply: String
                 switch o["method"] as? String {
                 case "session.snapshot":
@@ -77,6 +84,11 @@ final class FakeHerdr: @unchecked Sendable {
                 case "events.subscribe":
                     lock.withLock { subscribers.append(c) }
                     reply = #"{"id":"\#(id)","result":{"type":"subscription_started"}}"#
+                case "pane.read":
+                    let text = String(decoding: try! JSONSerialization.data(withJSONObject: [screen]), as: UTF8.self).dropFirst().dropLast()
+                    reply = #"{"id":"\#(id)","result":{"type":"pane_read","read":{"text":\#(text)}}}"#
+                case "pane.send_text", "pane.send_keys":
+                    reply = #"{"id":"\#(id)","result":{"type":"ok"}}"#
                 default:
                     reply = #"{"id":"\#(id)","error":{"code":"unknown","message":"fake"}}"#
                 }

@@ -145,6 +145,8 @@ changes. `HerdrKitChecks --agents-live <kinds>` prints `session=id|path|none` pe
 ## Approval keystrokes
 `ApprovalKeys.allowOnce` = `"1"` (typed, no Enter), `.deny` = `Escape`. **Verified** in `c9-input-test` against Claude Code 2.1.294. `HerdrClient.respond(to:allow:)` sends them.
 
+Notification buttons (`ApprovalNotice`): the blocked notification gets Allow / Deny only where the card would (input on, Claude, pending tool call, prompt on screen, no question picker). `prompt(_:writes:)` binds the buttons to the pending tool call; `outcome(...)` re-checks a fresh `approvalState(paneId:…)` and sends (`respond`) only for that same prompt, else opens the tab.
+
 ## Testing
 - `HerdrKitChecks` (executable): `swift run HerdrKitChecks` is the real done check; `swift test` does not run under the Command Line Tools.
   Layout: `main.swift` only dispatches; modes live in `ModesBench.swift` / `ModesLive.swift`, checks in `Checks*.swift` (one `@MainActor` function per area), shared fixtures in `Support.swift`. Keep new checks in functions: as one 1500-line top-level body, `main.swift` took over 4 GB to compile.

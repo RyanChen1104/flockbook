@@ -65,6 +65,7 @@ try await checksCursor()
 try await checksQuestionScreen()
 try await checksQuestionKeys()
 try await checksSessionFallback()
+try await checksApprovalNotice()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")
 exit(failures == 0 ? 0 : 1)

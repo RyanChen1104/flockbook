@@ -13,7 +13,7 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--stress", "--hittest", "--test-approve", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
@@ -25,7 +25,7 @@ struct HerdrDeskApp: App {
         }
         // Checks that drive a live pane need `<flag> <paneId>` and a named session (never the default one). Without them their
         // runner never starts and the headless app would idle silently until killed: say so and exit.
-        for flag in ["--test-approve", "--test-terminal", "--test-send-image", "--test-wheel", "--test-sheet", "--test-scroll"] {
+        for flag in ["--test-approve", "--test-notice", "--test-terminal", "--test-send-image", "--test-wheel", "--test-sheet", "--test-scroll"] {
             guard let i = args.firstIndex(of: flag) else { continue }
             let named = HerdrSession.fromLaunch(arguments: args, environment: ProcessInfo.processInfo.environment).name != nil
             let pane = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("--")
@@ -92,6 +92,10 @@ struct HerdrDeskApp: App {
         if let i = args.firstIndex(of: "--test-approve"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1], allow = !args.contains("--deny")
             Task { @MainActor in await HeadlessTest.approve(model: m, paneId: paneId, allow: allow) }
+        }
+        if let i = args.firstIndex(of: "--test-notice"), args.indices.contains(i + 1), store.session.name != nil {
+            let paneId = args[i + 1], allow = !args.contains("--deny")
+            Task { @MainActor in await HeadlessTest.notice(model: m, paneId: paneId, allow: allow) }
         }
         if let i = args.firstIndex(of: "--test-terminal"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1]
@@ -237,6 +241,8 @@ struct RootView: View {
                     model.select(tab: t, in: w)
                     NSApp.activate(ignoringOtherApps: true)
                 }
+                Notifier.shared.approvalPrompt = { tab in await model.approvalPrompt(in: tab) }
+                Notifier.shared.onAnswer = { action, pane, prompt in await model.answerNotice(action: action, paneID: pane, prompt: prompt) }
                 if !flat { Notifier.shared.start() }
             }
             .onChange(of: model.store.workspaces) { _, ws in

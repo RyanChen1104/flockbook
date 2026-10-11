@@ -161,6 +161,54 @@ final class AppModel {
         }
     }
 
+    /// The tool call the pane's log ends with, still without a result (the approval card's request).
+    func pendingToolUseId(_ pane: Pane) -> String? {
+        store.conversation(for: pane.agent?.sessionId).reversed().lazy.compactMap { item -> PermissionRequest? in
+            if case .permissionRequest(let r) = item.kind { return r }
+            return nil
+        }.first.flatMap { $0.state == .pending ? $0.toolUseId : nil }
+    }
+
+    /// Read-only: the blocked pane's state for the notification buttons (reads its visible screen).
+    func approvalState(_ pane: Pane) async -> ApprovalNotice.PaneState? {
+        guard let a = pane.agent else { return nil }
+        return await store.client.approvalState(paneId: pane.id, agentKind: a.kind, blocked: a.status == .blocked, pendingToolUseId: pendingToolUseId(pane))
+    }
+
+    /// The pane and prompt a new "needs you" notification may answer with Allow / Deny. Nil: no buttons. Read-only.
+    /// Tries a few times: the log's tool call and the prompt on screen can come a moment after the blocked status.
+    func approvalPrompt(in tab: Tab) async -> (pane: String, prompt: String)? {
+        for attempt in 0..<3 {
+            guard writesEnabled else { return nil }
+            if attempt > 0 { try? await Task.sleep(for: .milliseconds(700)) }
+            let t = store.workspaces.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
+            guard let pane = t.panes.first(where: { $0.agent?.status == .blocked }) else { return nil }
+            if let s = await approvalState(pane), let id = ApprovalNotice.prompt(s, writes: writesEnabled) {
+                promptVisible.insert(pane.id)
+                return (pane.id, id)
+            }
+        }
+        return nil
+    }
+
+    /// Allow / Deny chosen on a notification. Re-reads the pane; only when it still shows the same prompt does it send
+    /// the approval card's input (`approve`). Otherwise nothing is sent and the tab opens. Returns true when it sent.
+    @discardableResult
+    func answerNotice(action: String, paneID: String, prompt: String?) async -> Bool {
+        await store.refresh()
+        let pane = store.workspaces.flatMap(\.tabs).flatMap(\.panes).first { $0.id == paneID }
+        let now: ApprovalNotice.PaneState? = if let pane { await approvalState(pane) } else { nil }
+        switch ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: writesEnabled) {
+        case .send(let allow):
+            guard let pane else { return false }
+            promptVisible.insert(pane.id)   // just read from the screen
+            approve(pane: pane, allow: allow)
+            return true
+        case .open:
+            return false
+        }
+    }
+
     func select(workspace id: String) {
         endPeek()
         workspaceID = id
