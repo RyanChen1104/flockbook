@@ -3,8 +3,9 @@
 
 No model runs. Each pane runs a stub (stub.c) named claude, codex or pi, so herdr detects that agent.
 The stub prints a scripted screen; herdr reads the agent status from that screen (working spinner,
-question picker, permission prompt). herdr gives "done" only for reported transitions, so a done pane
-runs the stub under its own name (not detected) and the script reports working, then idle. The conversation comes from a log file this script writes:
+question picker, permission prompt). herdr shows "done" for a pane that went working -> idle while not focused.
+A pane seeded as done runs the stub under its own name (not detected) and the script reports working, then idle.
+The conversation comes from a log file this script writes:
   claude  ~/.claude/projects/-flockbook-demo/<id>.jsonl         (herdr keeps a Claude session as an id)
   codex   ~/.codex/sessions/2026/10/10/rollout-...-<id>.jsonl    (same for Codex)
   pi      <root>/.flockbook-demo/logs/<agent>.jsonl              (herdr keeps a pi session as a path)
@@ -12,7 +13,7 @@ Ids are fixed per agent, so a rerun overwrites the same files. Nothing is delete
 
 Rebuild = create the new workspaces, then close every workspace that existed before the run.
 """
-import argparse, datetime as dt, json, os, shutil, subprocess, sys, textwrap, time, uuid
+import argparse, datetime as dt, json, os, subprocess, sys, textwrap, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import content  # noqa: E402
@@ -501,7 +502,7 @@ def write(path, text):
         f.write(text)
 
 
-def prepare(root, state_dir, stub_bin, herdr_bin):
+def prepare(root, state_dir):
     """Writes project folders, logs and screens. Returns the plan: one entry per pane."""
     plan = []
     for ws in content.WORKSPACES:
@@ -522,33 +523,20 @@ def prepare(root, state_dir, stub_bin, herdr_bin):
                 label = f"~/{os.path.relpath(cwd, os.path.expanduser('~'))}" if cwd.startswith(os.path.expanduser("~")) else cwd
                 screen = f"{state_dir}/screens/{name}.ans"
                 write(screen, draw(agent, label, "idle" if status == "done" else status))
-                script = interactive(agent, cwd, sid, label, path, lines, state_dir, stub_bin, herdr_bin) \
+                script = interactive(agent, cwd, sid, label, path, lines, state_dir) \
                     if status in ("approval", "question") else None
                 plan.append({"ws": ws, "tab": tab, "agent": agent, "sid": sid, "log": path, "screen": screen, "cwd": cwd,
                              "script": script})
     return plan
 
 
-# After an answer the pane must end "done", as a real agent does when it finishes unseen. herdr gives done only for
-# reported states, and it ignores reports on a pane whose process it detects as an agent, or whose session is
-# reported. So the claude stub hands the pane to demo-agent as a new process group; once herdr drops the agent
-# (~20-25 s, its grace period, while the working screen stays up), demo-agent appends the follow-up, shows the idle
-# screen and reports working -> idle twice (the first idle after the agent reappears is plain idle), then the session.
-DONE = """@ start INIT
-run i=0; while [ $i -lt 400 ] && {herdr} pane get "$HERDR_PANE_ID" 2>/dev/null | grep -q '"pane":{{"agent":"claude"'; do sleep 0.2; i=$((i+1)); done
-{appends}show {idle}
-run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state working --seq @@SEQ@@ >/dev/null 2>&1
-run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state idle --seq @@SEQ@@ >/dev/null 2>&1
-sleep 0.05
-run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state working --seq @@SEQ@@ >/dev/null 2>&1
-sleep 0.05
-run {herdr} pane report-agent "$HERDR_PANE_ID" --source demo:seed --agent claude --state idle --seq @@SEQ@@ >/dev/null 2>&1
-run {herdr} pane report-agent-session "$HERDR_PANE_ID" --source herdr:claude --agent claude --seq @@SEQ@@ --agent-session-id {sid} --session-start-source startup >/dev/null 2>&1
-state done
-"""
+# After an answer the pane must end "done", as a real agent does when it finishes unseen. herdr reads working and
+# idle from the screen, and working -> idle on a pane that is not focused gives done, except for the first turn after
+# a blocked prompt (that one ends idle). So the answer first shows a short idle screen, then working, then idle.
+BLIP_SECONDS, WORK_SECONDS = 0.5, 4
 
 
-def interactive(agent, cwd, sid, label, log, base, state_dir, stub_bin, herdr_bin):
+def interactive(agent, cwd, sid, label, log, base, state_dir):
     """Writes the stub SCRIPT that answers the prompt: screens per step and the log lines to append.
     Approval: 1, 2 or Enter = allow (tool result, working, then the follow-up and done); Esc or 3 = deny (idle).
     Question: a digit or Enter on the highlighted option = pick (answer logged, working, follow-up, done);
@@ -576,17 +564,14 @@ def interactive(agent, cwd, sid, label, log, base, state_dir, stub_bin, herdr_bi
         return out
 
     def finish(head, done_turns, verb):
-        """Block body for an answer: show working and append the answer's lines, then hand the pane to a
-        demo-agent that appends the follow-up and reports done (see DONE)."""
+        """Block body for an answer: append the answer's lines, show idle briefly, then working, wait, then append
+        the follow-up and show the idle screen."""
         lines = tail(done_turns)
         k = len(claude_log({**agent, "turns": head}, cwd, sid)) - len(base)
         first, rest = lines[:k], lines[k:]
-        working = screen(head, "working", verb=verb, elapsed="3s")
-        n_files[0] += 1
-        post = f"{d}/{n_files[0]:02d}-done.txt"
-        write(post, DONE.format(herdr=herdr_bin, appends="".join(f"append {p} {log}\n" for p in rest),
-                                idle=screen(done_turns, "idle"), sid=sid))
-        return [f"show {working}"] + [f"append {p} {log}" for p in first] + [f"spawn {stub_bin}/demo-agent {working} {post}"]
+        return ([f"append {p} {log}" for p in first] + [f"show {screen(head, 'idle')}", f"sleep {BLIP_SECONDS}",
+                f"show {screen(head, 'working', verb=verb, elapsed='3s')}", f"sleep {WORK_SECONDS}"] + [f"append {p} {log}" for p in rest]
+                + [f"show {screen(done_turns, 'idle')}", "state done"])
 
     turns = agent["turns"]
     if agent["status"] == "approval":
@@ -623,8 +608,8 @@ def interactive(agent, cwd, sid, label, log, base, state_dir, stub_bin, herdr_bi
         decline = [f"append {p} {log}" for p in tail(declined)] + [f"show {screen(declined, 'idle')}", "state declined"]
         for st in states:
             blocks.append([f"@ {st} ESC"] + decline)
-    # No session is reported for this pane until it is done (a reported session would block the done report).
-    # Flockbook finds the log as the one agent log the pane's process holds open.
+    # No session is reported for this pane: with a reported session, herdr ends a screen-detected working -> idle as
+    # idle, not done. Flockbook finds the log as the one agent log the pane's process holds open.
     blocks.insert(0, ["@ start INIT", f"hold {log}"])
     path = f"{d}/script.txt"
     write(path, "\n".join("\n".join(b) for b in blocks) + "\n")
@@ -642,7 +627,7 @@ def main():
         raise SystemExit(f"refusing to seed session '{a.session}': the name must contain 'demo'")
     root = os.path.abspath(a.root)
     state_dir = f"{root}/.flockbook-demo"
-    plan = prepare(root, state_dir, os.path.abspath(a.bin), shutil.which("herdr") or "herdr")
+    plan = prepare(root, state_dir)
     print(f"wrote {len(plan)} logs and screens under {state_dir}")
     if a.files_only:
         return
@@ -691,7 +676,7 @@ def main():
                 report_session(h, pid, entry)
         h("agent", "rename", pid, agent["name"])
 
-    focus = next(pid for pid, e in panes if e["agent"].get("focus"))
+    focus = next(pid for pid, e in panes if e["agent"].get("focus") and not e["script"])  # a focused prompt pane ends idle
     h("agent", "focus", focus)
     # working -> idle while not focused = done. The session goes last: after it, herdr ignores state reports.
     # (herdr takes no pi session on a pane it did not detect, so done panes are claude or codex.)
@@ -730,8 +715,8 @@ def summary(h):
     print("status: " + " ".join(f"{k}={v}" for k, v in sorted(by_status.items())))
     print("kinds:  " + " ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
     if missing:
-        print("no session reported (prompt panes report it once answered; until then Flockbook finds the log by the "
-              "open file): " + ", ".join(missing))
+        print("no session reported (prompt panes; Flockbook finds the log by the open file): " + ", ".join(missing))
+    print("note: do not focus prompt panes in a herdr TUI while recording (a seen pane ends idle, not done)")
 
 
 if __name__ == "__main__":

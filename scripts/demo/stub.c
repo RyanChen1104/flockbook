@@ -10,11 +10,8 @@
 //   show <file>            print a screen file
 //   append <src> <dst>     append src to dst, with every @@NOW@@ replaced by the current UTC time (ISO 8601)
 //   sleep <seconds>        decimal seconds
-//   hold <file>            keep <file> open for reading (also in spawned processes)
+//   hold <file>            keep <file> open for reading
 //   state <name>           the state after this block (default: unchanged)
-//   run <command>          run a shell command; @@SEQ@@ becomes the current time in ns (a herdr report sequence)
-//   exec <path> <args>     replace this process with <path> (same process group; herdr soon drops the agent)
-//   spawn <path> <args>    hand the pane to <path> as a new foreground process group (see spawn_line)
 // Keys: a printable character, or ENTER, ESC, UP, DOWN, TAB. Keys that arrive while a block runs are dropped.
 // A block for key INIT in state start runs once, before any key is read.
 #include <poll.h>
@@ -25,7 +22,6 @@
 #include <sys/time.h>
 #include <termios.h>
 #include <time.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 static void cat(const char *path) {
@@ -81,54 +77,6 @@ static int read_key(char *out, size_t size) {
     return 1;
 }
 
-static void run_cmd(const char *cmd) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    char seq[32], out[4096] = "";
-    snprintf(seq, sizeof seq, "%lld", (long long)tv.tv_sec * 1000000000LL + (long long)tv.tv_usec * 1000LL);
-    const char *tok = "@@SEQ@@", *p = cmd, *q;
-    while ((q = strstr(p, tok)) && strlen(out) + (q - p) + strlen(seq) < sizeof out - 1) {
-        strncat(out, p, q - p);
-        strcat(out, seq);
-        p = q + strlen(tok);
-    }
-    strncat(out, p, sizeof out - strlen(out) - 1);
-    if (system(out) != 0) {}
-}
-
-static int split_args(char *rest, char **argv) {
-    int n = 0;
-    for (char *tok = strtok(rest, " "); tok && n < 15; tok = strtok(NULL, " ")) argv[n++] = tok;
-    argv[n] = NULL;
-    return n;
-}
-
-static void exec_line(char *rest) {
-    char *argv[16];
-    if (split_args(rest, argv)) execv(argv[0], argv);
-}
-
-// Runs <path> <args> as the pane's new foreground process group and waits for it. herdr ignores state reports
-// for a process group it once detected as an agent; a new group gets them.
-static void spawn_line(char *rest) {
-    char *argv[16];
-    if (!split_args(rest, argv)) return;
-    signal(SIGTTOU, SIG_IGN);
-    pid_t pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        tcsetpgrp(STDIN_FILENO, getpid());
-        signal(SIGTTOU, SIG_DFL);
-        execv(argv[0], argv);
-        _exit(127);
-    }
-    if (pid > 0) {
-        setpgid(pid, pid);
-        tcsetpgrp(STDIN_FILENO, pid);
-        for (;;) pause();
-    }
-}
-
 static void drain(void) {
     struct pollfd p = {STDIN_FILENO, POLLIN, 0};
     unsigned char buf[256];
@@ -153,9 +101,6 @@ static int run(const char *script, char *state, const char *key) {
         else if (sscanf(line, "hold %2047s", a) == 1) { if (fopen(a, "r") == NULL) {} }
         else if (sscanf(line, "sleep %2047s", a) == 1) usleep((useconds_t)(atof(a) * 1e6));
         else if (sscanf(line, "state %63s", a) == 1) snprintf(state, 64, "%s", a);
-        else if (!strncmp(line, "run ", 4)) run_cmd(line + 4);
-        else if (!strncmp(line, "exec ", 5)) { fclose(f); exec_line(line + 5); return matched; }
-        else if (!strncmp(line, "spawn ", 6)) { fclose(f); spawn_line(line + 6); return matched; }
     }
     fclose(f);
     return matched;
