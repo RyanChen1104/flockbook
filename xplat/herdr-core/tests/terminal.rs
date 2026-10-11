@@ -105,6 +105,8 @@ fn terminal_session_against_fake_control() {
     assert!(until(2.0, || log_text(&log).contains(&b64("你好".as_bytes()))), "term: UTF-8 text sent");
     ts.paste("a\nb", None);
     assert!(until(2.0, || log_text(&log).contains(&b64("\u{1b}[200~a\nb\u{1b}[201~".as_bytes()))), "term: paste wrapped in bracketed paste");
+    ts.paste("x\u{1b}[201~\nrm -rf y\n", None);
+    assert!(until(2.0, || log_text(&log).contains(&b64("\u{1b}[200~x[201~\nrm -rf y\n\u{1b}[201~".as_bytes()))), "term: an end marker inside the paste loses its ESC");
 
     ts.resize(100, 30);
     assert!(until(2.0, || log_text(&log).contains(r#""cols":100"#) && log_text(&log).contains(r#""rows":30"#)), "term: resize sent");

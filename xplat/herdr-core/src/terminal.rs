@@ -262,12 +262,14 @@ impl TerminalSession {
     }
 
     /// Pastes text. Wrapped in bracketed paste (default: `bracketed_paste()`); otherwise newlines become CR.
+    /// Bracketed paste drops every ESC from the text (as Alacritty does): an `ESC[201~` inside would end the paste early
+    /// and the rest would run as typed input.
     pub fn paste(&self, text: &str, bracketed: Option<bool>) -> bool {
         if self.inner.mode == TerminalMode::Observe {
             return false;
         }
         if bracketed.unwrap_or_else(|| self.bracketed_paste()) {
-            return self.send_text(&format!("\u{1b}[200~{text}\u{1b}[201~"));
+            return self.send_text(&format!("\u{1b}[200~{}\u{1b}[201~", text.replace('\u{1b}', "")));
         }
         self.send_text(&text.replace("\r\n", "\r").replace('\n', "\r"))
     }
