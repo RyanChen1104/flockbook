@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "promptOpen",
+    "message": "A prompt is open in this pane. Nothing was sent."
+  },
+  "ok": false,
+  "re": "c5",
+  "type": "reply",
+  "v": 1
+}

@@ -158,7 +158,7 @@ public struct HubWelcome: Codable, Hashable, Sendable {
 }
 
 public struct HubError: Codable, Hashable, Sendable {
-    public enum Code: String, Codable, Hashable, Sendable { case unauthorized, readOnly, stale, notFound, badRequest, unsupportedVersion, failed }
+    public enum Code: String, Codable, Hashable, Sendable { case unauthorized, readOnly, stale, promptOpen, notFound, badRequest, unsupportedVersion, failed }
     public var code: Code
     public var message: String
     public init(code: Code, message: String) { self.code = code; self.message = message }

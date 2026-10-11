@@ -38,9 +38,18 @@ The client sends **intent only**. There is no message that carries raw keys or b
 | `answer` | `pane`, `question`, `answers` | Answer the open question. `answers`: one per question, `{picks: [int], other?: string}` (0-based option indexes). Needs level `input`. |
 | `ping` | – | The hub sends `pong`. |
 
-### 3.1 The approve rule
+### 3.1 Input rules: approve, answer, send
 
+The hub checks every input against the pane as it is **now**, read again when the message arrives. A rule that fails sends nothing.
+
+**approve.** 
 The hub re-reads the pane when `approve` arrives (`ApprovalNotice.outcome`). It sends the approval card's input only when the prompt with that id is still open and input is allowed. Otherwise it sends nothing and replies `stale` (or `readOnly`). The id is the one `ApprovalNotice.prompt` gives: the log's pending tool call id, or `screen-<hash>` of the prompt box when the log has none. The notification buttons, the in-app card and remote clients all use this same id.
+
+**answer.** The hub reads the open question again (Claude: the picker on screen; Codex: the pending question in the log). It answers only when that question's id equals `question`. Otherwise it replies `stale`. Only a picker question can be answered from a client (`delivery: "picker"`, as in the app); a `message` question replies `failed`. Claude shows one question of a set at a time (`headers` names all of them). The hub then reads the others first (navigation keys only, as the app card does) and needs one answer per question; a different count replies `failed` and nothing is chosen.
+
+**send.** When the pane has an open prompt (an approval or a question), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends.
+
+Order of checks for all three: device level and the app-wide "Allow input" (`readOnly`), the pane exists (`notFound`), then the rule above.
 
 ## 4. Hub to client
 
@@ -55,7 +64,9 @@ The hub re-reads the pane when `approve` arrives (`ApprovalNotice.outcome`). It 
 | `prompt` | `pane`, `approval?`, `question?` | The open prompt of a watched pane. Both absent = no prompt open. |
 | `pong` | – | Answer to `ping`. |
 
-Error codes: `unauthorized`, `readOnly`, `stale`, `notFound`, `badRequest`, `unsupportedVersion`, `failed`.
+Error codes: `unauthorized`, `readOnly`, `stale`, `promptOpen`, `notFound`, `badRequest`, `unsupportedVersion`, `failed`. A client treats an unknown code as `failed`.
+
+Order: the pushes a message causes come first, then its `reply` (for `hello`: `welcome`, `snapshot`, then `reply`). `ping` gets `pong`, then `reply`. A `reply` with `unauthorized` or `unsupportedVersion` is followed by a close.
 
 ## 5. Shared objects
 

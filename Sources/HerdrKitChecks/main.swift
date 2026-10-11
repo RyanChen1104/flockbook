@@ -67,6 +67,8 @@ try await checksQuestionKeys()
 try await checksSessionFallback()
 try await checksApprovalNotice()
 try await checksHubProtocol()
+try await checksHubSession()
+try await checksHubServer()
 try await checksUpdater()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")
