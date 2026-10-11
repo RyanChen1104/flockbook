@@ -6,6 +6,8 @@ Flockbook is a native macOS reading view for your [Herdr](https://herdr.dev) age
 
 Your agents' conversations are already in the terminal. Flockbook shows the same conversation in a layout that is easier to read.
 
+**[Download for macOS](https://github.com/minchenlee/flockbook/releases/latest)** · [Website](https://flockbook.mclee.dev) · Requires macOS 26 or later.
+
 ## Features
 
 The screenshots use a fictional demo session (`scripts/demo-seed.sh`).
