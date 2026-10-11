@@ -28,6 +28,8 @@ for (const width of [1440, 390]) {
 		const page = await browser.newPage({ viewport: { width, height: 900 }, colorScheme: scheme });
 		await page.goto(url, { waitUntil: 'networkidle' });
 		const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+		const dotColors = await page.evaluate(() => [...document.querySelectorAll('.dots a span')].slice(0, 2).map((s) => getComputedStyle(s).backgroundColor));
+		if (dotColors[0] === dotColors[1]) { console.log('  active dot is not highlighted'); failed = true; }
 		const file = `shots/site-${width}-${scheme}.png`;
 		await page.screenshot({ path: file, fullPage: true });
 		console.log(`${file}  horizontal overflow: ${overflow}px`);

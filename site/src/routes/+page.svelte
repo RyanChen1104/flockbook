@@ -111,7 +111,7 @@
 		</div>
 	</dl>
 	<p class="legal">
-		{#if links.github}<a href={links.github}>GitHub</a> · {/if}MIT License · Unofficial. Not affiliated
+		{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not affiliated
 		with, endorsed by, or supported by Herdr, Inc.
 	</p>
 	<canvas class="flock" aria-hidden="true"></canvas>
@@ -352,7 +352,8 @@
 	.dots a:hover span {
 		background: var(--fg-2);
 	}
-	.dots a[aria-current] span {
+	/* Set by carousel.js, so Svelte must not prune it as unused. */
+	.dots :global(a[aria-current] span) {
 		background: var(--fg);
 	}
 
