@@ -66,9 +66,15 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+        // The main window's surface (Glass.swift): the same setting, blur and tint; the grouped rows keep their own fill.
+        .scrollContentBackground(.hidden)
+        .containerBackground(for: .window) { WindowSurface(glass: surface) }
         .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
     }
+
+    /// The same rule as GlassReader, with the snapshot stand-in for Reduce Transparency.
+    private var surface: WindowGlass { reduce ? .off : (WindowGlass(rawValue: glass) ?? .full) }
 
     private var widthNote: String {
         switch ReadingWidth(rawValue: readingWidth) ?? .medium {
