@@ -255,6 +255,11 @@ Swift notes:
 - Respect **Reduce Transparency**: the system materials turn opaque by themselves; the custom tab pills must check `accessibilityReduceTransparency` and use `.background(.windowBackground)`.
 - Use the system label colors on glass (`.foregroundStyle(.secondary)`). They are vibrant on materials, so contrast is handled by AppKit.
 
+iced build notes (xplat: Linux, Windows, and macOS through iced):
+- The window, the sidebar, the top row and the Needs-you list use the platform backdrop: macOS `NSVisualEffectView` (sidebar material), Windows 11 Mica, Linux opaque. The main area paints the almost opaque `--content` tint.
+- The composer, the approval card, menus and tooltips stay opaque (e2). iced cannot blur the content under a float, and a thin tint over text is unreadable.
+- Any backdrop failure, Reduce Transparency or an older Windows falls back to opaque. `--glass off` or `FLOCKBOOK_GLASS=off` turns glass off.
+
 **Contrast on glass.** On glass, the mocks use stronger label tokens than on opaque surfaces:
 
 | Token | Light on glass | Dark on glass |
