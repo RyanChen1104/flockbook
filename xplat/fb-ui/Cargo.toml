@@ -9,6 +9,8 @@ description = "Reusable iced widgets, theme tokens, fonts and icons for Flockboo
 [dependencies]
 iced = { workspace = true, features = ["svg", "canvas", "tiny-skia"] }
 unicode-segmentation = "1"
+# We feed bytes; we never spawn a pty.
+alacritty_terminal = { version = "0.26", default-features = false }
 
 [dev-dependencies]
 iced_test.workspace = true
