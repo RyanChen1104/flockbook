@@ -155,12 +155,15 @@ impl TermGrid {
     /// Applies one herdr frame. `full` resets the grid first. A width or height of 0 keeps the current size.
     pub fn feed(&mut self, full: bool, width: u32, height: u32, bytes: &[u8]) {
         if full {
-            // A corrupt size must not allocate gigabytes.
-            let (width, height) = ((width as usize).min(MAX_COLS), (height as usize).min(MAX_ROWS));
-            if width > 0 && height > 0 && (width != self.cols || height != self.rows) {
-                self.cols = width;
-                self.rows = height;
-                self.term.resize(Size { cols: self.cols, rows: self.rows });
+            // 0 keeps the current size. Any other size is clamped like `with_history`: a corrupt size must not
+            // allocate gigabytes, and resize never sees 0.
+            if width > 0 && height > 0 {
+                let (width, height) = ((width as usize).clamp(1, MAX_COLS), (height as usize).clamp(1, MAX_ROWS));
+                if width != self.cols || height != self.rows {
+                    self.cols = width;
+                    self.rows = height;
+                    self.term.resize(Size { cols: self.cols, rows: self.rows });
+                }
             }
             // An unfinished synchronized update (BSU without ESU) buffers every later byte, even a full frame.
             // A full frame starts from nothing, so the parser starts over too.
@@ -331,6 +334,25 @@ mod tests {
         g.feed(true, 0, 0, b"b");
         assert_eq!(g.size(), (10, 3));
         assert_eq!(g.snapshot().row_text(0), "b");
+    }
+
+    #[test]
+    fn a_zero_width_or_height_keeps_the_size() {
+        for (w, h) in [(0, 0), (0, 7), (7, 0), (0, 4_000_000_000), (4_000_000_000, 0)] {
+            let mut g = full(10, 3, "a");
+            g.feed(true, w, h, b"b");
+            assert_eq!(g.size(), (10, 3), "{w}x{h}");
+            assert_eq!(g.snapshot().cells.len(), 30, "{w}x{h}");
+            assert_eq!(g.snapshot().row_text(0), "b", "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn a_one_by_one_frame_is_the_smallest_size() {
+        let mut g = full(10, 3, "");
+        g.feed(true, 1, 1, b"x");
+        assert_eq!(g.size(), (1, 1));
+        assert_eq!(g.snapshot().row_text(0), "x");
     }
 
     #[test]
