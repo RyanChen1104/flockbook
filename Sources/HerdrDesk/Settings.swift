@@ -5,7 +5,10 @@ enum AppSettings { static let allowInputKey = "allowInput" }
 struct SettingsView: View {
     @AppStorage(AppSettings.allowInputKey, store: AppDefaults.store) private var allowInput = true
     @AppStorage(WindowGlass.key, store: AppDefaults.store) private var glass = WindowGlass.full.rawValue
-    @Environment(\.accessibilityReduceTransparency) private var reduce
+    @Environment(\.accessibilityReduceTransparency) private var systemReduce
+    /// Snapshots only: stands in for the system's Reduce Transparency.
+    var reduceTransparency: Bool? = nil
+    private var reduce: Bool { reduceTransparency ?? systemReduce }
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
     var body: some View {
