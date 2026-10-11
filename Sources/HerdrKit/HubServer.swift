@@ -4,12 +4,18 @@ import Network
 /// Carries `HubSession` over WebSocket (`Network.framework`, no dependency). One session per connection; messages of a
 /// connection are handled one at a time, and every `tickInterval` the session's pushes go out.
 ///
-/// For now it binds only to the loopback address. Other addresses (Tailscale, LAN) come with TLS and the bind rules.
-/// Off unless the app starts it.
+/// It listens on one address the owner picks (`HubBind`): loopback, or a Tailscale/LAN address with TLS. Never all
+/// addresses. Off unless the app starts it.
 @MainActor public final class HubServer {
     public enum StartError: Error, Equatable {
-        /// Only 127.0.0.1 and ::1 for now.
-        case notLoopback(String)
+        /// All addresses (0.0.0.0, ::): never.
+        case wildcard(String)
+        /// Not an address of this Mac now.
+        case notLocal(String)
+        /// Neither loopback, Tailscale nor a private LAN address.
+        case publicAddress(String)
+        /// Every address but loopback needs TLS.
+        case needsTLS(String)
         case failed(String)
     }
 
@@ -33,20 +39,31 @@ import Network
 
     public var running: Bool { listener != nil }
     public var connectionCount: Int { conns.count }
+    /// The certificate fingerprint while listening with TLS.
+    public private(set) var fingerprint: String?
 
-    public static func isLoopback(_ host: String) -> Bool { host == "127.0.0.1" || host == "::1" || host == "localhost" }
-
-    /// Starts listening and returns the port (`port` 0 = any free port).
+    /// Starts listening on one address of this Mac and returns the port (`port` 0 = any free port). The address
+    /// follows `HubBind.check` (`local` = this Mac's addresses; tests pass their own).
     @discardableResult
-    public func start(host: String = "127.0.0.1", port: UInt16) async throws -> UInt16 {
-        guard Self.isLoopback(host) else { throw StartError.notLoopback(host) }
+    public func start(host: String = "127.0.0.1", port: UInt16, tls: HubIdentity? = nil, local: [HubAddress]? = nil) async throws -> UInt16 {
         stop()
+        if let e = HubBind.check(host: host, tls: tls != nil, local: local ?? HubBind.local()) { throw e }
         let ws = NWProtocolWebSocket.Options()
         ws.autoReplyPing = true
         ws.maximumMessageSize = Self.maxMessage
-        let params = NWParameters.tcp
+        let params: NWParameters
+        if let tls, let sid = sec_identity_create(tls.identity) {
+            let t = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(t.securityProtocolOptions, sid)
+            sec_protocol_options_set_min_tls_protocol_version(t.securityProtocolOptions, .TLSv12)
+            params = NWParameters(tls: t, tcp: NWProtocolTCP.Options())
+        } else if tls != nil {
+            throw StartError.failed("TLS identity unusable")
+        } else {
+            params = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
+        }
         params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host == "localhost" ? "127.0.0.1" : host), port: NWEndpoint.Port(rawValue: port) ?? .any)
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? .any)
         let l: NWListener
         do { l = try NWListener(using: params) } catch { throw StartError.failed("\(error)") }
         l.newConnectionHandler = { [weak self] c in Task { @MainActor in self?.accept(c) } }
@@ -63,12 +80,14 @@ import Network
             l.start(queue: queue)
         }
         listener = l
+        fingerprint = tls?.fingerprint
         return bound
     }
 
     public func stop() {
         listener?.cancel()
         listener = nil
+        fingerprint = nil
         for c in conns.values { c.close() }
         conns = [:]
     }

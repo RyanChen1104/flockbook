@@ -14,6 +14,8 @@ struct SettingsView: View {
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
+    /// Nil: no Remote access section (snapshots of the other settings).
+    var remote: RemoteHub? = nil
 
     var body: some View {
         Form {
@@ -63,6 +65,7 @@ struct SettingsView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let remote { RemoteAccessSection(hub: remote) }
             if let updates = AppUpdater.shared.updater {
                 Section("Updates") {
                     Toggle(isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },

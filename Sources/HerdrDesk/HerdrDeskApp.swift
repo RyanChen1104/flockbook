@@ -13,7 +13,7 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
@@ -84,6 +84,10 @@ struct HerdrDeskApp: App {
             let dir = args[i + 1], live = store
             Task { @MainActor in await SnapshotRunner.runDemo(dir: dir, store: live) }
         }
+        if let i = args.firstIndex(of: "--snapshot-remote"), args.indices.contains(i + 1) {
+            let dir = args[i + 1]
+            Task { @MainActor in await SnapshotRunner.runRemote(dir: dir) }
+        }
         if let i = args.firstIndex(of: "--snapshot-settings"), args.indices.contains(i + 1) {
             let dir = args[i + 1]
             Task { @MainActor in await SnapshotRunner.runSettings(dir: dir) }
@@ -103,6 +107,9 @@ struct HerdrDeskApp: App {
         if let i = args.firstIndex(of: "--test-notice"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1], allow = !args.contains("--deny")
             Task { @MainActor in await HeadlessTest.notice(model: m, paneId: paneId, allow: allow) }
+        }
+        if args.contains("--test-remote"), store.session.name != nil {
+            Task { @MainActor in await HubLiveTest.remote(model: m) }
         }
         if let i = args.firstIndex(of: "--test-hub"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1], allow = !args.contains("--deny")
@@ -154,6 +161,12 @@ struct HerdrDeskApp: App {
             let paneId = args[i + 1]
             Task { @MainActor in await SnapshotRunner.runScrollTest(store: store, paneId: paneId) }
         }
+        // Remote access: only a real launch may listen, and only when the owner turned it on (off by default).
+        if !quiet {
+            let hub = RemoteHub.live(model: m)
+            m.remote = hub
+            if hub.enabled { Task { @MainActor in await hub.start() } }
+        }
         _model = State(initialValue: m)
     }
 
@@ -167,7 +180,7 @@ struct HerdrDeskApp: App {
             DeskCommands(model: model)
             UpdateCommands(updater: AppUpdater.shared)
         }
-        Settings { SettingsView() }
+        Settings { SettingsView(remote: model.remote) }
             .windowResizability(.contentSize)
     }
 

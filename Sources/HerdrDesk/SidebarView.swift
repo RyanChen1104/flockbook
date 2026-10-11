@@ -58,6 +58,10 @@ struct SidebarView: View {
             .scrollContentBackground(.hidden)
             // The list starts below the toolbar (the lights row with the system sidebar toggle), at the system's spacing.
             // Not under it: rows inside the title bar band would lose their clicks to the title bar.
+            // Remote access listening: always in sight while on (Settings > Remote access turns it off).
+            if let hub = model.remote, hub.running {
+                RemoteFooter(hub: hub)
+            }
             // Connection state only when something is wrong (as Mail): nothing while connected.
             if !model.store.connected {
                 HStack(spacing: 6) {
@@ -293,5 +297,25 @@ private struct PeekGlass: ViewModifier {
         content.clipShape(shape)
             .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.25), radius: 18, y: 6)
+    }
+}
+
+/// "Remote access on" with the connection count, at the foot of the sidebar; a click opens Settings.
+struct RemoteFooter: View {
+    let hub: RemoteHub
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        Button { openSettings() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.orange).imageScale(.small)
+                Text(hub.connections > 0 ? "Remote access on · \(hub.connections) connected" : "Remote access on")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Settings > Remote access")
+        .padding(.horizontal, 18).padding(.vertical, 10)
     }
 }

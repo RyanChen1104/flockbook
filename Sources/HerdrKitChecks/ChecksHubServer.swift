@@ -4,8 +4,9 @@ import Foundation
 /// A WebSocket test client (Foundation only).
 @MainActor final class HubTestClient {
     let task: URLSessionWebSocketTask
-    init(port: UInt16) {
-        task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)
+    convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)) }
+    init(task: URLSessionWebSocketTask) {
+        self.task = task
         task.resume()
         read()
     }
@@ -36,7 +37,7 @@ import Foundation
     func close() { task.cancel(with: .goingAway, reason: nil) }
 }
 
-// HubServer: the WebSocket transport, on 127.0.0.1 only (bind rules for other addresses come with TLS).
+// HubServer: the WebSocket transport, on 127.0.0.1 (bind rules and TLS: ChecksHubTLS).
 @MainActor func checksHubServer() async throws {
     let a = Agent(name: "claude", kind: "claude", status: .working, sessionId: "s1", title: "t")
     let ws = [Workspace(id: "w1", label: "web", tabs: [Tab(id: "w1:t1", label: "build", number: 1,
@@ -50,8 +51,8 @@ import Foundation
     let server = HubServer(backend: b, devices: devices, tickInterval: .milliseconds(200))
     for host in ["0.0.0.0", "::", "192.168.1.5", "100.64.0.1"] {
         var refused = false
-        do { _ = try await server.start(host: host, port: 0) } catch HubServer.StartError.notLoopback { refused = true }
-        check(refused && !server.running, "hub server: refuses to bind \(host) (loopback only for now)")
+        do { _ = try await server.start(host: host, port: 0) } catch is HubServer.StartError { refused = true }
+        check(refused && !server.running, "hub server: refuses to bind \(host) without TLS")
     }
     let port = try await server.start(host: "127.0.0.1", port: 0)
     check(port > 0 && server.running, "hub server: listening on 127.0.0.1:\(port)")

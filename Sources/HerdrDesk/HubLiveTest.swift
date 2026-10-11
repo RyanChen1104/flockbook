@@ -72,8 +72,64 @@ enum HubLiveTest {
         finish(ok)
     }
 
+    /// `--session <named> --test-remote`: the app's RemoteHub on 127.0.0.1 with its files in a temp folder: a new
+    /// self-signed certificate, TLS with the pinned fingerprint, pairing with the 6 words, hello with the new token,
+    /// read level by default, revoke. Reads only.
+    static func remote(model: AppModel) async {
+        try? await Task.sleep(for: .seconds(2))
+        var ok = true
+        func step(_ what: String, _ pass: Bool) { print("test-remote: \(pass ? "ok" : "FAIL") \(what)"); ok = ok && pass }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkremote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        AppDefaults.store.set("127.0.0.1", forKey: RemoteHub.hostKey)
+        AppDefaults.store.set(0, forKey: RemoteHub.portKey)
+        let hub = RemoteHub(model: model, devices: FileDeviceStore(url: dir.appendingPathComponent("devices.json")), dir: dir)
+        step("off by default", !hub.enabled && !hub.running)
+        hub.enabled = true
+        for _ in 0..<50 where !hub.running && hub.problem == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        step("on: \(hub.url ?? hub.problem ?? "nothing")", hub.running && hub.url?.hasPrefix("wss://127.0.0.1:") == true)
+        guard let url = hub.url.flatMap(URL.init(string:)), let fp = hub.fingerprint else { finish(false); return }
+        let offer = hub.startPairing()
+        step("QR link carries the fingerprint", hub.pairLink?.absoluteString.hasSuffix("&fp=\(fp)") == true)
+
+        final class Pin: NSObject, URLSessionDelegate, @unchecked Sendable {
+            let pin: String
+            init(_ p: String) { pin = p }
+            func urlSession(_ s: URLSession, didReceive c: URLAuthenticationChallenge,
+                            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+                guard let t = c.protectionSpace.serverTrust, let leaf = (SecTrustCopyCertificateChain(t) as? [SecCertificate])?.first,
+                      HubTLS.fingerprint(der: SecCertificateCopyData(leaf) as Data) == pin else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+                completionHandler(.useCredential, URLCredential(trust: t))
+            }
+        }
+        let session = URLSession(configuration: .ephemeral, delegate: Pin(fp), delegateQueue: nil)
+        let c = Client(task: session.webSocketTask(with: url))
+        try? await c.send(#"{"v":1,"type":"pair","id":"p","secret":"\#(offer.code)","name":"Test phone"}"#)
+        let paired = await c.untilReply()
+        guard case .paired(let pd)? = paired.first else { step("pair -> paired (\(paired.map(\.type)))", false); finish(false); return }
+        step("paired as \(pd.device.name), level \(pd.device.level.rawValue)", pd.device.level == .read)
+        try? await c.send(#"{"v":1,"type":"hello","id":"h","token":"\#(pd.token)","client":"test-remote","clientVersion":"1"}"#)
+        let hello = await c.untilReply()
+        let ws = hello.compactMap { if case .snapshot(let w) = $0 { w } else { nil } }.first
+        step("hello -> \(hello.map(\.type)), \(ws?.count ?? 0) workspaces of the named session", hello.last.map(isOK) == true && (ws?.isEmpty == false))
+        hub.checkPairing()
+        step("offer used up, device listed", hub.offer == nil && hub.deviceList.map(\.device.name) == ["Test phone"])
+        let onDisk = (try? String(contentsOf: dir.appendingPathComponent("devices.json"), encoding: .utf8)) ?? ""
+        step("device file has the hash, not the token", onDisk.contains(HubToken.hash(pd.token)) && !onDisk.contains(pd.token))
+        hub.revoke(device: pd.device.id)
+        try? await c.send(#"{"v":1,"type":"ping","id":"x"}"#)
+        let after = await c.untilReply().last
+        if case .reply(let r)? = after { step("after revoke -> \(r.error?.code.rawValue ?? "ok")", r.error?.code == .unauthorized) } else { step("after revoke -> a reply", false) }
+        c.close()
+        hub.enabled = false
+        try? await Task.sleep(for: .milliseconds(200))
+        step("off again: nothing listens", !hub.running && hub.url == nil)
+        session.invalidateAndCancel()
+        finish(ok)
+    }
+
     private static func finish(_ ok: Bool) {
-        print("test-hub: \(ok ? "PASS" : "FAIL")")
+        print("test-hub/remote: \(ok ? "PASS" : "FAIL")")
         NSApp.terminate(nil)
     }
     private static func isOK(_ m: HubMessage) -> Bool { if case .reply(let r) = m { r.ok } else { false } }
@@ -81,8 +137,9 @@ enum HubLiveTest {
 
     @MainActor final class Client {
         let task: URLSessionWebSocketTask
-        init(port: UInt16) {
-            task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)
+        convenience init(port: UInt16) { self.init(task: URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/")!)) }
+        init(task: URLSessionWebSocketTask) {
+            self.task = task
             task.resume()
             read()
         }

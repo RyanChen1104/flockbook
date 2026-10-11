@@ -103,6 +103,11 @@ Risk: two implementations of the same rules. Mitigation: the fixtures, and the h
 - **Tailscale or LAN only.** The hub listens on the Tailscale interface address (100.x / fd7a:…) or on a LAN address the user picks. Never on `0.0.0.0` by default.
 - **TLS:** use it. With Tailscale, `tailscale cert` gives a real certificate for `host.tailnet.ts.net`, and the PWA needs a secure context (HTTPS) for service workers and notifications anyway. On a LAN without Tailscale: a self-signed certificate, pinned at pairing (the QR code carries its fingerprint).
 - Tailscale already encrypts and authenticates devices. TLS + token still apply: a tailnet can hold other people's devices (shared nodes), and defense in depth is cheap here.
+- **Mac hub, as built (phase 2):**
+  - Bind: one address of this Mac, chosen in Settings > Remote access (default: the first Tailscale address). Never all addresses (`0.0.0.0`, `::` are refused, not only off by default). Public addresses are refused. Every address except loopback needs TLS.
+  - Certificate: self-signed P-256, made once with the system `/usr/bin/openssl` and kept in `Application Support/Flockbook/hub/tls` (mode 600 files in a mode 700 folder). It is imported in memory only, never into a keychain. A new certificate changes the fingerprint, so devices pair again.
+  - Tailscale certificate: when the owner runs `tailscale cert --cert-file <hub>/tailscale/cert.pem --key-file <hub>/tailscale/key.pem <name>.ts.net` and the hub uses a Tailscale address, the hub uses that pair. The app never runs `tailscale cert` itself (it requests a public certificate, and the name goes into public certificate logs). An EC certificate with explicit curve parameters is refused, because the in-memory import crashes on it.
+  - State in sight: the Settings row says "Off. Nothing listens." or "On at wss://…", and while on, the sidebar foot shows "Remote access on".
 
 ## 6. Pairing and auth
 

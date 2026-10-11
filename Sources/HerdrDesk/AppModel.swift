@@ -11,6 +11,8 @@ enum Screen: Hashable { case tab, inbox, overview, search }
 @MainActor @Observable
 final class AppModel {
     let store: HerdrStore
+    /// Remote access; nil in checks and previews (they never listen).
+    var remote: RemoteHub?
     var screen: Screen = .tab { didSet { if screen != .tab { showTerminal = false }; updateVisibleSessions() } }
     var workspaceID: String? { didSet { updateVisibleSessions() } }
     var tabID: String? { didSet { updateVisibleSessions() } }
