@@ -53,6 +53,42 @@ for (const width of [1440, 390]) {
 		await page.close();
 	}
 }
+// Footer flock: draws only while visible, about 60 fps on screen, one frame for reduced motion.
+// FLOCK_FRAMES=<dir> also saves the canvas at 1 s (drifting), 11 s and 14 s (in formation).
+{
+	const count = () => {
+		window.__draws = 0;
+		const clear = CanvasRenderingContext2D.prototype.clearRect;
+		CanvasRenderingContext2D.prototype.clearRect = function (...a) { window.__draws++; return clear.apply(this, a); };
+	};
+	const draws = (page) => page.evaluate(() => window.__draws);
+	for (const reducedMotion of ['no-preference', 'reduce']) {
+		const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion });
+		await page.addInitScript(count);
+		await page.goto(url, { waitUntil: 'networkidle' });
+		let d = await draws(page);
+		await page.waitForTimeout(1000);
+		const offscreen = (await draws(page)) - d;
+		await page.locator('.flock').scrollIntoViewIfNeeded();
+		await page.waitForTimeout(200);
+		d = await draws(page);
+		await page.waitForTimeout(1000);
+		const onscreen = (await draws(page)) - d;
+		console.log(`flock (${reducedMotion}): draws/s offscreen ${offscreen}, on screen ${onscreen}`);
+		if (offscreen > 0) failed = true;
+		if (reducedMotion === 'reduce' ? onscreen > 0 : onscreen < 50) failed = true;
+		const dir = process.env.FLOCK_FRAMES;
+		if (dir && reducedMotion === 'no-preference') {
+			await page.locator('.flock').screenshot({ path: `${dir}/flock-1s.png` });
+			for (const at of [11, 14]) {
+				await page.waitForTimeout(at === 11 ? 10000 : 3000);
+				await page.locator('.flock').screenshot({ path: `${dir}/flock-${at}s.png` });
+			}
+		}
+		await page.close();
+	}
+}
+
 // No-JS fallback: dots are plain anchors and still move the track.
 {
 	const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: false });

@@ -13,6 +13,7 @@
 		content="A native macOS reading view for your Herdr agents. Read what each agent did, see which one needs you, and reply in one place."
 	/>
 	<script src="{base}/carousel.js" defer></script>
+	<script src="{base}/flock.js" defer></script>
 </svelte:head>
 
 <a class="skip" href="#features">Skip to features</a>
@@ -113,6 +114,7 @@
 		{#if links.github}<a href={links.github}>GitHub</a> · {/if}MIT License · Unofficial. Not affiliated
 		with, endorsed by, or supported by Herdr, Inc.
 	</p>
+	<canvas class="flock" aria-hidden="true"></canvas>
 </footer>
 
 <style>
@@ -391,6 +393,13 @@
 	}
 	.legal {
 		margin: 0;
+	}
+	/* Fixed height: the canvas never shifts layout. */
+	.flock {
+		display: block;
+		width: 100%;
+		height: 160px;
+		margin-top: 32px;
 	}
 
 	@media (max-width: 760px) {

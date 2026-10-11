@@ -1,7 +1,9 @@
 # Flockbook website
 
 One static page. SvelteKit with adapter-static (csr=false: no framework JS), no tracking.
-Small hand-written scripts in `static/`: `carousel.js` (active dot).
+Small hand-written scripts in `static/`: `carousel.js` (active dot) and `flock.js` (footer canvas:
+the icon's arrowheads drift as boids, settle into a V, break up; paused offscreen; one static
+frame for reduced motion).
 
 ```sh
 npm install
