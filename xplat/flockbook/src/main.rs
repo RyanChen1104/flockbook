@@ -61,14 +61,16 @@ fn main() -> iced::Result {
 
     let demo = args.iter().any(|a| a == "--demo");
     let env: std::collections::HashMap<String, String> = std::env::vars().collect();
-    let backdrop = flockbook::glass::choose(flockbook::glass::Os::current(), &args, &env);
+    let settings_path = flockbook::settings::default_path();
+    let prefs = settings_path.as_deref().map(flockbook::settings::Prefs::load).unwrap_or_default();
+    let backdrop = flockbook::glass::choose_with(flockbook::glass::Os::current(), &args, &env, prefs.glass);
     // Before the first frame: CJK text uses a good system face at every weight.
     fb_ui::cjk::install();
-    iced::application(move || boot(demo, &args, backdrop), App::update, App::view)
+    iced::application(move || boot(demo, &args, backdrop, settings_path.clone(), prefs.clone()), App::update, App::view)
         .title(App::title)
         .theme(|app: &App| -> Theme { app.theme() })
         .style(|app: &App, theme: &Theme| iced::theme::Style { background_color: flockbook::glass::root_color(app), text_color: theme.palette().text })
-        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app), flockbook::terminal::subscription(app), flockbook::glass::subscription(app)]) })
+        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app), flockbook::terminal::subscription(app), flockbook::glass::subscription(app), flockbook::shortcuts::subscription(app)]) })
         .font(fb_ui::fonts::BUNDLED[0])
         .font(fb_ui::fonts::BUNDLED[1])
         .font(fb_ui::fonts::BUNDLED[2])
@@ -87,16 +89,21 @@ fn main() -> iced::Result {
         .run()
 }
 
-fn boot(demo: bool, args: &[String], backdrop: flockbook::glass::Backdrop) -> (App, Task<Message>) {
+fn boot(demo: bool, args: &[String], backdrop: flockbook::glass::Backdrop, settings_path: Option<std::path::PathBuf>, prefs: flockbook::settings::Prefs) -> (App, Task<Message>) {
+    let allow_input = prefs.allow_input;
     let mut app = if demo {
         App::demo(Mode::Light, Screen::Conversation)
     } else {
-        live_app(args)
+        live_app(args, allow_input)
     };
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    app.state.settings.read_only_launch = !flockbook::access::writes_enabled(args, &env, Some(true));
+    app.state.settings.prefs = prefs;
+    app.state.settings.path = settings_path;
     // A real window opens links in the system browser. Snapshots and tests keep the recording opener.
     app.opener = Box::new(flockbook::links::SystemOpener);
     // Read-only also strips the demo's recording actions, so the demo shows the read-only look.
-    if !writes_enabled(args) {
+    if !writes_enabled(args, allow_input) {
         flockbook::access::make_read_only(&mut app);
     }
     flockbook::glass::install(&mut app, backdrop);
@@ -104,14 +111,14 @@ fn boot(demo: bool, args: &[String], backdrop: flockbook::glass::Backdrop) -> (A
     (app, Task::none())
 }
 
-/// Swift `writesEnabled`: `--read-only` or `FLOCKBOOK_READ_ONLY=1` turn it off. (No settings store yet: the setting is "not set".)
-fn writes_enabled(args: &[String]) -> bool {
+/// Swift `writesEnabled`: `--read-only`, `FLOCKBOOK_READ_ONLY=1` or the "Allow sending input" setting turn it off.
+fn writes_enabled(args: &[String], allow_input: Option<bool>) -> bool {
     let env: std::collections::HashMap<String, String> = std::env::vars().collect();
-    flockbook::access::writes_enabled(args, &env, None)
+    flockbook::access::writes_enabled(args, &env, allow_input)
 }
 
 #[cfg(unix)]
-fn live_app(args: &[String]) -> App {
+fn live_app(args: &[String], allow_input: Option<bool>) -> App {
     // Read-only: the live source only subscribes to snapshots and events.
     let source = flockbook::source::LiveSource::from_args(args);
     let mut app = App::new(Box::new(source), Mode::Light, Screen::Conversation);
@@ -121,7 +128,7 @@ fn live_app(args: &[String]) -> App {
     // The terminal sheet is always available. It opens in Observe mode (no input path) when writes are off.
     flockbook::terminal::install_live(&mut app, &session);
     // Read-only: no sender and no pane actions are installed at all.
-    if !writes_enabled(args) {
+    if !writes_enabled(args, allow_input) {
         return app;
     }
     // The composer is the only mutating path (sends text to a pane). It is wired to the live source only.
@@ -132,7 +139,7 @@ fn live_app(args: &[String]) -> App {
 }
 
 #[cfg(not(unix))]
-fn live_app(_args: &[String]) -> App {
+fn live_app(_args: &[String], _allow_input: Option<bool>) -> App {
     eprintln!("live herdr source is not available on this platform yet; showing demo data");
     App::demo(Mode::Light, Screen::Conversation)
 }

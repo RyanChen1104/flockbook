@@ -53,10 +53,12 @@ pub enum Icon {
     TextCursorInput,
     ExternalLink,
     Layers,
+    Keyboard,
+    Settings2,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 37] = [
+    pub const ALL: [Icon; 39] = [
         Icon::SquarePen,
         Icon::Inbox,
         Icon::LayoutGrid,
@@ -94,6 +96,8 @@ impl Icon {
         Icon::TextCursorInput,
         Icon::ExternalLink,
         Icon::Layers,
+        Icon::Keyboard,
+        Icon::Settings2,
     ];
 
     pub fn name(self) -> &'static str {
@@ -135,6 +139,8 @@ impl Icon {
             Icon::TextCursorInput => "text-cursor-input",
             Icon::ExternalLink => "external-link",
             Icon::Layers => "layers",
+            Icon::Keyboard => "keyboard",
+            Icon::Settings2 => "settings-2",
         }
     }
 
@@ -177,6 +183,8 @@ impl Icon {
             Icon::TextCursorInput => include_str!("../icons/text-cursor-input.svg"),
             Icon::ExternalLink => include_str!("../icons/external-link.svg"),
             Icon::Layers => include_str!("../icons/layers.svg"),
+            Icon::Keyboard => include_str!("../icons/keyboard.svg"),
+            Icon::Settings2 => include_str!("../icons/settings-2.svg"),
         }
     }
 }

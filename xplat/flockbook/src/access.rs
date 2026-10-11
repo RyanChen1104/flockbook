@@ -1,7 +1,7 @@
 //! Whether the app may send anything to a pane (port of Swift `AppModel.writesEnabled`).
 //!
 //! Writes are on by default. They are off with `--read-only`, with `FLOCKBOOK_READ_ONLY=1`, or when the "Allow sending
-//! input" setting is off (the Rust app has no settings store yet, so `main.rs` passes `None`: "not set" = on, like Swift).
+//! input" setting is off (`settings.json`, read at launch by `main.rs`; "not set" = on, like Swift).
 //! Read-only means no [`crate::composer::MessageSender`] and no [`crate::actions::PaneActions`] are installed: the composer
 //! shows "Read-only: input is off" and the cards say "Answer in the terminal". The terminal sheet opens in Observe mode:
 //! no key, paste, resize or wheel goes to the program.

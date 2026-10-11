@@ -48,6 +48,8 @@ pub mod links;
 pub mod needs_you;
 pub mod overview;
 pub mod search;
+pub mod settings;
+pub mod shortcuts;
 pub mod sidebar;
 pub mod snapshot;
 pub mod source;
@@ -88,6 +90,8 @@ pub enum Message {
     Terminal(terminal::TerminalMsg),
     Glass(glass::GlassMsg),
     Chrome(chrome::ChromeMsg),
+    Settings(settings::SettingsMsg),
+    Shortcut(shortcuts::Action),
 }
 
 pub struct App {
@@ -232,6 +236,8 @@ impl App {
             Message::Terminal(m) => terminal::update(self, m),
             Message::Glass(m) => glass::update(self, m),
             Message::Chrome(m) => chrome::update(self, m),
+            Message::Settings(m) => settings::update(self, m),
+            Message::Shortcut(a) => shortcuts::run(self, a),
         }
     }
 
@@ -251,11 +257,11 @@ impl App {
             let main = if needs_you::paints_own_ground(self) { main } else { main.style(style::fill(ground, 0.0)) };
             let right = column![container(toprow::view(self)).width(Length::Fill).height(Length::Fixed(fb_ui::theme::TOPROW_H)).style(style::fill(t.glass_bar, 0.0)), main];
             let body = row![sidebar, container(right).width(Length::Fill).height(Length::Fill)];
-            return container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self)]).width(Length::Fill).height(Length::Fill).into();
+            return container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self), settings::layer(self), shortcuts::layer(self)]).width(Length::Fill).height(Length::Fill).into();
         }
         let right = column![container(toprow::view(self)).height(Length::Fixed(fb_ui::theme::TOPROW_H)), container(main).width(Length::Fill).height(Length::Fill)];
         let body = row![sidebar, container(right).width(Length::Fill).height(Length::Fill).style(style::content(t))];
-        container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self)]).width(Length::Fill).height(Length::Fill).style(style::content(t)).into()
+        container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self), settings::layer(self), shortcuts::layer(self)]).width(Length::Fill).height(Length::Fill).style(style::content(t)).into()
     }
 }
 

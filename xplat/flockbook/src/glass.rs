@@ -51,13 +51,18 @@ impl Os {
 /// `--glass on|off`, else `FLOCKBOOK_GLASS=on|off`, else on. "On" is the platform's backdrop; Linux has none.
 /// Any other value counts as unset.
 pub fn choose(os: Os, args: &[String], env: &HashMap<String, String>) -> Backdrop {
+    choose_with(os, args, env, None)
+}
+
+/// [`choose`] with the saved setting between the env and the default.
+pub fn choose_with(os: Os, args: &[String], env: &HashMap<String, String>, setting: Option<bool>) -> Backdrop {
     let parse = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
         "on" | "1" | "true" => Some(true),
         "off" | "0" | "false" => Some(false),
         _ => None,
     };
     let flag = args.iter().position(|a| a == "--glass").and_then(|i| args.get(i + 1)).and_then(|v| parse(v));
-    let wanted = flag.or_else(|| env.get("FLOCKBOOK_GLASS").and_then(|v| parse(v))).unwrap_or(true);
+    let wanted = flag.or_else(|| env.get("FLOCKBOOK_GLASS").and_then(|v| parse(v))).or(setting).unwrap_or(true);
     match (wanted, os) {
         (true, Os::MacOs) => Backdrop::Vibrancy,
         (true, Os::Windows) => Backdrop::Mica,

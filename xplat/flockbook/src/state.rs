@@ -81,6 +81,8 @@ pub struct State {
     pub terminal: crate::terminal::TerminalState,
     pub glass: crate::glass::GlassState,
     pub chrome: crate::chrome::ChromeState,
+    pub settings: crate::settings::SettingsState,
+    pub shortcuts: crate::shortcuts::ShortcutsState,
 }
 
 impl State {
@@ -107,6 +109,8 @@ impl State {
             terminal: Default::default(),
             glass: Default::default(),
             chrome: Default::default(),
+            settings: Default::default(),
+            shortcuts: Default::default(),
         }
     }
 

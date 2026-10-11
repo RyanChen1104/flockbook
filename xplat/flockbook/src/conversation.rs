@@ -392,7 +392,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .into();
     }
     let mut flow = Flow::new(&cs.doc, t, |e| Message::Conversation(ConversationMsg::Flow(e)))
-        .col_max(COLUMN_MAX)
+        .col_max(app.state.settings.reading_width().points())
         .offset(cs.offset, cs.pinned)
         .selection(cs.sel.sel)
         .focused(cs.sel.focused)

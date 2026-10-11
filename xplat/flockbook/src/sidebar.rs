@@ -43,6 +43,28 @@ fn step_workspace(app: &mut App, delta: isize) -> Task<Message> {
 }
 
 /// A full-width sidebar row button with the selected/hover background.
+/// Settings and Keyboard Shortcuts, bottom left (Swift: the app menu and the Help menu).
+fn footer(app: &App) -> Element<'_, Message> {
+    let t = app.bar_tokens();
+    let mac = cfg!(target_os = "macos");
+    let item = |ic: Icon, tip: String, msg: Message| -> Element<'_, Message> {
+        let b = button(container(icon(ic, SIZE_DEFAULT, t.label_2)).center(Length::Fixed(28.0))).padding(0).on_press(msg).style(move |_, st| button::Style {
+            background: matches!(st, button::Status::Hovered).then_some(Background::Color(t.fill_2)),
+            border: Border { radius: R_ROW.into(), ..Default::default() },
+            ..Default::default()
+        });
+        iced::widget::tooltip(b, container(CALLOUT.text(tip).color(t.label)).padding([5, 9]).style(style::float_e2(app.tokens(), R_ROW)), iced::widget::tooltip::Position::Top).gap(6).into()
+    };
+    let key = |a| crate::shortcuts::TABLE.iter().find(|s| s.action == Some(a)).map(|s| crate::shortcuts::keys_text(s, mac)).unwrap_or_default();
+    row![
+        item(Icon::Settings2, format!("Settings ({})", key(crate::shortcuts::Action::Settings)), Message::Settings(crate::settings::SettingsMsg::Toggle)),
+        item(Icon::Keyboard, format!("Keyboard shortcuts ({})", key(crate::shortcuts::Action::Shortcuts)), Message::Shortcut(crate::shortcuts::Action::Shortcuts)),
+    ]
+    .spacing(SP_4)
+    .padding([SP_8, 0.0])
+    .into()
+}
+
 fn row_button<'a>(t: Tokens, selected: bool, content: Element<'a, Message>, on_press: Message, height: f32) -> Element<'a, Message> {
     button(container(content).height(Length::Fill).align_y(Alignment::Center).padding([0, 8]))
         .on_press(on_press)
@@ -152,7 +174,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // Keep the status mapping in one place for builders.
     let _ = status_kind;
 
-    container(column![crate::chrome::drag_area(app, Space::new().width(Length::Fill).height(52)), nav, Space::new().height(SP_24), header, Space::new().height(SP_4), scrollable(list).height(Length::Fill)])
+    container(column![crate::chrome::drag_area(app, Space::new().width(Length::Fill).height(52)), nav, Space::new().height(SP_24), header, Space::new().height(SP_4), scrollable(list).height(Length::Fill), footer(app)])
         .padding([0, 12])
         .height(Length::Fill)
         .into()

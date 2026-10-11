@@ -22,6 +22,9 @@ herdr-core = { path = "../herdr-core" }
 png.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json.workspace = true
+serde.workspace = true
+# The config folder for settings.json.
+dirs = "6"
 pulldown-cmark = { version = "0.12", default-features = false }
 window-vibrancy = "0.6"
 
