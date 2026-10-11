@@ -78,43 +78,45 @@
 			{/each}
 		</nav>
 	</section>
+	<section class="details" aria-label="Requirements, install and privacy">
+		<dl class="facts">
+			<div>
+				<dt>Requires</dt>
+				<dd>
+					macOS 26 or later (Apple silicon and Intel) and a running <a href="https://herdr.dev">Herdr</a>
+					with {agents.slice(0, -1).join(', ')} or {agents.at(-1)} agents.
+				</dd>
+			</div>
+			<div>
+				<dt>Install</dt>
+				<dd>
+					Download the <code>.dmg</code> from
+					{#if links.github}<a href="{links.github}/releases">GitHub Releases</a>{:else}GitHub Releases{/if}
+					and drag Flockbook to Applications. Signed and notarized by Apple. Check the download against
+					<code>SHA256SUMS</code>.
+					<small class="unsigned">
+						Only if a build's release notes mark it unsigned:
+						<code>xattr -dr com.apple.quarantine /Applications/Flockbook.app</code>
+					</small>
+				</dd>
+			</div>
+			<div>
+				<dt>Privacy</dt>
+				<dd>
+					Runs locally. Reads agent session logs on your Mac and talks to Herdr through its local socket.
+					Sends nothing over the network. No telemetry.
+				</dd>
+			</div>
+		</dl>
+	</section>
 </main>
 
 <footer class="foot">
 	<div class="foot-in">
-	<dl class="facts">
-		<div>
-			<dt>Requires</dt>
-			<dd>
-				macOS 26 or later (Apple silicon and Intel) and a running <a href="https://herdr.dev">Herdr</a>
-				with {agents.slice(0, -1).join(', ')} or {agents.at(-1)} agents.
-			</dd>
-		</div>
-		<div>
-			<dt>Install</dt>
-			<dd>
-				Download the <code>.dmg</code> from
-				{#if links.github}<a href="{links.github}/releases">GitHub Releases</a>{:else}GitHub Releases{/if}
-				and drag Flockbook to Applications. Signed and notarized by Apple. Check the download against
-				<code>SHA256SUMS</code>.
-				<small class="unsigned">
-					Only if a build's release notes mark it unsigned:
-					<code>xattr -dr com.apple.quarantine /Applications/Flockbook.app</code>
-				</small>
-			</dd>
-		</div>
-		<div>
-			<dt>Privacy</dt>
-			<dd>
-				Runs locally. Reads agent session logs on your Mac and talks to Herdr through its local socket.
-				Sends nothing over the network. No telemetry.
-			</dd>
-		</div>
-	</dl>
-	<p class="legal">
-		{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not affiliated
-		with, endorsed by, or supported by Herdr, Inc.
-	</p>
+		<p class="legal">
+			{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not
+			affiliated with, endorsed by, or supported by Herdr, Inc.
+		</p>
 	</div>
 	<canvas class="flock" aria-hidden="true"></canvas>
 </footer>
@@ -372,10 +374,18 @@
 	.foot-in {
 		max-width: 1120px;
 		margin: 0 auto;
-		padding: 56px 20px 0;
+		padding: 32px 20px 0;
+	}
+	/* Requirements, install and privacy belong to the page, not to the footer zone. */
+	.details {
+		max-width: 1120px;
+		margin: 0 auto;
+		padding: 0 20px 96px;
+		font-size: 14px;
+		color: var(--fg-2);
 	}
 	.facts {
-		margin: 0 0 32px;
+		margin: 0;
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 32px;
@@ -409,7 +419,7 @@
 		display: block;
 		width: 100%;
 		height: 300px;
-		margin-top: 72px;
+		margin-top: 48px;
 	}
 
 	@media (max-width: 760px) {
@@ -431,12 +441,15 @@
 			grid-template-columns: minmax(0, 1fr);
 			gap: 20px;
 		}
+		.details {
+			padding-bottom: 64px;
+		}
 		.foot-in {
-			padding-top: 40px;
+			padding-top: 28px;
 		}
 		.flock {
 			height: 220px;
-			margin-top: 48px;
+			margin-top: 36px;
 		}
 	}
 </style>
