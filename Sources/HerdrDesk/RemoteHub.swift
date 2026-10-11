@@ -24,6 +24,8 @@ final class RemoteHub {
     /// Why the hub is not running although it is on.
     private(set) var problem: String?
     private(set) var fingerprint: String?
+    /// The `*.ts.net` name of a `tailscale cert` certificate in use; the page address uses it.
+    private(set) var tailnetName: String?
     private(set) var port: UInt16?
     private(set) var connections = 0
     private(set) var offer: HubPairOffer?
@@ -75,7 +77,8 @@ final class RemoteHub {
     /// The page address (the PWA; its socket is `/ws` on the same origin), for the status line and the QR link.
     var url: String? {
         guard running, let host, let port else { return nil }
-        return "https://\(host.contains(":") ? "[\(host)]" : host):\(port)"
+        let name = tailnetName ?? (host.contains(":") ? "[\(host)]" : host)
+        return "https://\(name):\(port)"
     }
 
     func refreshAddresses() { if previewEnabled == nil { addresses = HubBind.local() } }
@@ -92,7 +95,7 @@ final class RemoteHub {
             let id = try identity()
             let s = HubServer(backend: AppHubBackend(model: model), devices: devices, pairing: pairing)
             port = try await s.start(host: host, port: portSetting, tls: id)
-            server = s; running = true; problem = nil; fingerprint = id.fingerprint
+            server = s; running = true; problem = nil; fingerprint = id.fingerprint; tailnetName = id.tailnetName
             remoteLog.info("hub on \(host, privacy: .public):\(self.port ?? 0)")
             poll = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -112,7 +115,7 @@ final class RemoteHub {
     func stop() {
         poll?.cancel(); poll = nil
         server?.stop(); server = nil
-        running = false; port = nil; connections = 0
+        running = false; port = nil; connections = 0; tailnetName = nil
         cancelPairing()
     }
 
@@ -129,7 +132,7 @@ final class RemoteHub {
 
     /// On a Tailscale address: the `tailscale cert` pair when the owner put one in `<hub>/tailscale/` (cert.pem,
     /// key.pem; the app never runs `tailscale cert` itself). Else the stored self-signed certificate, else a new one
-    /// for this Mac's addresses. Clients pin the fingerprint either way.
+    /// for this Mac's addresses. The browser checks the certificate itself; the fingerprint is for reference.
     private func identity() throws -> HubIdentity {
         guard let dir else { throw HubServer.StartError.failed("no certificate folder") }
         let ts = dir.appendingPathComponent("tailscale", isDirectory: true)
@@ -162,8 +165,8 @@ final class RemoteHub {
     }
 
     func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); deviceList = devices.all }
-    /// Removes the device. An open connection of it is closed on its next message or push.
-    func revoke(device id: String) { devices.revoke(device: id); deviceList = devices.all }
+    /// Removes the device and closes its open connections at once.
+    func revoke(device id: String) { devices.revoke(device: id); server?.dropRevoked(); deviceList = devices.all }
 
     // MARK: Snapshots
 

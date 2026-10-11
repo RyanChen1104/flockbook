@@ -285,7 +285,7 @@ function pairScreen(): HTMLElement {
     words && h("label", { class: "label", for: "pair-words" }, "Code"), words,
     h("button", { id: "pair-go", class: "primary", disabled: state.busy, onclick: go }, state.busy ? "Pairing…" : "Pair"),
     state.pairError && h("p", { class: "error", role: "alert" }, state.pairError),
-    state.fingerprint && h("p", { class: "fine" }, `Certificate ${state.fingerprint.slice(0, 16)}… (compare with the Mac)`),
+    state.fingerprint && h("p", { class: "fine" }, `Certificate ${state.fingerprint.slice(0, 16)}… (for reference only: the browser checks the certificate, this page cannot)`),
     h("p", { class: "fine" }, "A paired device can read your agents' conversations. Input stays off until you turn it on for this device on the Mac."));
 }
 

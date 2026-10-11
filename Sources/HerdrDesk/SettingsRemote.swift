@@ -22,7 +22,8 @@ struct RemoteAccessSection: View {
                     ForEach(hub.addresses, id: \.host) { a in Text(Self.label(a)).tag(a.host) }
                 } label: {
                     Text("Address")
-                    Text("Only this address listens. Tailscale is the safe choice away from home.")
+                    Text(Self.addressNote(hub.host.flatMap(HubBind.kind)))
+                        .foregroundStyle(HubBind.kind(hub.host ?? "") == .lan ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 }
                 LabeledContent {
                     HStack {
@@ -60,10 +61,20 @@ struct RemoteAccessSection: View {
         return "On at \(url)" + (c > 0 ? " · \(c) connected" : "")
     }
 
+    /// Under the address picker. A LAN address gets the honest warning: the phone's browser cannot pin the
+    /// self-signed certificate, so a fake certificate on the same Wi-Fi could take the pairing.
+    static func addressNote(_ kind: HubBind.Kind?) -> String {
+        switch kind {
+        case .lan?: "Less safe: anyone on this Wi-Fi who can fake the certificate could pair. Use Tailscale when you can."
+        case .tailscale?: "Only this address listens. Tailscale checks every device, so this is the safe choice."
+        default: "Only this address listens. Tailscale is recommended."
+        }
+    }
+
     static func label(_ a: HubAddress) -> String {
         switch a.kind {
-        case .tailscale?: "Tailscale · \(a.host)"
-        case .lan?: "Local network (\(a.interface)) · \(a.host)"
+        case .tailscale?: "Tailscale · \(a.host) (recommended)"
+        case .lan?: "Local network (\(a.interface)) · \(a.host) (less safe)"
         case .loopback?: "This Mac only · \(a.host)"
         case nil: a.host
         }
@@ -95,7 +106,8 @@ struct PairSheet: View {
                         .onChange(of: ctx.date) { _, _ in hub.checkPairing() }
                 }
                 if let fp = hub.fingerprint {
-                    Text("Certificate \(fp.prefix(16))…").font(.caption.monospaced()).foregroundStyle(.tertiary)
+                    Text("Certificate \(fp.prefix(16))… For reference only: the phone's browser checks the certificate, not this code.")
+                        .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                 }
             } else if let start = startCount, hub.deviceList.count > start {
                 Label("Paired \(hub.deviceList.last?.device.name ?? "")", systemImage: "checkmark.circle.fill").foregroundStyle(.green)

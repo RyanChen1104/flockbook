@@ -74,6 +74,7 @@ try await checksHubServer()
 try await checksHubTLS()
 try await checksHubHTTP()
 try await checksHubFuzz()
+try await checksHubSecurity()
 try await checksUpdater()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")

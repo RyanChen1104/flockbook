@@ -109,13 +109,17 @@ public struct HubPairOffer: Hashable, Sendable {
 /// The hub's pairing state: at most one open offer.
 @MainActor public final class HubPairing {
     public static let lifetime: TimeInterval = 300
-    /// Wrong tries before the offer ends (6 words = 48 bits; a few tries per offer keep a guess hopeless).
-    public static let maxTries = 5
+    /// Wrong tries in all before the offer ends (6 words = 48 bits: a guess stays hopeless).
+    public static let maxTries = 20
+    /// Wrong tries from one address before that address is refused for this offer: one peer cannot end the
+    /// owner's offer, and cannot keep guessing.
+    public static let maxTriesPerSource = 3
 
     private let devices: HubDeviceStore
     private let now: () -> Date
     private var offerNow: HubPairOffer?
     private var tries = 0
+    private var triesBySource: [String: Int] = [:]
 
     public init(devices: HubDeviceStore, now: @escaping () -> Date = Date.init) { self.devices = devices; self.now = now }
 
@@ -131,20 +135,22 @@ public struct HubPairOffer: Hashable, Sendable {
         var g = SystemRandomNumberGenerator()
         let o = HubPairOffer(secret: HubToken.random(), words: (0..<6).map { _ in Self.words[Int(g.next() % 256)] },
                              expires: now().addingTimeInterval(Self.lifetime))
-        offerNow = o; tries = 0
+        offerNow = o; tries = 0; triesBySource = [:]
         return o
     }
 
-    public func cancel() { offerNow = nil; tries = 0 }
+    public func cancel() { offerNow = nil; tries = 0; triesBySource = [:] }
 
     /// Pairs a device when `input` is the open offer's secret or its words (any case, any separators). The offer
     /// is then used up. New devices get level `read`; input is turned on per device on the hub.
-    public func redeem(_ input: String, name: String) -> (token: String, device: HubDevice)? {
+    public func redeem(_ input: String, name: String, source: String = "") -> (token: String, device: HubDevice)? {
         guard let o = open else { offerNow = nil; return nil }
+        guard triesBySource[source, default: 0] < Self.maxTriesPerSource else { return nil }
         let typed = Self.normalize(input)
         let hit = !input.isEmpty && (Self.same(input, o.secret) || (!typed.isEmpty && Self.same(typed, o.code)))
         guard hit else {
             tries += 1
+            triesBySource[source, default: 0] += 1
             if tries >= Self.maxTries { cancel() }
             return nil
         }

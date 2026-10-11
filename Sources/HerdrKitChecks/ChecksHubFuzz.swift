@@ -118,6 +118,18 @@ struct XorShift: RandomNumberGenerator {
     for c in idle { c.cancel() }
     try? await Task.sleep(for: .milliseconds(900))
 
+    // Connections the hub closes, each followed at once by a new one: a late callback of a closed connection must
+    // never close the next one (connection keys are never reused).
+    var lost = 0
+    for n in 0..<150 {
+        // As in the failures seen: a socket held open, then closed by the client.
+        _ = await rawExchange(port: port, [n % 3 == 0 ? up + clientFrame(1, Data("x".utf8), mask: false) : up], seconds: 0.05)
+        let r = await rawExchange(port: port, [Data((n % 2 == 0 ? "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n" : upgradeHead.replacingOccurrences(of: "/ws", with: "/x") + "\r\n").utf8)], seconds: 0.3)
+        if !String(decoding: r, as: UTF8.self).hasPrefix(n % 2 == 0 ? "HTTP/1.1 200" : "HTTP/1.1 404") { lost += 1 }
+    }
+    check(lost == 0, "fuzz: 150 closed-then-new connection pairs all answered (\(lost) lost)")
+    try? await Task.sleep(for: .milliseconds(300))
+
     // Random garbage on many connections, then the hub still serves and holds nothing.
     for n in 0..<40 { _ = await rawExchange(port: port, [bytes(Int.random(in: 1...3000, using: &rng))], seconds: n % 10 == 0 ? 0.3 : 0.05) }
     for _ in 0..<20 { _ = await rawExchange(port: port, [up, bytes(Int.random(in: 1...3000, using: &rng))], seconds: 0.05) }

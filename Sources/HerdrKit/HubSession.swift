@@ -24,7 +24,7 @@ import CryptoKit
     /// Types the text and submits it, as the composer does. False when herdr did not take it.
     func send(pane: String, text: String) async -> Bool
     /// The approval card's input (`HerdrClient.respond`). Called only after the prompt was checked.
-    func approve(pane: String, allow: Bool) async
+    func approve(pane: String, prompt: String, allow: Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws
 }
@@ -74,12 +74,17 @@ extension Hub {
     private let pairing: HubPairing?
 
     /// `pairing` nil: `pair` is refused (the hub shows no offer).
-    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil) {
-        self.backend = backend; self.devices = devices; self.pairing = pairing
+    /// `source`: the peer's address; wrong pairing tries are counted per source.
+    private let source: String
+
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "") {
+        self.backend = backend; self.devices = devices; self.pairing = pairing; self.source = source
     }
 
     /// The device of this connection, looked up again each time (nil after a revoke).
     public var device: HubDevice? { deviceID.flatMap { devices.device(id: $0) } }
+    /// Said hello once, and its device is gone now.
+    public var revoked: Bool { deviceID != nil && device == nil }
 
     /// One client message: the pushes it causes, then its reply.
     public func receive(_ data: Data) async -> [HubMessage] {
@@ -94,7 +99,7 @@ extension Hub {
         }
         if case .pair(let secret, let name) = m.body {
             guard deviceID == nil else { return [fail(m.id, .badRequest, "This connection is already paired.")] }
-            guard let (token, d) = pairing?.redeem(secret, name: name) else {
+            guard let (token, d) = pairing?.redeem(secret, name: name, source: source) else {
                 closed = true
                 return [fail(m.id, .unauthorized, "Wrong or expired pairing code. Start pairing again on the hub.")]
             }
@@ -127,8 +132,11 @@ extension Hub {
         case .send(let id, let text):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
+            // A plain shell is never typed into from a remote device.
+            guard p.agent != nil else { return [fail(m.id, .readOnly, "Remote input goes to agents only.")] }
+            if let why = Hub.inputProblem(text, limit: Hub.maxSendText) { return [fail(m.id, .badRequest, why)] }
             let st = await state(p)
-            guard st.approval == nil, st.question == nil else { return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")] }
+            guard st.approval == nil, st.question == nil, !st.unreadablePrompt else { return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")] }
             return await backend.send(pane: id, text: text) ? [ok(m.id)] : [fail(m.id, .failed, "herdr did not take the message.")]
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
@@ -138,11 +146,14 @@ extension Hub {
             guard case .send(let a) = ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: st.pane, writes: true) else {
                 return [fail(m.id, .stale, "The prompt changed. Nothing was sent.")]
             }
-            await backend.approve(pane: id, allow: a)
+            guard await backend.approve(pane: id, prompt: prompt, allow: a) else {
+                return [fail(m.id, .stale, "The prompt changed before the keys went out. Nothing was sent.")]
+            }
             return [ok(m.id)]
         case .answer(let id, let question, let answers):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
+            for a in answers { if let o = a.other, let why = Hub.inputProblem(o, limit: Hub.maxOtherText) { return [fail(m.id, .badRequest, why)] } }
             let st = await state(p)
             guard let q = st.question, q.toolUseId == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
@@ -188,6 +199,8 @@ extension Hub {
         var pane: ApprovalNotice.PaneState?
         var approval: HubApproval?
         var question: QuestionRequest?
+        /// A permission prompt on screen that the parser cannot read: counted as open.
+        var unreadablePrompt = false
     }
 
     /// The pane as it is now: one screen read, the log, and the open prompt by the app's rules.
@@ -195,9 +208,13 @@ extension Hub {
         let screen = await backend.screen(pane: p.id)
         let items = p.agent?.sessionId.map { backend.conversation(session: $0) } ?? []
         let logged = ApprovalNotice.pendingRequest(in: items)
-        let ps = p.agent.map { ApprovalNotice.PaneState(agentKind: $0.kind, blocked: $0.status == .blocked, pendingToolUseId: logged?.toolUseId, screen: screen ?? "") }
-        return PaneNow(screen: screen, pane: ps, approval: ps.flatMap { Hub.openApproval($0, logged: logged) },
-                       question: Hub.openQuestion(agent: p.agent, screen: screen, items: items))
+        let ps = p.agent.map { ApprovalNotice.PaneState(agentKind: $0.kind, blocked: $0.status == .blocked, pendingToolUseId: logged?.toolUseId, screen: screen ?? "",
+                                                        pendingTool: logged?.toolName, pendingCommand: logged?.command) }
+        let approval = ps.flatMap { Hub.openApproval($0, logged: logged) }
+        let question = Hub.openQuestion(agent: p.agent, screen: screen, items: items)
+        let unreadable = approval == nil && question == nil && p.agent?.kind == "claude"
+            && Hub.unreadablePrompt(screen: screen ?? "", blocked: p.agent?.status == .blocked)
+        return PaneNow(screen: screen, pane: ps, approval: approval, question: question, unreadablePrompt: unreadable)
     }
 
     private func pushes(_ p: Pane, force: Bool) async -> [HubMessage] {

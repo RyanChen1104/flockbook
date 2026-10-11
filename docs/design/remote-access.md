@@ -101,12 +101,12 @@ Risk: two implementations of the same rules. Mitigation: the fixtures, and the h
 ## 5. Transport
 
 - **Tailscale or LAN only.** The hub listens on the Tailscale interface address (100.x / fd7a:…) or on a LAN address the user picks. Never on `0.0.0.0` by default.
-- **TLS:** use it. With Tailscale, `tailscale cert` gives a real certificate for `host.tailnet.ts.net`, and the PWA needs a secure context (HTTPS) for service workers and notifications anyway. On a LAN without Tailscale: a self-signed certificate, pinned at pairing (the QR code carries its fingerprint).
+- **TLS:** use it. With Tailscale, `tailscale cert` gives a real certificate for `host.tailnet.ts.net`, and the PWA needs a secure context (HTTPS) for service workers and notifications anyway. On a LAN without Tailscale: a self-signed certificate. The QR code carries its fingerprint, but a browser cannot pin it (the browser owns TLS), so for the PWA it is for reference only; a native client pins it. On a LAN, someone on the same Wi-Fi who can fake the certificate (and gets the user past the browser warning) could take the pairing. So Tailscale is the recommended address: WireGuard authenticates every device.
 - Tailscale already encrypts and authenticates devices. TLS + token still apply: a tailnet can hold other people's devices (shared nodes), and defense in depth is cheap here.
 - **Mac hub, as built (phase 2):**
-  - Bind: one address of this Mac, chosen in Settings > Remote access (default: the first Tailscale address). Never all addresses (`0.0.0.0`, `::` are refused, not only off by default). Public addresses are refused. Every address except loopback needs TLS.
+  - Bind: one address of this Mac, chosen in Settings > Remote access (default: the first Tailscale address, marked "recommended"; a LAN address is marked "less safe" with the warning above). Never all addresses (`0.0.0.0`, `::` are refused, not only off by default). Public addresses are refused. Every address except loopback needs TLS.
   - Certificate: self-signed P-256, made once with the system `/usr/bin/openssl` and kept in `Application Support/Flockbook/hub/tls` (mode 600 files in a mode 700 folder). It is imported in memory only, never into a keychain. A new certificate changes the fingerprint, so devices pair again.
-  - Tailscale certificate: when the owner runs `tailscale cert --cert-file <hub>/tailscale/cert.pem --key-file <hub>/tailscale/key.pem <name>.ts.net` and the hub uses a Tailscale address, the hub uses that pair. The app never runs `tailscale cert` itself (it requests a public certificate, and the name goes into public certificate logs). An EC certificate with explicit curve parameters is refused, because the in-memory import crashes on it.
+  - Tailscale certificate: when the owner runs `tailscale cert --cert-file <hub>/tailscale/cert.pem --key-file <hub>/tailscale/key.pem <name>.ts.net` and the hub uses a Tailscale address, the hub uses that pair, and the page address uses the certificate's `*.ts.net` name (so the browser accepts it without a warning). The app never runs `tailscale cert` itself (it requests a public certificate, and the name goes into public certificate logs). An EC certificate with explicit curve parameters is refused, because the in-memory import crashes on it.
   - State in sight: the Settings row says "Off. Nothing listens." or "On at https://…" (the PWA; its socket is `/ws`), and while on, the sidebar foot shows "Remote access on".
 
 ## 6. Pairing and auth
@@ -124,10 +124,13 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 | Threat | Control |
 |---|---|
 | Someone on the network reaches the hub | Tailscale/LAN bind only; TLS; device token required |
-| Stolen phone or leaked token | Per-device revoke; tokens never shown again; `input` off by default per device |
+| Stolen phone or leaked token | Per-device revoke (closes its open connections at once); tokens never shown again; `input` off by default per device |
 | Token replay from a captured QR | Pairing secret is single use and short-lived |
 | A malicious client sends raw keys | No raw-key API; only `send`, `approve`, `answer` with hub-side checks |
-| Approve the wrong prompt (screen changed) | Hub re-reads the pane; prompt id must match (same rule as the notification) |
+| Approve the wrong prompt (screen changed) | Hub re-reads the pane; prompt id must match the prompt on screen (a log id only when the log's call is that box); one more read right before the keys; an unreadable prompt counts as open (same rules as the notification) |
+| Remote text into a shell, or control keys in text | `send` goes to agent panes only; text has no control characters except LF and tab, and a length cap |
+| A fake certificate on the LAN takes the pairing | Tailscale recommended (and default); LAN marked "less safe"; the fingerprint is for reference only in a browser |
+| One peer burns the pairing offer | 3 wrong tries per source, 20 in all |
 | Logs contain secrets (code, keys, tokens) | Read access is sensitive too: pairing is required even for `read`; nothing is cached on the phone beyond the open session (no offline store of conversations in v1) |
 | The hub is a new process with your file access | Hub is read-only on the file system (logs only); it never writes files; it runs as the user, not root |
 | Hub left on by mistake | Off by default; a visible "Remote access on" state in the Mac app and in `flockbook-hub status`; optional auto-off after N days |
@@ -150,7 +153,7 @@ Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" s
 - Small: plain TypeScript + one view library, no build server in production; files are embedded in the hub binary.
 - Built (phase 3, 2026-10-12): plain TypeScript and the DOM, no view library and no packages (`web/`;
   `scripts/web-build.mjs` writes `HubWebAssets.swift`). Pairing: the QR link (`#pair=…&fp=…`, read once, then removed
-  from the address bar; the page shows the fingerprint to compare with the Mac) or the 6 words. The token is kept in
+  from the address bar; the page shows the fingerprint for reference only) or the 6 words. The token is kept in
   the page's storage for its origin. List: Needs you first, then each workspace. Conversation: `#pane=<id>` (the back
   button works), Load earlier, tool chips, screen text. Cards: Allow / Deny and the picker question (a Claude set of
   questions uses the full set from the log, else "answer on the Mac"). Composer only for `input` devices, off while a

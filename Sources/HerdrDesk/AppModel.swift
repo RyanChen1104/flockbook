@@ -186,17 +186,15 @@ final class AppModel {
     }
 
     /// The tool call the pane's log ends with, still without a result (the approval card's request).
-    func pendingToolUseId(_ pane: Pane) -> String? {
-        store.conversation(for: pane.agent?.sessionId).reversed().lazy.compactMap { item -> PermissionRequest? in
-            if case .permissionRequest(let r) = item.kind { return r }
-            return nil
-        }.first.flatMap { $0.state == .pending ? $0.toolUseId : nil }
+    func pendingRequest(_ pane: Pane) -> PermissionRequest? {
+        ApprovalNotice.pendingRequest(in: store.conversation(for: pane.agent?.sessionId))
     }
+    func pendingToolUseId(_ pane: Pane) -> String? { pendingRequest(pane)?.toolUseId }
 
     /// Read-only: the blocked pane's state for the notification buttons (reads its visible screen).
     func approvalState(_ pane: Pane) async -> ApprovalNotice.PaneState? {
         guard let a = pane.agent else { return nil }
-        return await store.client.approvalState(paneId: pane.id, agentKind: a.kind, blocked: a.status == .blocked, pendingToolUseId: pendingToolUseId(pane))
+        return await store.client.approvalState(paneId: pane.id, agentKind: a.kind, blocked: a.status == .blocked, pending: pendingRequest(pane))
     }
 
     /// The pane and prompt a new "needs you" notification may answer with Allow / Deny. Nil: no buttons. Read-only.
@@ -229,9 +227,20 @@ final class AppModel {
         noticeLog.info("action \(action, privacy: .public) pane \(paneID, privacy: .public) bound \(prompt ?? "none", privacy: .public) now \(now.flatMap { ApprovalNotice.prompt($0, writes: self.writesEnabled) } ?? "none", privacy: .public) -> \(String(describing: outcome), privacy: .public)")
         switch outcome {
         case .send(let allow):
-            guard let pane else { return false }
-            promptVisible.insert(pane.id)   // just read from the screen
-            approve(pane: pane, allow: allow)
+            guard let pane, let a = pane.agent, let prompt else { return false }
+            // Once more right before the keys: the same rule as the hub (`respondIfOpen`).
+            let sent = (try? await store.client.respondIfOpen(paneId: pane.id, prompt: prompt, allow: allow, agentKind: a.kind,
+                                                               blocked: a.status == .blocked, pending: pendingRequest(pane))) == true
+            noticeLog.info("action \(action, privacy: .public) pane \(paneID, privacy: .public) keys \(sent ? "sent" : "not sent: prompt changed", privacy: .public)")
+            guard sent else { return false }
+            promptVisible.insert(pane.id)
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                await store.refresh()
+                let still = store.workspaces.flatMap(\.tabs).flatMap(\.panes).first { $0.id == pane.id }?.agent?.status == .blocked
+                if still { notice = "Status did not change. Open the terminal to check."; showTerminal = true }
+                await checkPrompt(for: pane)
+            }
             return true
         case .open:
             return false

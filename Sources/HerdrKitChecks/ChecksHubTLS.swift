@@ -65,6 +65,8 @@ final class PinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     let fromPEM = try HubTLS.fromPEM(cert: dir.appendingPathComponent("cert.pem"), key: dir.appendingPathComponent("key.pem"),
                                      into: dir.appendingPathComponent("ts"))
     check(fromPEM.fingerprint == id.fingerprint, "tls: an outside PEM pair (tailscale cert) gives the same certificate")
+    // The page address must use the certificate's tailnet name, else the browser warns even with a real certificate.
+    check(fromPEM.tailnetName == "mac.example.ts.net", "tls: a PEM pair names its tailnet host (\(fromPEM.tailnetName ?? "nil"))")
     // An EC pair with explicit curve parameters (LibreSSL's default) would crash the in-memory import: refused first.
     let ex = dir.appendingPathComponent("explicit")
     try FileManager.default.createDirectory(at: ex, withIntermediateDirectories: true)

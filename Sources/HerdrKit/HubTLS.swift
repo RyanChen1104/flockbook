@@ -7,8 +7,12 @@ import Network
 public struct HubIdentity: @unchecked Sendable {
     public let identity: SecIdentity
     public let certificateDER: Data
-    /// SHA-256 of the certificate, lowercase hex. The QR code carries it; clients pin it.
+    /// SHA-256 of the certificate, lowercase hex. The QR link carries it. A browser cannot pin it (the browser owns
+    /// TLS), so for the PWA it is for reference only; a native client pins it.
     public let fingerprint: String
+    /// The certificate's `*.ts.net` name (a `tailscale cert` pair). The page address uses it, so the browser accepts
+    /// the certificate without a warning. Nil for the self-signed certificate.
+    public var tailnetName: String? = nil
 }
 
 /// Certificates for the hub. A self-signed one is made with the system `/usr/bin/openssl` (no dependency); a
@@ -53,7 +57,18 @@ public enum HubTLS {
         try openssl(["pkcs12", "-export", "-inkey", key.path, "-in", cert.path, "-out", p12.path, "-passout", "pass:\(p12Password)",
                      "-certpbe", "PBE-SHA1-3DES", "-keypbe", "PBE-SHA1-3DES", "-macalg", "sha1"])
         try lock([p12])
-        return try importP12(Data(contentsOf: p12))
+        var id = try importP12(Data(contentsOf: p12))
+        id.tailnetName = tailnetName(certText: text)
+        return id
+    }
+
+    /// The first `DNS:<name>.ts.net` in `openssl x509 -text` output.
+    static func tailnetName(certText: String) -> String? {
+        for part in certText.split(whereSeparator: { $0 == "," || $0.isWhitespace }) where part.hasPrefix("DNS:") {
+            let name = part.dropFirst(4).lowercased()
+            if name.hasSuffix(".ts.net"), !name.contains("*"), name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }) { return name }
+        }
+        return nil
     }
 
     /// The identity stored in `dir`, or nil when there is none.

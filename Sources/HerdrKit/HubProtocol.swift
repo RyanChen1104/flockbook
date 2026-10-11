@@ -50,6 +50,26 @@ public enum Hub {
         return HubApproval(id: id, tool: r.toolName, title: r.title, command: r.command, state: .pending)
     }
 
+    public static let maxSendText = 16_000, maxOtherText = 2_000
+    /// Why client text may not be typed, or nil. Text goes to a terminal: control characters would be keys (CR submits,
+    /// ESC starts a sequence, a bracketed-paste end marker escapes a paste). Newline and tab only; no DEL, no C1.
+    public static func inputProblem(_ text: String, limit: Int) -> String? {
+        if text.count > limit { return "Text over \(limit) characters." }
+        for u in text.unicodeScalars where (u.value < 0x20 && u != "\n" && u != "\t") || (0x7f...0x9f).contains(u.value) {
+            return "Text with control character U+\(String(format: "%04X", u.value))."
+        }
+        return nil
+    }
+
+    /// A permission prompt the box parser cannot read (a new layout, options scrolled off): the marker line on a
+    /// blocked agent's screen, or followed by a numbered option. Counted as open, so nothing is typed into it.
+    public static func unreadablePrompt(screen: String, blocked: Bool) -> Bool {
+        let lines = screen.components(separatedBy: "\n")
+        guard let at = lines.lastIndex(where: { $0.contains(PermissionGate.promptMarker) }) else { return false }
+        if blocked { return true }
+        return lines[(at + 1)...].prefix(4).contains { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "❯", with: "").trimmingCharacters(in: .whitespaces).hasPrefix("1.") }
+    }
+
     /// ISO 8601 UTC with milliseconds.
     static func time(_ d: Date?) -> String? {
         guard let d else { return nil }

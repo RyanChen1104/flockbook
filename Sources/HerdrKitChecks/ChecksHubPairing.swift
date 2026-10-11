@@ -36,7 +36,7 @@ import Foundation
 
     // Wrong guesses end the offer.
     let o4 = pairing.offer()
-    for i in 0..<HubPairing.maxTries { _ = pairing.redeem("wrong guess \(i)", name: "x") }
+    for i in 0..<HubPairing.maxTries { _ = pairing.redeem("wrong guess \(i)", name: "x", source: "peer-\(i)") }
     check(pairing.open == nil && pairing.redeem(o4.secret, name: "Right") == nil, "pairing: \(HubPairing.maxTries) wrong tries end the offer")
     let o5 = pairing.offer()
     _ = pairing.redeem("nope", name: "x")

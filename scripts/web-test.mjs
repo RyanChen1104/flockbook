@@ -204,7 +204,7 @@ async function fakeRun() {
   await fresh.goto(`${origin}/#pair=${info.pairSecret}&fp=${info.fingerprint}`);
   check(await fresh.until("!!document.querySelector('#pair-go') && !document.querySelector('#pair-words')") === true, "pair: QR link -> no words needed");
   check(await fresh.eval("location.hash") === "", "pair: secret removed from the address bar");
-  check((await fresh.eval(text)).includes(info.fingerprint.slice(0, 16)), "pair: certificate fingerprint shown to compare");
+  check((await fresh.eval(text)).includes(info.fingerprint.slice(0, 16)), "pair: certificate fingerprint shown for reference");
   await fresh.type("#pair-name", "Test phone");
   await fresh.click("#pair-go");
   check(await fresh.until("!!document.querySelector('.list')") === true, "pair: paired -> agent list");

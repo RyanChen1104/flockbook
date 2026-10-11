@@ -54,9 +54,15 @@ The hub checks every input against the pane as it is **now**, read again when th
 **approve.** 
 The hub re-reads the pane when `approve` arrives (`ApprovalNotice.outcome`). It sends the approval card's input only when the prompt with that id is still open and input is allowed. Otherwise it sends nothing and replies `stale` (or `readOnly`). The id is the one `ApprovalNotice.prompt` gives: the log's pending tool call id, or `screen-<hash>` of the prompt box when the log has none. The notification buttons, the in-app card and remote clients all use this same id.
 
+The log can lag the screen. So when a prompt box is on screen, the id must be the screen id, or the log id only when the log's pending call is that box (same tool, same command, spaces aside). A client that holds an older log id gets `stale` while the screen shows another prompt. The hub reads the pane once more right before the keys go out and sends nothing if the prompt changed in between (`stale`). The Mac notification path uses the same two checks.
+
+A screen that shows a permission prompt the hub cannot read (the marker line, but no prompt box it can parse) counts as an open prompt: `approve` replies `stale` (no id matches), `send` replies `promptOpen`. The hub fails closed.
+
 **answer.** The hub reads the open question again (Claude: the picker on screen; Codex: the pending question in the log). It answers only when that question's id equals `question`. Otherwise it replies `stale`. Only a picker question can be answered from a client (`delivery: "picker"`, as in the app); a `message` question replies `failed`. Claude shows one question of a set at a time (`headers` names all of them). The hub then reads the others first (navigation keys only, as the app card does) and needs one answer per question; a different count replies `failed` and nothing is chosen.
 
-**send.** When the pane has an open prompt (an approval or a question), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends.
+**send.** Only to an agent pane: a plain shell replies `readOnly` (shell input stays off remotely). When the pane has an open prompt (an approval, a question, or a prompt the hub cannot read), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends.
+
+**Text rules (send, and each `other` of answer).** At most 16,000 characters for `send` and 2,000 for `other`. No control characters except line feed and tab: no ESC (so no bracketed-paste markers or key sequences), no CR, no other C0, no DEL, no C1 (U+0080–U+009F). A breach replies `badRequest` and sends nothing.
 
 Order of checks for all three: device level and the app-wide "Allow input" (`readOnly`), the pane exists (`notFound`), then the rule above.
 
@@ -66,12 +72,16 @@ The hub owner starts pairing on the hub. The hub then holds **one offer**: a sec
 
 - lasts 5 minutes;
 - is single use: a good `pair` ends it;
-- ends after 5 wrong `pair` messages (on any connection), and every wrong `pair` closes its connection;
+- every wrong `pair` closes its connection;
+- refuses a source (the peer address) after 3 wrong `pair` messages from it, even with the right secret after that, so one peer cannot use up the owner's offer;
+- ends after 20 wrong `pair` messages in all;
 - is replaced by a new offer.
 
 A good `pair` adds a device with level `read`. Input is turned on per device on the hub. The hub stores only the SHA-256 of the token, the device id, name, level and pair date. The token is shown once, in `paired`; the client keeps it and sends `hello` with it, on this connection or a new one.
 
-The QR code holds a link: `<hub URL>/#pair=<secret>&fp=<certificate SHA-256>`. Both values are in the fragment, which a browser never sends to a server.
+The QR code holds a link: `<hub URL>/#pair=<secret>&fp=<certificate SHA-256>`. Both values are in the fragment, which a browser never sends to a server. A browser cannot pin `fp` (the browser owns TLS; the page cannot see the certificate), so the PWA shows it for reference only. A native client pins it.
+
+Revoking a device on the hub closes that device's open connections at once (close 1008).
 
 ## 4. Hub to client
 

@@ -28,7 +28,8 @@ import Foundation
     }
     func screen(pane: String) async -> String? { screens[pane] }
     func send(pane: String, text: String) async -> Bool { sent.append("\(pane) \(text)"); return sendOK }
-    func approve(pane: String, allow: Bool) async { approved.append("\(pane) \(allow)") }
+    var approveOK = true
+    func approve(pane: String, prompt: String, allow: Bool) async -> Bool { approved.append("\(pane) \(prompt) \(allow)"); return approveOK }
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws {
         answered.append("\(pane) \(question.toolUseId) \(answers.map(\.picks))")
     }
@@ -171,7 +172,7 @@ import Foundation
         let stale = await s.receive(msg(#"{"v":1,"type":"approve","id":"c2","pane":"w1:p1","prompt":"toolu_old","allow":true}"#))
         check(code(stale) == .stale && b.approved.isEmpty, "hub session: approve with another id -> stale, nothing sent")
         let ok = await s.receive(msg(#"{"v":1,"type":"approve","id":"c3","pane":"w1:p1","prompt":"\#(pushed?.id ?? "")","allow":false}"#))
-        check(reply(ok)?.ok == true && b.approved == ["w1:p1 false"], "hub session: approve with the open id -> the card's path (deny)")
+        check(reply(ok)?.ok == true && b.approved == ["w1:p1 \(pushed?.id ?? "") false"], "hub session: approve with the open id -> the card's path (deny)")
         b.screens["w1:p1"] = "Running…"
         let gone = await s.receive(msg(#"{"v":1,"type":"approve","id":"c4","pane":"w1:p1","prompt":"\#(pushed?.id ?? "")","allow":true}"#))
         check(code(gone) == .stale && b.approved.count == 1, "hub session: prompt gone -> stale")

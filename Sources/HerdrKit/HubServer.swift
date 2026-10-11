@@ -35,7 +35,10 @@ import Network
     public static let maxConnections = 64
 
     private var listener: NWListener?
-    private var conns: [ObjectIdentifier: Conn] = [:]
+    /// Keyed by a number never used twice: a late callback of a closed connection finds nothing, so it can never
+    /// touch a newer connection (an object address, by contrast, is reused once the old connection is freed).
+    private var conns: [Int: Conn] = [:]
+    private var lastID = 0
     private let queue = DispatchQueue(label: "hub.server")
 
     private let assets: HubWeb.Assets
@@ -88,6 +91,12 @@ import Network
         return bound
     }
 
+    /// Closes the connections of devices that were removed (call after a revoke), at once rather than on their next
+    /// message or push.
+    public func dropRevoked() {
+        for c in conns.values where c.session.revoked { finish(c, WebSocketFrames.close(1008)) }
+    }
+
     public func stop() {
         listener?.cancel()
         listener = nil
@@ -100,6 +109,7 @@ import Network
 
     private final class Conn {
         enum Mode { case head(Data), socket(WebSocketFrames), done }
+        let id: Int
         let nw: NWConnection
         let session: HubSession
         var mode: Mode = .head(Data())
@@ -107,7 +117,7 @@ import Network
         var ticker: Task<Void, Never>?
         var deadline: Task<Void, Never>?
         var closed = false
-        init(nw: NWConnection, session: HubSession) { self.nw = nw; self.session = session }
+        init(id: Int, nw: NWConnection, session: HubSession) { self.id = id; self.nw = nw; self.session = session }
         var isSocket: Bool { if case .socket = mode { true } else { false } }
         func close() {
             guard !closed else { return }
@@ -123,8 +133,9 @@ import Network
         // Unpaired connections cost nothing to open: hold only a few at once.
         let pending = conns.values.filter { $0.session.device == nil }.count
         guard pending < Self.maxPending, conns.count < Self.maxConnections else { nw.cancel(); return }
-        let c = Conn(nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing))
-        let key = ObjectIdentifier(c)
+        lastID += 1
+        let c = Conn(id: lastID, nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing, source: Self.source(nw)))
+        let key = c.id
         conns[key] = c
         nw.stateUpdateHandler = { [weak self] state in
             switch state {
@@ -150,11 +161,17 @@ import Network
         }
     }
 
-    private func drop(_ key: ObjectIdentifier) {
+    /// The peer's address without the port (wrong pairing tries are counted per address).
+    private static func source(_ nw: NWConnection) -> String {
+        if case .hostPort(let host, _) = nw.endpoint { return "\(host)" }
+        return "\(nw.endpoint)"
+    }
+
+    private func drop(_ key: Int) {
         conns.removeValue(forKey: key)?.close()
     }
 
-    private func receive(_ key: ObjectIdentifier) {
+    private func receive(_ key: Int) {
         guard let c = conns[key] else { return }
         c.nw.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, end, error in
             Task { @MainActor in
@@ -165,7 +182,7 @@ import Network
         }
     }
 
-    private func take(_ data: Data, _ key: ObjectIdentifier) {
+    private func take(_ data: Data, _ key: Int) {
         guard let c = conns[key] else { return }
         switch c.mode {
         case .done:
@@ -187,7 +204,7 @@ import Network
         }
     }
 
-    private func request(_ head: HTTPHead, rest: Data, _ c: Conn, _ key: ObjectIdentifier) {
+    private func request(_ head: HTTPHead, rest: Data, _ c: Conn, _ key: Int) {
         guard head.method == "GET" || head.method == "HEAD" else { finish(c, HTTPHead.response("405 Method Not Allowed", extra: [("Allow", "GET")])); return }
         if head.header("upgrade")?.lowercased() == "websocket" {
             guard head.path == "/ws" else { finish(c, HTTPHead.response("404 Not Found")); return }
@@ -209,7 +226,7 @@ import Network
         finish(c, head.method == "HEAD" ? full.prefix(full.count - f.body.count) : full)
     }
 
-    private func handle(_ events: [WebSocketFrames.Event], _ key: ObjectIdentifier) {
+    private func handle(_ events: [WebSocketFrames.Event], _ key: Int) {
         guard let c = conns[key] else { return }
         for e in events {
             switch e {
@@ -224,7 +241,7 @@ import Network
     /// Writes the last bytes of a connection, then closes it.
     private func finish(_ c: Conn, _ data: Data) {
         c.mode = .done
-        let key = ObjectIdentifier(c)
+        let key = c.id
         c.nw.send(content: data, completion: .contentProcessed { [weak self] _ in Task { @MainActor in self?.drop(key) } })
     }
 
@@ -233,7 +250,7 @@ import Network
     }
 
     /// Runs one session step after the previous one, sends its messages, and closes when the session closed.
-    private func serially(_ key: ObjectIdentifier, _ step: @escaping @MainActor (Conn) async -> [HubMessage]) {
+    private func serially(_ key: Int, _ step: @escaping @MainActor (Conn) async -> [HubMessage]) {
         guard let c = conns[key] else { return }
         let prev = c.chain
         c.chain = Task { @MainActor [weak self] in

@@ -6,21 +6,25 @@ import Network
 func rawExchange(port: UInt16, _ bytes: [Data], seconds: Double = 1.5) async -> Data {
     let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
     let q = DispatchQueue(label: "raw")
-    final class Box: @unchecked Sendable { var data = Data(); var done = false }
+    final class Box: @unchecked Sendable { var data = Data(); var done = false; var how = "timeout" }
     let box = Box()
+    let t0 = ContinuousClock.now
     c.start(queue: q)
     for b in bytes { c.send(content: b, completion: .idempotent) }
     func read() {
         c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { d, _, end, err in
-            q.async { if let d { box.data.append(d) }; if end || err != nil { box.done = true } else { read() } }
+            q.async { if let d { box.data.append(d) }; if end || err != nil { box.done = true; box.how = "end=\(end) err=\(String(describing: err)) after \(ContinuousClock.now - t0)" } else { read() } }
         }
     }
     read()
     let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
     while ContinuousClock.now < deadline { if q.sync(execute: { box.done }) { break }; try? await Task.sleep(for: .milliseconds(20)) }
     c.cancel()
+    lastHow = q.sync { box.how }
     return q.sync { box.data }
 }
+/// How the last `rawExchange` read ended (for failure messages).
+nonisolated(unsafe) var lastHow = ""
 
 /// A masked client frame.
 func clientFrame(_ opcode: UInt8, _ payload: Data, fin: Bool = true, mask: Bool = true) -> Data {
@@ -95,12 +99,12 @@ let upgradeHead = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n
     check(rawText.contains("\"welcome\"") && rawText.contains("\"snapshot\""), "ws: a fragmented hello is answered")
     check(raw.range(of: Data([0x8a, 0x02]) + Data("hi".utf8)) != nil, "ws: ping gets pong with the same payload")
     let unmasked = await rawExchange(port: port, [Data((upgradeHead + "\r\n").utf8), clientFrame(1, hello, mask: false)])
-    check(unmasked.range(of: Data([0x88, 0x02, 0x03, 0xea])) != nil, "ws: unmasked client frame -> close 1002")
+    check(unmasked.range(of: Data([0x88, 0x02, 0x03, 0xea])) != nil, "ws: unmasked client frame -> close 1002 (\(unmasked.count) bytes, \(lastHow))")
     let cross = String(decoding: await rawExchange(port: port, [Data((upgradeHead + "Origin: https://evil.example\r\n\r\n").utf8)]), as: UTF8.self)
     check(cross.hasPrefix("HTTP/1.1 403"), "ws: a foreign Origin is refused (403)")
     let same = String(decoding: await rawExchange(port: port, [Data((upgradeHead + "Origin: https://127.0.0.1\r\n\r\n").utf8)]), as: UTF8.self)
     check(same.hasPrefix("HTTP/1.1 101"), "ws: the hub's own Origin is accepted")
     let wrongPath = String(decoding: await rawExchange(port: port, [Data(upgradeHead.replacingOccurrences(of: "/ws", with: "/x").appending("\r\n").utf8)]), as: UTF8.self)
-    check(wrongPath.hasPrefix("HTTP/1.1 404"), "ws: upgrade only on /ws")
+    check(wrongPath.hasPrefix("HTTP/1.1 404"), "ws: upgrade only on /ws (got \(wrongPath.isEmpty ? "nothing" : String(wrongPath.prefix(40)).debugDescription), \(lastHow))")
     server.stop()
 }

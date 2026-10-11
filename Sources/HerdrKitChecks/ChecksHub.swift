@@ -102,7 +102,7 @@ import Foundation
     let noLog = ApprovalNotice.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: nil, screen: screen)
     let a1 = Hub.openApproval(noLog, logged: nil)
     check(a1 != nil && a1?.id == ApprovalNotice.prompt(noLog, writes: true) && a1?.command == "npm run build" && a1?.tool == "Bash", "hub: screen-only approval has the notification's id")
-    var withLog = noLog; withLog.pendingToolUseId = "toolu_9"
+    var withLog = noLog; withLog.pendingToolUseId = "toolu_9"; withLog.pendingTool = "Bash"; withLog.pendingCommand = "npm run build"
     let logged = PermissionRequest(title: "Wants to run a command", command: "npm run build", toolName: "Bash", toolUseId: "toolu_9")
     let a2 = Hub.openApproval(withLog, logged: logged)
     check(a2?.id == "toolu_9" && a2?.id == ApprovalNotice.prompt(withLog, writes: true) && a2?.title == "Wants to run a command", "hub: logged approval has the notification's id")

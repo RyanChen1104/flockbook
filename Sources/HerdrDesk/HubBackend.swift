@@ -29,12 +29,15 @@ import Foundation
     }
 
     /// The approval card's keys, without its UI follow-up (the Mac window does not change for a phone action).
-    func approve(pane id: String, allow: Bool) async {
-        guard model.writesEnabled else { return }
-        try? await store.client.respond(to: id, allow: allow)
+    /// Re-reads the pane right before the keys (`respondIfOpen`): false, and nothing sent, when the prompt changed.
+    func approve(pane id: String, prompt: String, allow: Bool) async -> Bool {
+        guard model.writesEnabled, let p = pane(id), let a = p.agent else { return false }
+        guard (try? await store.client.respondIfOpen(paneId: id, prompt: prompt, allow: allow, agentKind: a.kind,
+                                                    blocked: a.status == .blocked, pending: model.pendingRequest(p))) == true else { return false }
         try? await Task.sleep(for: .seconds(1))
         await store.refresh()
         if let p = pane(id) { await model.checkPrompt(for: p) }
+        return true
     }
 
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);

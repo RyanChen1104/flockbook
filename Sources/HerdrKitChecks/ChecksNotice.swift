@@ -30,7 +30,8 @@ import Foundation
      ────────────────
        Chat about this
     """
-    let blocked = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1", screen: "old output\n" + prompt)
+    let blocked = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1", screen: "old output\n" + prompt,
+                              pendingTool: "Bash", pendingCommand: "npm run build")
 
     // Which notifications get buttons.
     check(N.prompt(blocked, writes: true) == "toolu_1", "notice: Claude permission prompt gets buttons, bound to the pending call")
@@ -128,7 +129,8 @@ import Foundation
         defer { fake.kill() }
         let client = HerdrClient(session: HerdrSession(name: "fake", socketPath: fake.path))
         fake.screen = prompt
-        let st = await client.approvalState(paneId: "w1:p1", agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1")
+        let st = await client.approvalState(paneId: "w1:p1", agentKind: "claude", blocked: true,
+                                               pending: PermissionRequest(title: "Bash", command: "npm run build", toolName: "Bash", toolUseId: "toolu_1"))
         check(st?.screen.contains("Do you want to proceed?") == true, "notice: state read from the pane's visible screen")
         check(fake.requests.allSatisfy { $0.method == "pane.read" } && !fake.requests.isEmpty, "notice: reading the state only reads (\(fake.requests.map(\.method)))")
         let n0 = fake.requests.count
@@ -145,7 +147,8 @@ import Foundation
         check(denied.count == 1 && denied.first?.method == "pane.send_keys" && denied.first?.params["keys"] as? [String] == [ApprovalKeys.deny],
               "notice: Deny sends the card's deny input (Escape)")
         fake.screen = "Running tests…"
-        let stale = await client.approvalState(paneId: "w1:p1", agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1")
+        let stale = await client.approvalState(paneId: "w1:p1", agentKind: "claude", blocked: true,
+                                               pending: PermissionRequest(title: "Bash", command: "npm run build", toolName: "Bash", toolUseId: "toolu_1"))
         check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: "toolu_1", now: stale, writes: true) == .open, "notice: screen changed after posting -> open")
     }
 }

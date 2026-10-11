@@ -23,19 +23,29 @@ public enum ApprovalNotice {
         /// The tool call the log ends with, still without a result.
         public var pendingToolUseId: String?
         public var screen: String
-        public init(agentKind: String, blocked: Bool, pendingToolUseId: String?, screen: String) {
+        /// The pending call's tool and command, to match it with the prompt box on screen.
+        public var pendingTool: String?
+        public var pendingCommand: String?
+        public init(agentKind: String, blocked: Bool, pendingToolUseId: String?, screen: String, pendingTool: String? = nil, pendingCommand: String? = nil) {
             self.agentKind = agentKind; self.blocked = blocked; self.pendingToolUseId = pendingToolUseId; self.screen = screen
+            self.pendingTool = pendingTool; self.pendingCommand = pendingCommand
         }
     }
 
-    /// The ids of the prompt the pane shows now: the log's pending tool call and the prompt box on screen. Empty: no
-    /// buttons. The screen id covers a Claude that keeps no transcript and a log that lags the screen.
+    /// The ids of the prompt the pane shows now. Empty: no buttons. Always the prompt box on screen; the log's pending
+    /// tool call too, but only when it is that box (same tool, same command): a log that lags the screen still names
+    /// the previous call, and its id must never answer the next prompt. The screen id covers a Claude without a transcript.
     static func promptIDs(_ s: PaneState, writes: Bool) -> [String] {
         guard writes, s.blocked, s.agentKind == "claude",
               QuestionAdapter.claudeScreen(s.screen) == nil,
-              let onScreen = screenPrompt(s.screen) else { return [] }
-        return [s.pendingToolUseId, onScreen].compactMap { $0.flatMap { $0.isEmpty ? nil : $0 } }
+              let box = screenBox(s.screen), let onScreen = screenPrompt(s.screen) else { return [] }
+        guard let logged = s.pendingToolUseId, !logged.isEmpty, let tool = s.pendingTool, let command = s.pendingCommand,
+              tool == box.tool, words(command) == words(box.command), !words(command).isEmpty else { return [onScreen] }
+        return [logged, onScreen]
     }
+
+    /// Whitespace-insensitive: the box wraps and indents a long command.
+    private static func words(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     /// The prompt a notification's buttons answer: the pending tool call's id, else the prompt on screen. Nil: no buttons.
     public static func prompt(_ s: PaneState, writes: Bool) -> String? { promptIDs(s, writes: writes).first }
@@ -115,9 +125,25 @@ public enum ApprovalNotice {
 }
 
 extension HerdrClient {
+    /// The approval card's input, sent only if `prompt` is still open: the pane is read again right before the keys.
+    /// False: nothing sent. The notification buttons and the hub both answer through this.
+    public func respondIfOpen(paneId: String, prompt: String, allow: Bool, agentKind: String, blocked: Bool, pending: PermissionRequest?) async throws -> Bool {
+        let action = (allow ? ApprovalNotice.Action.allow : .deny).rawValue
+        guard let now = await approvalState(paneId: paneId, agentKind: agentKind, blocked: blocked, pending: pending),
+              ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: true) == .send(allow: allow) else { return false }
+        try await respond(to: paneId, allow: allow)
+        return true
+    }
+
     /// Read-only: the pane's state for `ApprovalNotice`, with its visible screen. Nil when the screen cannot be read.
     public func approvalState(paneId: String, agentKind: String, blocked: Bool, pendingToolUseId: String?) async -> ApprovalNotice.PaneState? {
         guard let screen = try? await visibleText(paneId: paneId) else { return nil }
         return .init(agentKind: agentKind, blocked: blocked, pendingToolUseId: pendingToolUseId, screen: screen)
+    }
+    /// The same, with the log's pending call (its tool and command are matched with the prompt box).
+    public func approvalState(paneId: String, agentKind: String, blocked: Bool, pending: PermissionRequest?) async -> ApprovalNotice.PaneState? {
+        guard let screen = try? await visibleText(paneId: paneId) else { return nil }
+        return .init(agentKind: agentKind, blocked: blocked, pendingToolUseId: pending?.toolUseId, screen: screen,
+                     pendingTool: pending?.toolName, pendingCommand: pending?.command)
     }
 }
