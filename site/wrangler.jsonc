@@ -1,0 +1,13 @@
+// Deploys the static site (build/, from `npm run build`) as a Cloudflare Worker with static assets.
+// `custom_domain: true` creates the flockbook.mclee.dev DNS record and certificate on deploy.
+{
+  "name": "flockbook-site",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./build",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "flockbook.mclee.dev", "custom_domain": true }
+  ]
+}
