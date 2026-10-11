@@ -60,20 +60,36 @@ extension SnapshotRunner {
             let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
             step("saved \(path) (\(bytes / 1024) KB)", bytes > 10_000)
         }
-        /// Scrolls the top conversation up in small steps until no message text runs under the floating tab island.
+        /// Keeps message text out from under the floating tab island. One pane: scroll up in small steps until the band
+        /// beside and under the island is clear. A split tab: every pane starts at the top of its conversation, so no
+        /// text sits beside a pane header either.
         func clearIsland(_ what: String) async {
             func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
-            let top = scrollViews(host).filter { sv in
+            let panes = scrollViews(host).filter { sv in
                 let r = sv.convert(sv.bounds, to: nil)
-                return r.width > 600 && r.maxY > win.frame.height - 80 && (sv.documentView?.frame.height ?? 0) > r.height
+                return r.width > 600 && (sv.documentView?.frame.height ?? 0) > r.height
+            }
+            func scroll(_ sv: NSScrollView, to y: CGFloat) {
+                sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.origin.x, y: y)); sv.reflectScrolledClipView(sv.contentView)
+            }
+            if panes.count > 1 {
+                // The highest origin the clip view allows (the top inset puts it above 0).
+                func topY(_ sv: NSScrollView) -> CGFloat {
+                    var r = sv.contentView.bounds; r.origin.y = -100_000
+                    return sv.contentView.constrainBoundsRect(r).origin.y
+                }
+                for sv in panes { scroll(sv, to: topY(sv)) }
+                try? await Task.sleep(for: .milliseconds(600))
+                for sv in panes { scroll(sv, to: topY(sv)) }   // again, after lazy rows above settle
+                try? await Task.sleep(for: .milliseconds(400))
+                step("\(what): \(panes.count) panes at the top, text clear of the tab island", islandClear(win))
+                return
             }
             var d: CGFloat = 0
             while !islandClear(win) {
-                guard let sv = top.first, d < 480 else { step("\(what): text clear of the tab island", false); return }
-                let clip = sv.contentView
+                guard let sv = panes.first, d < 480 else { step("\(what): text clear of the tab island", false); return }
                 d += 8
-                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: clip.bounds.origin.y + (clip.isFlipped ? -8 : 8)))
-                sv.reflectScrolledClipView(clip)
+                scroll(sv, to: sv.contentView.bounds.origin.y - 8)
                 try? await Task.sleep(for: .milliseconds(120))
             }
             step("\(what): text clear of the tab island (scrolled up \(Int(d)) pt)", true)
