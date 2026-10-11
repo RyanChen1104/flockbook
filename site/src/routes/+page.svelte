@@ -91,7 +91,9 @@
 				<dt>Install</dt>
 				<dd>
 					Download the <code>.dmg</code> from
-					{#if links.github}<a href="{links.github}/releases">GitHub Releases</a>{:else}GitHub Releases{/if}
+					{#if links.download}<a href={links.download}>GitHub Releases</a>{:else if links.github}<a
+							href="{links.github}/releases">GitHub Releases</a
+						>{:else}GitHub Releases{/if}
 					and drag Flockbook to Applications. Signed and notarized by Apple. Check the download against
 					<code>SHA256SUMS</code>.
 					<small class="unsigned">

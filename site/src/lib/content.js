@@ -1,6 +1,6 @@
 // Links the owner fills in before launch. null renders a disabled placeholder.
 export const links = {
-	download: null, // e.g. GitHub Releases URL for Flockbook-<version>.dmg
+	download: 'https://github.com/minchenlee/flockbook/releases/latest', // assets: Flockbook-<version>.dmg / .zip
 	github: 'https://github.com/minchenlee/flockbook'
 };
 
