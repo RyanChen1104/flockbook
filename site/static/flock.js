@@ -15,8 +15,8 @@
 		const d = (k + 1) >> 1, side = k % 2 ? -1 : 1;
 		return [cx - d * GAP, cy + side * d * GAP * 0.55];
 	};
-	// Formation weight over one cycle: drift, ease in, hold, ease out.
-	const weight = (p) => (p < 0.3 ? 0 : p < 0.5 ? (p - 0.3) / 0.2 : p < 0.85 ? 1 : 1 - (p - 0.85) / 0.15);
+	// Formation weight over one cycle: drift, ease in, hold, then let go at once (the burst).
+	const weight = (p) => (p < 0.3 ? 0 : p < 0.5 ? (p - 0.3) / 0.2 : p < 0.85 ? 1 : 0);
 
 	function seed() {
 		for (const b of birds) {
@@ -35,8 +35,8 @@
 		});
 	}
 
-	// Once per settle: the bird furthest ahead leads, the rest take slots by distance behind it,
-	// and each pair of the same depth takes wings by height, so the two never cross.
+	// Once per settle: the front bird leads, the rest take slots by distance behind it;
+	// a pair of one depth takes wings by height, so they never cross.
 	function assign() {
 		const order = birds.map((b, i) => i).sort((i, j) => birds[j].x - birds[i].x);
 		for (let k = 1; k < N - 1; k += 2)
@@ -45,12 +45,22 @@
 		placed = true;
 	}
 
+	// Break-up: each bird darts away from the V, then drag slows it to cruise.
+	function burst(cx, cy) {
+		placed = false;
+		for (const b of birds) {
+			const a = Math.atan2((b.y - cy) * 0.35, b.x - cx + GAP) + (Math.random() - 0.5) * 1.8;
+			const v = 220 + Math.random() * 180;
+			b.vx = Math.cos(a) * v; b.vy = Math.sin(a) * v;
+		}
+	}
+
 	function step(dt) {
 		t += dt;
 		const w = weight((t % CYCLE) / CYCLE);
 		const cx = W / 2 + 2.5 * GAP + Math.sin(t * 0.3) * 40, cy = H / 2 + Math.sin(t * 0.7) * 8;
-		if (!w) placed = false;
-		else if (!placed) assign();
+		if (!w && placed) burst(cx, cy);
+		else if (w && !placed) assign();
 		const sep = (GAP * 0.6) ** 2;
 		for (const b of birds) {
 			let ax = 0, ay = 0, n = 0, mx = 0, my = 0, px = 0, py = 0;
@@ -60,12 +70,11 @@
 				if (d2 < 3600) { n++; mx += o.vx; my += o.vy; px += dx; py += dy; }
 				if (d2 < sep && d2 > 0) { ax -= (dx / d2) * 600; ay -= (dy / d2) * 600; }
 			}
-			const f = 1 - w;
+			const f = 1 - w, c = f * Math.min(1, 60 / (Math.hypot(b.vx, b.vy) || 1)); // darting: ignore the flock
 			if (n) {
-				ax += f * ((mx / n - b.vx) * 0.8 + (px / n) * 0.4);
-				ay += f * ((my / n - b.vy) * 0.8 + (py / n) * 0.4);
+				ax += c * ((mx / n - b.vx) * 0.8 + (px / n) * 0.4);
+				ay += c * ((my / n - b.vy) * 0.8 + (py / n) * 0.4);
 			}
-			// Soft walls.
 			if (b.x < 30) ax += f * 40; if (b.x > W - 30) ax -= f * 40;
 			if (b.y < 24) ay += f * 40; if (b.y > H - 24) ay -= f * 40;
 			// Spring to the formation slot.
@@ -73,10 +82,13 @@
 			ax += w * ((tx - b.x) * 8 - b.vx * 4.5);
 			ay += w * ((ty - b.y) * 8 - b.vy * 4.5);
 			b.vx += ax * dt; b.vy += ay * dt;
-			const sp = Math.hypot(b.vx, b.vy), max = 60;
-			if (sp > max) { b.vx *= max / sp; b.vy *= max / sp; }
+			// Above cruise, drag eases speed down (no hard cap).
+			const sp = Math.hypot(b.vx, b.vy), cruise = 60;
+			if (sp > cruise) { const k = Math.max(cruise / sp, Math.exp(-1.1 * dt)); b.vx *= k; b.vy *= k; }
 			if (f && sp < 18) { b.vx += (b.vx / (sp || 1)) * 4; b.vy += (b.vy / (sp || 1)) * 4; }
 			b.x += b.vx * dt; b.y += b.vy * dt;
+			if (b.x < -20) b.x += W + 40; else if (b.x > W + 20) b.x -= W + 40;
+			if ((b.y < 12 && b.vy < 0) || (b.y > H - 12 && b.vy > 0)) b.vy = -b.vy * 0.6; // bounce
 			b.h = Math.atan2(b.vy, b.vx + w * 80);
 		}
 	}

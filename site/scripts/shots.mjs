@@ -72,6 +72,7 @@ for (const width of [1440, 390]) {
 		await page.waitForTimeout(1000);
 		const offscreen = (await draws(page)) - d;
 		await page.locator('.flock').scrollIntoViewIfNeeded();
+		const shown = Date.now(); // the flock's clock starts when the canvas comes on screen
 		await page.waitForTimeout(200);
 		d = await draws(page);
 		await page.waitForTimeout(1000);
@@ -81,9 +82,11 @@ for (const width of [1440, 390]) {
 		if (reducedMotion === 'reduce' ? onscreen > 0 : onscreen < 50) failed = true;
 		const dir = process.env.FLOCK_FRAMES;
 		if (dir && reducedMotion === 'no-preference') {
-			await page.locator('.flock').screenshot({ path: `${dir}/flock-1s.png` });
-			for (const at of [11, 14]) {
-				await page.waitForTimeout(at === 11 ? 10000 : 3000);
+			// Seconds of flock time (approximate); FLOCK_AT overrides, e.g. FLOCK_AT=15,15.5,16.5
+			const times = (process.env.FLOCK_AT ?? '1,11,14').split(',').map(Number);
+			for (const at of times) {
+				const wait = shown + at * 1000 - Date.now();
+				if (wait > 0) await page.waitForTimeout(wait);
 				await page.locator('.flock').screenshot({ path: `${dir}/flock-${at}s.png` });
 			}
 		}
