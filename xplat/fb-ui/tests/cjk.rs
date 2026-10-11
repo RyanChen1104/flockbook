@@ -257,8 +257,13 @@ fn write_gray(rows: &[Vec<u8>], scale: usize, name: &str) {
 
 #[test]
 fn crops_before_and_after_at_2x() {
-    let (mut before, _) = system(false, "en-TW");
     let (mut after, choice) = system(true, "en-TW");
+    if choice.han.is_empty() {
+        // A bare CI runner has no CJK font: there is nothing to draw. The list and region tests still run.
+        eprintln!("skipped: no CJK face installed here ({choice:?})");
+        return;
+    }
+    let (mut before, _) = system(false, "en-TW");
     let rows = vec![line(&mut before, Weight::NORMAL), line(&mut after, Weight::NORMAL), line(&mut before, Weight::BOLD), line(&mut after, Weight::BOLD)];
     // Rows: before regular, after regular, before bold, after bold. 2x pixels, then 3x nearest to see the edges.
     write_gray(&rows, 1, "cjk-before-after-2x");
@@ -268,7 +273,7 @@ fn crops_before_and_after_at_2x() {
         let cjk_ink = (0..LINE).flat_map(|y| (180..WIDTH).map(move |x| (x, y))).filter(|&(x, y)| row[y * WIDTH + x] < 128).count();
         assert!(cjk_ink > 1500, "row {i}: CJK ink {cjk_ink}");
     }
-    if cfg!(target_os = "macos") && !choice.han.is_empty() {
+    if cfg!(target_os = "macos") {
         let (b, a) = (hard_edge_share(&rows[0]), hard_edge_share(&rows[1]));
         eprintln!("hard edge share: before {b:.3}, after {a:.3}");
         assert!(a < b * 0.8, "the new face has softer edges: before {b:.3}, after {a:.3}");
