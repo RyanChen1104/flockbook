@@ -224,7 +224,11 @@ Earlier options (kept for reference): `01a-tabs-top.html` (A: sidebar workspaces
 - **Sidebar row:** 28 high, 6 radius, state symbol + label + right-aligned time.
 - **Workspace header:** disclosure chevron + monogram chip + name (semibold) + `+`.
 - **Conversation:** user = right-aligned gray bubble; agent = plain 15-pt prose; work = step chips (`Read 6 files`, `Edited 4 files +128 −12`, `Ran 2 commands`); plan = card with progress bar and 5 icon steps.
-- **Approval card (e2):** orange icon tile + one-line question + command chip + Deny (secondary) / Allow (accent) + "Always allow …" checkbox + `⌘↩ Allow · Esc Deny`.
+- **Approval card (e2):** orange icon tile + one-line question + command chip + Deny (secondary) / Allow (accent) + "Always allow …" checkbox.
+  - The chip shows the command. When the Bash call has a description, the chip shows it on a second line, in caption style, under the command.
+  - No keyboard shortcuts and no shortcut hint. Allow, Deny and Always allow work by click only. (Same as the Swift app. The earlier `⌘↩ Allow · Esc Deny` hint is removed.)
+  - **Mismatch state:** when the card cannot prove that the prompt on screen is this request, Deny and Allow are off and a caption in the accent orange says "The prompt on screen differs from this request — open the terminal". The card never sends a key in this state.
+  - Edit, Write, WebFetch, MCP and other non-Bash calls, and parallel calls (more than one call still open), always use the mismatch state.
 - **Composer (e2):** placeholder `Reply to <agent>`, `+`, model menu, shield, mic, round send button. Under it: branch + **Show terminal**.
 
 ## 9. Materials (r3.2: frosted glass)
