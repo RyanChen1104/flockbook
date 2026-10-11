@@ -14,7 +14,7 @@ TARGET="${1:-build/Flockbook.app}"
 PROFILE="${NOTARY_PROFILE:-flockbook}"
 
 [ -e "$TARGET" ] || { echo "missing: $TARGET (run scripts/bundle.sh)"; exit 1; }
-codesign -dv "$TARGET" 2>&1 | grep -q 'Authority=Developer ID Application' \
+codesign -dvv "$TARGET" 2>&1 | grep -q 'Authority=Developer ID Application' \
   || { echo "not Developer ID signed: $TARGET"; exit 1; }
 
 if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
