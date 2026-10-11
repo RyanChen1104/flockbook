@@ -64,10 +64,10 @@ for (const width of [1440, 390]) {
 		CanvasRenderingContext2D.prototype.clearRect = function (...a) { window.__draws++; return clear.apply(this, a); };
 	};
 	const draws = (page) => page.evaluate(() => window.__draws);
-	for (const [mode, reducedMotion] of [['ascii', 'no-preference'], ['ascii', 'reduce'], ['dots', 'no-preference'], ['dots', 'reduce']]) {
+	for (const reducedMotion of ['no-preference', 'reduce']) {
 		const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion });
 		await page.addInitScript(count);
-		await page.goto(`${url}?flock=${mode}`, { waitUntil: 'networkidle' });
+		await page.goto(url, { waitUntil: 'networkidle' });
 		let d = await draws(page);
 		await page.waitForTimeout(1000);
 		const offscreen = (await draws(page)) - d;
@@ -77,11 +77,11 @@ for (const width of [1440, 390]) {
 		d = await draws(page);
 		await page.waitForTimeout(1000);
 		const onscreen = (await draws(page)) - d;
-		console.log(`flock ${mode} (${reducedMotion}): draws/s offscreen ${offscreen}, on screen ${onscreen}`);
+		console.log(`flock (${reducedMotion}): draws/s offscreen ${offscreen}, on screen ${onscreen}`);
 		if (offscreen > 0) failed = true;
 		if (reducedMotion === 'reduce' ? onscreen > 0 : onscreen < 50) failed = true;
 		const dir = process.env.FLOCK_FRAMES;
-		if (dir && reducedMotion === 'no-preference' && mode === 'ascii') {
+		if (dir && reducedMotion === 'no-preference') {
 			// Seconds of flock time (approximate); FLOCK_AT overrides, e.g. FLOCK_AT=15,15.5,16.5
 			const times = (process.env.FLOCK_AT ?? '1,11,14').split(',').map(Number);
 			for (const at of times) {
@@ -94,13 +94,12 @@ for (const width of [1440, 390]) {
 	}
 }
 
-// Flock frames for both draw modes on a fake clock (exact flock time): drifting, in the V, breaking up.
-for (const mode of ['ascii', 'dots'])
-	for (const width of [1440, 390])
+// Flock frames on a fake clock (exact flock time): drifting, in the V, breaking up.
+for (const width of [1440, 390])
 		for (const scheme of ['light', 'dark']) {
 			const page = await browser.newPage({ viewport: { width, height: 900 }, colorScheme: scheme });
 			await page.clock.install();
-			await page.goto(`${url}?flock=${mode}`, { waitUntil: 'networkidle' });
+			await page.goto(url, { waitUntil: 'networkidle' });
 			await page.locator('.flock').scrollIntoViewIfNeeded();
 			// The observer that starts the flock fires on a real frame, not on the fake clock.
 			await page.waitForTimeout(300);
@@ -109,7 +108,7 @@ for (const mode of ['ascii', 'dots'])
 			for (const s of [4, 12, 16.5]) {
 				await page.clock.runFor((s - at) * 1000);
 				at = s;
-				await page.locator('.foot').screenshot({ path: `shots/flock-${mode}-${width}-${scheme}-${s}s.png` });
+				await page.locator('.foot').screenshot({ path: `shots/flock-${width}-${scheme}-${s}s.png` });
 			}
 			await page.close();
 		}
@@ -124,6 +123,8 @@ for (const mode of ['ascii', 'dots'])
 	const slide = await page.evaluate(() => { const t = document.querySelector('.track'); return Math.round(t.scrollLeft / t.clientWidth) + 1; });
 	console.log(`no JS: dot 3 -> slide ${slide}`);
 	await page.locator('.foot').screenshot({ path: 'shots/flock-nojs-1440-light.png' });
+	await page.setViewportSize({ width: 390, height: 900 });
+	await page.locator('.foot').screenshot({ path: 'shots/flock-nojs-390-light.png' });
 	if (slide !== 3) failed = true;
 	await ctx.close();
 }

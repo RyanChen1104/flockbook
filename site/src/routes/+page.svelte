@@ -5,8 +5,11 @@
 	let { data } = $props();
 	const slides = data.slides;
 
-	// No-JS footer: the flock's resting V as ASCII, one row per wing step; the leader is row 5.
-	const still = Array.from({ length: 11 }, (_, r) => '\u00a0'.repeat(30 - Math.abs(r - 5) * 5) + '>');
+	// No-JS footer: the flock's resting V as flock.js draws it (slot k, leader 1.35x, facing right).
+	const still = Array.from({ length: 11 }, (_, k) => {
+		const d = (k + 1) >> 1;
+		return { x: -d * 36, y: (k % 2 ? -1 : 1) * d * 20, s: k ? 0.26 : 0.35 };
+	});
 </script>
 
 <svelte:head>
@@ -117,18 +120,26 @@
 </main>
 
 <footer class="foot">
-	<div class="foot-in">
-		<p class="legal">
-			{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not
-			affiliated with, endorsed by, or supported by Herdr, Inc.
-		</p>
-	</div>
-	<div class="flock-box">
-		<canvas class="flock" aria-hidden="true"></canvas>
-		<noscript>
-			<pre class="flock-still" aria-hidden="true">{#each still as row, r}{row.slice(0, -1)}{#if r === 5}<span>&gt;</span
-						>{:else}&gt;{/if}{'\n'}{/each}</pre>
-		</noscript>
+	<div class="card">
+		<div class="flock-box">
+			<canvas class="flock" aria-hidden="true"></canvas>
+			<noscript>
+				<svg class="flock-still" viewBox="-200 -115 224 230" aria-hidden="true">
+					{#each still as b}
+						<g transform="translate({b.x} {b.y}) scale({b.s}) rotate(90)">
+							<path class="fa" d="M-50 12 0-28 0-6Z" /><path class="fb" d="M0-28 50 12 0-6Z" />
+						</g>
+					{/each}
+				</svg>
+			</noscript>
+		</div>
+		<div class="meta">
+			<p><strong>Flockbook</strong> for Herdr</p>
+			<p>
+				{#if links.github}<a href={links.github}>GitHub</a>{' · '}{/if}MIT License · Unofficial. Not affiliated
+				with, endorsed by, or supported by Herdr, Inc.
+			</p>
+		</div>
 	</div>
 </footer>
 
@@ -375,17 +386,34 @@
 		background: var(--fg);
 	}
 
-	/* The footer is its own zone: full width, a hairline on top, a barely different surface. */
+	/* The footer is a card at the content width: the flock pane on top, the meta line below. */
 	.foot {
-		border-top: 1px solid var(--line);
-		background: var(--zone);
+		max-width: 1120px;
+		margin: 0 auto 40px;
+		padding: 0 20px;
 		font-size: 14px;
 		color: var(--fg-2);
 	}
-	.foot-in {
-		max-width: 1120px;
-		margin: 0 auto;
-		padding: 32px 20px 0;
+	.card {
+		border: 1px solid var(--line);
+		border-radius: 14px;
+		overflow: hidden;
+		background: var(--zone);
+	}
+	.meta {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 6px 32px;
+		padding: 18px 24px 20px;
+		border-top: 1px solid var(--line);
+	}
+	.meta p {
+		margin: 0;
+	}
+	.meta strong {
+		color: var(--fg);
+		font-weight: 600;
 	}
 	/* Requirements, install and privacy belong to the page, not to the footer zone. */
 	.details {
@@ -422,31 +450,35 @@
 		margin-top: 8px;
 		font-size: 12px;
 	}
-	.legal {
-		margin: 0;
-	}
 	/* Fixed height: the canvas never shifts layout. */
 	.flock-box {
 		position: relative;
-		margin-top: 48px;
 	}
 	.flock {
 		display: block;
 		width: 100%;
-		height: 300px;
+		height: 260px;
 	}
-	/* No JS: a static ASCII V over the empty canvas, out of flow. */
+	/* No JS: the resting V over the empty canvas, out of flow, in the canvas palette. */
 	.flock-still {
 		position: absolute;
-		left: 50%;
-		top: 50%;
-		transform: translate(-50%, -50%);
-		margin: 0;
-		font: 13px/17px ui-monospace, 'SF Mono', Menlo, monospace;
-		color: var(--fg-2);
+		inset: 15px 0;
+		width: 100%;
+		height: calc(100% - 30px);
 	}
-	.flock-still span {
-		color: var(--accent);
+	.fa {
+		fill: #8e8e93;
+	}
+	.fb {
+		fill: #3a3a3c;
+	}
+	@media (prefers-color-scheme: dark) {
+		.fa {
+			fill: #98989d;
+		}
+		.fb {
+			fill: #5e5e63;
+		}
 	}
 
 	@media (max-width: 760px) {
@@ -471,18 +503,15 @@
 		.details {
 			padding-bottom: 64px;
 		}
-		.foot-in {
-			padding-top: 28px;
-		}
-		.flock-box {
-			margin-top: 36px;
+		.foot {
+			padding: 0 16px;
+			margin-bottom: 16px;
 		}
 		.flock {
-			height: 220px;
+			height: 200px;
 		}
-		.flock-still {
-			font-size: 11px;
-			line-height: 14px;
+		.meta {
+			padding: 16px 18px 18px;
 		}
 	}
 </style>

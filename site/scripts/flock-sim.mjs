@@ -5,13 +5,14 @@
 import { readFileSync } from 'node:fs';
 const src = readFileSync(process.argv[2], 'utf8');
 const seeds = Number(process.argv[3] || 8);
-const W = 1440, H = 300, FPS = 60, CYCLE = 18, CLOSE = 40;
+// Default: the footer card's flock pane at 1440 (1120 content - 40 padding - 2 border) x 260.
+const W = Number(process.env.W || 1078), H = Number(process.env.H || 260), FPS = 60, CYCLE = 18, CLOSE = 40;
 
 function run(seed) {
 	let s = seed * 2654435761 >>> 0;
 	const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
 	let rafCb = null, ioCb = null, roCb = null, now = 0;
-	const ctx = new Proxy({ measureText: () => ({ width: 7.8 }) }, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => ((t[k] = v), true) });
+	const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => ((t[k] = v), true) });
 	const cv = { getContext: () => ctx, getBoundingClientRect: () => ({ width: W, height: H }), width: 0, height: 0 };
 	const M = Object.create(Math);
 	M.random = rnd;
@@ -21,8 +22,7 @@ function run(seed) {
 		ResizeObserver: class { constructor(cb) { roCb = cb; } observe() { roCb(); } },
 		IntersectionObserver: class { constructor(cb) { ioCb = cb; } observe() { ioCb([{ isIntersecting: true }]); } },
 		requestAnimationFrame: (cb) => ((rafCb = cb), 1), cancelAnimationFrame() {},
-		performance: { now: () => now }, devicePixelRatio: 1, Math: M,
-		location: { search: process.env.FLOCK_MODE ? `?flock=${process.env.FLOCK_MODE}` : '' }
+		performance: { now: () => now }, devicePixelRatio: 1, Math: M
 	};
 	// Expose the birds array by patching the source.
 	const patched = src.replace('const birds = ', 'const birds = globalThis.__birds = ');
