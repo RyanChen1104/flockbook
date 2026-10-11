@@ -99,11 +99,14 @@ Release notes say whether a build is signed and notarized. An unsigned build is 
 xattr -dr com.apple.quarantine /Applications/Flockbook.app
 ```
 
+Signed builds update themselves: once a day Flockbook checks for a new release, and it installs one only after you agree (Sparkle; turn the check off in Settings, or use Flockbook > Check for Updates…). Versions up to 0.1.2 have no updater: install the next release by hand once.
+
 ## Build
 
 ```sh
 scripts/bundle.sh    # builds build/Flockbook.app (ad-hoc signed)
 scripts/package.sh   # dist/Flockbook-<version>.zip and .dmg
+scripts/test-update.sh build/update-test   # headless auto-update check with a throwaway key
 ```
 
 ## Linux and Windows (in progress)

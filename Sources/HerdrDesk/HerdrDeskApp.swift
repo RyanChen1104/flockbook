@@ -13,12 +13,19 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
         AppDefaults.migrateOldSettings()   // after the test isolation: test runs skip it
         headless = !headlessFlags.isDisjoint(with: args)
+        // Updates: only a real launch of an installed app checks (UpdaterGate). Never a check, preview or snapshot run.
+        let quiet = headless || args.contains { $0.hasPrefix("--test") || $0.hasPrefix("--preview") || $0.hasPrefix("--snapshot") || $0 == "--fuzz" }
+        AppUpdater.shared.start(quiet: quiet)
+        if let i = args.firstIndex(of: "--test-update"), args.indices.contains(i + 1) {
+            let feed = args[i + 1]
+            DispatchQueue.main.async { HeadlessUpdateTest.run(feed: feed) }
+        }
         if !headlessFlags.isDisjoint(with: args) {
             NSApplication.shared.setActivationPolicy(.prohibited)
             setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered: a check killed by its timeout still shows how far it got
@@ -152,7 +159,10 @@ struct HerdrDeskApp: App {
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 1280, height: 820)
-        .commands { DeskCommands(model: model) }
+        .commands {
+            DeskCommands(model: model)
+            UpdateCommands(updater: AppUpdater.shared)
+        }
         Settings { SettingsView() }
             .windowResizability(.contentSize)
     }

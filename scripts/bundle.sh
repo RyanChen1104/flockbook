@@ -5,7 +5,11 @@
 #   SIGN_ID="Developer ID Application: <Your Name> (<TEAMID>)" scripts/bundle.sh
 # Then notarize with scripts/notarize.sh.
 # Optional env: VERSION (CFBundleShortVersionString, default 0.1.0), BUILD_NUMBER (default 1),
-# ARCHS (e.g. "arm64 x86_64" for a universal binary; default native only), SCRATCH_PATH (swift --scratch-path).
+# ARCHS (e.g. "arm64 x86_64" for a universal binary; default native only), SCRATCH_PATH (swift --scratch-path),
+# APP (output bundle, default build/Flockbook.app), BUNDLE_ID (default dev.mclee.flockbook; test bundles use their own,
+# so they never touch the installed app's settings or caches).
+# Auto-update (Sparkle): SPARKLE_PUBLIC_KEY is the EdDSA public key (base64) that update archives are signed with;
+# without it the app never checks for updates. FEED_URL overrides the appcast URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,10 +33,13 @@ else
   lipo -info "$EXE"
 fi
 
-APP="build/Flockbook.app"
+APP="${APP:-build/Flockbook.app}"
+BUNDLE_ID="${BUNDLE_ID:-dev.mclee.flockbook}"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$EXE" "$APP/Contents/MacOS/HerdrDesk"
+# Sparkle.framework (universal), found through the rpath @executable_path/../Frameworks (Package.swift).
+ditto "$BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
 # Copy SwiftPM resource bundles next to the executable's resources, if any.
 for b in "$BIN"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"; done
@@ -69,12 +76,28 @@ else
   echo "icon: actool not available (needs Xcode), no light/dark Assets.car"
 fi
 
+FEED_URL="${FEED_URL:-https://flockbook.mclee.dev/appcast.xml}"
+UPDATE_KEYS="  <key>SUFeedURL</key><string>$FEED_URL</string>"
+if [ -n "${SPARKLE_PUBLIC_KEY:-}" ]; then
+  # Daily check, no first-launch permission prompt; the user still confirms every install.
+  # The feed and the archive must carry EdDSA signatures from the matching private key.
+  UPDATE_KEYS="$UPDATE_KEYS
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>"
+  echo "updates: on, feed $FEED_URL"
+else
+  echo "updates: off (no SPARKLE_PUBLIC_KEY)"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>dev.mclee.flockbook</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>Flockbook</string>
   <key>CFBundleDisplayName</key><string>Flockbook</string>
   <key>NSHumanReadableCopyright</key><string>Unofficial companion for Herdr. Not affiliated with, endorsed by, or supported by Herdr, Inc.</string>
@@ -86,16 +109,24 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 $ICON_KEY
+$UPDATE_KEYS
 </dict>
 </plist>
 PLIST
 
+# Sign inside-out (not --deep): Sparkle's helpers first, then the framework, then the app.
 if [ -n "${SIGN_ID:-}" ]; then
-  codesign --force --deep --options runtime --timestamp -s "$SIGN_ID" "$APP"
-  echo "signed: $SIGN_ID (hardened runtime)"
+  SIGN=(-s "$SIGN_ID" --options runtime --timestamp)
 else
-  codesign --force --deep -s - "$APP"
-  echo "signed: ad-hoc"
+  SIGN=(-s -)
 fi
+FW="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+codesign --force "${SIGN[@]}" "$FW/XPCServices/Installer.xpc"
+codesign --force "${SIGN[@]}" --preserve-metadata=entitlements "$FW/XPCServices/Downloader.xpc"
+codesign --force "${SIGN[@]}" "$FW/Autoupdate"
+codesign --force "${SIGN[@]}" "$FW/Updater.app"
+codesign --force "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force "${SIGN[@]}" "$APP"
+echo "signed: ${SIGN_ID:-ad-hoc}${SIGN_ID:+ (hardened runtime)}"
 codesign --verify --deep --strict "$APP"
 echo "built: $APP"

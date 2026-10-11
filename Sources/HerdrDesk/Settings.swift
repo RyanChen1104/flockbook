@@ -63,6 +63,23 @@ struct SettingsView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let updates = AppUpdater.shared.updater {
+                Section("Updates") {
+                    Toggle(isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },
+                                         set: { AppUpdater.shared.automaticallyChecks = $0 })) {
+                        Text("Check for updates automatically")
+                        Text("Once a day. Flockbook asks before it installs an update.")
+                    }
+                    LabeledContent {
+                        Button("Check Now") { AppUpdater.shared.checkForUpdates() }.disabled(!AppUpdater.shared.canCheck)
+                    } label: {
+                        Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        if let last = updates.lastUpdateCheckDate {
+                            Text("Last checked \(last.formatted(.relative(presentation: .named)))")
+                        }
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .scrollDisabled(true)

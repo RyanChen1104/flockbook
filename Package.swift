@@ -10,6 +10,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.9.0"),
+        // Auto-update. Exact: release.yml signs updates with this version's sign_update.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
     ],
     targets: [
         .target(name: "HerdrKit", exclude: ["README.md"]),
@@ -18,7 +20,10 @@ let package = Package(
             dependencies: [
                 "HerdrKit",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
-            ]
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            // Sparkle.framework sits in Contents/Frameworks of the app bundle (scripts/bundle.sh).
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(name: "HerdrKitChecks", dependencies: ["HerdrKit"]),
         .testTarget(

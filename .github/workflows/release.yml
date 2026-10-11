@@ -74,9 +74,11 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           rm -f "$RUNNER_TEMP/certificate.p12"
 
+      # SPARKLE_PUBLIC_KEY (a repository variable, not secret) turns on auto-update in the app.
       - name: Bundle and sign
         env:
           SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: scripts/bundle.sh
 
       # scripts/package.sh builds the dmg window with dmgbuild (hash-pinned in scripts/dmg/requirements.txt, own venv).
@@ -98,6 +100,7 @@ jobs:
             NOTARIZED=0
             echo "Signing or notarization secrets missing; publishing an unsigned build."
           fi
+          echo "NOTARIZED=$NOTARIZED" >> "$GITHUB_ENV"
           if [ "$NOTARIZED" = 1 ]; then scripts/notarize.sh build/Flockbook.app; fi
           scripts/package.sh
           if [ "$NOTARIZED" = 1 ]; then scripts/notarize.sh "dist/Flockbook-$VERSION.dmg"; fi
@@ -113,6 +116,25 @@ jobs:
             echo "Requires macOS 26 or later and a running Herdr. Universal (Apple silicon + Intel)."
             echo "Unofficial: not affiliated with, endorsed by, or supported by Herdr, Inc."
           } > dist/NOTES.md
+
+      # Auto-update feed: signs the zip (EdDSA) and writes dist/appcast.xml, itself signed. Only for notarized
+      # builds, so an unsigned build never reaches installed apps as an update.
+      - name: Appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: |
+          if [ -z "${SPARKLE_PUBLIC_KEY:-}" ] && [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+            echo "No Sparkle keys: no appcast, this build does not auto-update."; exit 0
+          fi
+          if [ -z "${SPARKLE_PUBLIC_KEY:-}" ] || [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+            echo "Set both the SPARKLE_PUBLIC_KEY variable and the SPARKLE_ED_PRIVATE_KEY secret."; exit 1
+          fi
+          if [ "$NOTARIZED" != 1 ]; then echo "Not notarized: no appcast."; exit 0; fi
+          DOWNLOAD_PREFIX="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+          RELEASE_NOTES_URL="https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+          LINK="https://flockbook.mclee.dev" \
+            scripts/appcast.sh "dist/Flockbook-$VERSION.zip" dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -134,6 +156,17 @@ jobs:
           name: flockbook-macos
           path: dist
 
+      # appcast.xml exists only for builds that auto-update (see the Appcast step).
+      - name: List assets
+        id: assets
+        run: |
+          {
+            echo 'files<<EOF'
+            ls dist/*.zip dist/*.dmg dist/SHA256SUMS
+            if [ -f dist/appcast.xml ]; then echo dist/appcast.xml; fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -141,8 +174,5 @@ jobs:
           name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           body_path: dist/NOTES.md
           generate_release_notes: true
-          files: |
-            dist/*.zip
-            dist/*.dmg
-            dist/SHA256SUMS
+          files: ${{ steps.assets.outputs.files }}
           fail_on_unmatched_files: true
