@@ -13,7 +13,7 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote", "--serve-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
@@ -107,6 +107,9 @@ struct HerdrDeskApp: App {
         if let i = args.firstIndex(of: "--test-notice"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1], allow = !args.contains("--deny")
             Task { @MainActor in await HeadlessTest.notice(model: m, paneId: paneId, allow: allow) }
+        }
+        if args.contains("--serve-remote"), store.session.name != nil {
+            Task { @MainActor in await HubLiveTest.serve(model: m) }
         }
         if args.contains("--test-remote"), store.session.name != nil {
             Task { @MainActor in await HubLiveTest.remote(model: m) }

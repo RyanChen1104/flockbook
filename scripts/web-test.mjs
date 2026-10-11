@@ -1,18 +1,22 @@
 // Headless browser test of the phone PWA against a fake hub (HerdrKitChecks --serve-web: TLS, 127.0.0.1, no herdr).
-//   swift build && node scripts/web-test.mjs [path/to/chrome-headless-shell]
+//   swift build && node scripts/web-test.mjs [--shots <dir>]      (CHROME_HEADLESS=<path> to pick the browser)
+//   node scripts/web-test.mjs --live <session>   read-only smoke run: the app's own hub (HerdrDesk --serve-remote, headless,
+//                                                 127.0.0.1, a read device) on a named herdr session. Sends no input.
 // Drives Chrome's headless shell over the DevTools protocol with Node's built-in WebSocket: no packages, no window.
 // The browser trusts only the hub's own certificate (SPKI pin), as a paired phone does.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const shotsAt = process.argv.indexOf("--shots");
+const shots = shotsAt > 0 ? process.argv[shotsAt + 1] : null;
+if (shots) mkdirSync(shots, { recursive: true });
 
 function findChrome() {
-  if (process.argv[2]) return process.argv[2];
   if (process.env.CHROME_HEADLESS) return process.env.CHROME_HEADLESS;
   const cache = join(homedir(), "Library/Caches/ms-playwright");
   const dirs = existsSync(cache) ? readdirSync(cache).filter((d) => d.startsWith("chromium_headless_shell-")).sort().reverse() : [];
@@ -33,10 +37,24 @@ function check(ok, name) {
 }
 
 // --- The fake hub.
-const hub = spawn(join(root, ".build/debug/HerdrKitChecks"), ["--serve-web"], { stdio: ["pipe", "pipe", "inherit"] });
+const liveAt = process.argv.indexOf("--live");
+const live = liveAt > 0 ? process.argv[liveAt + 1] : null;
+// The app binary talks to the window server: never start it while the screen is locked.
+if (live && /"CGSSessionScreenIsLocked"\s*=\s*Yes/.test(execFileSync("/usr/sbin/ioreg", ["-n", "Root", "-d1"]).toString())) {
+  console.log("web-test: the screen is locked; the live run needs it unlocked. Nothing started.");
+  process.exit(2);
+}
+// The herdr environment of a calling pane must not leak into the app (it would pick that session).
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("HERDR_")));
+const hub = live
+  ? spawn(join(root, ".build/debug/HerdrDesk"), ["--session", live, "--serve-remote"], { stdio: ["pipe", "pipe", "ignore"], env })
+  : spawn(join(root, ".build/debug/HerdrKitChecks"), ["--serve-web"], { stdio: ["pipe", "pipe", "inherit"] });
 const info = await new Promise((resolve, reject) => {
   const rl = createInterface({ input: hub.stdout });
-  rl.once("line", (l) => resolve(JSON.parse(l)));
+  rl.on("line", (l) => {
+    if (l.startsWith("{")) resolve(JSON.parse(l));
+    else if (l.includes("FAIL")) reject(new Error(l));
+  });
   hub.once("exit", (c) => reject(new Error(`hub exited ${c}`)));
 });
 const spki = execFileSync("sh", ["-c", `/usr/bin/openssl x509 -in '${info.cert}' -pubkey -noout | /usr/bin/openssl pkey -pubin -outform der | /usr/bin/openssl dgst -sha256 -binary | base64`]).toString().trim();
@@ -102,25 +120,34 @@ async function page(context) {
       return undefined;
     },
     async close() { await send("Target.closeTarget", { targetId }); },
+    async click(sel) { return p.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e || e.disabled) return false; e.click(); return true; })()`); },
+    async type(sel, text) {
+      return p.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; e.value = ${JSON.stringify(text)};
+        e.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
+    },
+    async shot(name, dark = false) {
+      if (!shots) return;
+      await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
+      await new Promise((r) => setTimeout(r, 150));
+      const { data } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
+      writeFileSync(join(shots, `${name}${dark ? "-dark" : ""}.png`), Buffer.from(data, "base64"));
+    },
   };
   return p;
 }
 async function context() { return (await send("Target.createBrowserContext")).browserContextId; }
 
 const text = "document.getElementById('app').innerText";
+const noScroll = "document.documentElement.scrollWidth <= window.innerWidth";
+const pages = [];
 
 try {
-  // 3a: the page loads from the hub, scripts run under the CSP, the socket on /ws answers.
-  const p = await page(await context());
-  await p.goto(origin + "/");
-  check(await p.until(`${text}.includes('Hub reachable')`) === true, `page: served by the hub, socket /ws reachable (${await p.eval(text)})`);
-  check(await p.eval("document.title") === "Flockbook", "page: title");
-  check(await p.eval("fetch('/manifest.webmanifest').then(r => r.json()).then(m => m.name)") === "Flockbook", "page: manifest");
-  check(p.errors.length === 0, `page: no errors or CSP violations (${p.errors.join(" | ")})`);
-  await p.close();
+  if (live) await liveRun();
+  else await fakeRun();
 } catch (e) {
   check(false, `test run: ${e.stack ?? e}`);
 } finally {
+  for (const x of pages) await x.close().catch(() => {});
   cdp.close();
   const gone = new Promise((r) => chrome.once("exit", r));
   chrome.kill();
@@ -131,3 +158,140 @@ try {
 }
 console.log(failures ? `web-test: ${failures} of ${total} FAILED` : `web-test: OK ${total} checks passed`);
 process.exit(failures ? 1 : 0);
+
+/** The real app hub, a read device: list, one conversation, no input controls. */
+async function liveRun() {
+  const p = await page(await context());
+  pages.push(p);
+  await p.goto(origin + "/");
+  await p.eval(`localStorage.setItem('flockbook.token', ${JSON.stringify(info.token)})`);
+  await p.goto(origin + "/");
+  check(await p.until("!!document.querySelector('.list')", 8000) === true, "live: agent list after hello");
+  const panes = await p.eval("[...document.querySelectorAll('[data-pane]')].map(e => e.dataset.pane)");
+  check(panes.length > 0, `live: ${panes.length} agents listed`);
+  check(await p.eval("document.querySelector('.level').textContent") === "Read only", "live: read device");
+  check(await p.eval(noScroll), "live: no sideways scroll");
+  await p.shot("live-list");
+  if (panes.length) {
+    await p.click(`[data-pane='${panes[0]}']`);
+    check(await p.until("document.querySelectorAll('.msg, .logged, .tools, .screen').length > 0", 8000) === true, `live: ${panes[0]} shows its conversation or screen`);
+    check(await p.eval("!document.querySelector('#allow') && !document.querySelector('.composer')") === true, "live: no input controls for a read device");
+    check(await p.eval(noScroll), "live: conversation, no sideways scroll");
+    await p.shot("live-conversation");
+  }
+  check(p.errors.length === 0, `live: no errors or CSP violations (${p.errors.join(" | ")})`);
+}
+
+/** The fake hub: every screen and every action. */
+async function fakeRun() {
+  // The page and the socket on one origin, scripts under the CSP.
+  const fresh = await page(await context());
+  pages.push(fresh);
+  await fresh.goto(origin + "/");
+  check(await fresh.until("!!document.querySelector('#pair-words')") === true, "pair: without a token the page asks for the six words");
+  check(await fresh.eval("document.title") === "Flockbook", "page: title");
+  check(await fresh.eval("fetch('/manifest.webmanifest').then(r => r.json()).then(m => m.name)") === "Flockbook", "page: manifest");
+  await fresh.shot("pair");
+  await fresh.shot("pair", true);
+
+  // Wrong words: an error, no token.
+  await fresh.type("#pair-words", "wrong words here and there now");
+  await fresh.click("#pair-go");
+  check(await fresh.until(`${text}.includes('wrong or expired')`) === true, "pair: wrong words -> error shown");
+  check(await fresh.eval("localStorage.getItem('flockbook.token')") === null, "pair: no token kept after a failure");
+
+  // The QR link: the secret is read from the fragment and removed from the address bar; pairing gives a read device.
+  await fresh.goto(`${origin}/#pair=${info.pairSecret}&fp=${info.fingerprint}`);
+  check(await fresh.until("!!document.querySelector('#pair-go') && !document.querySelector('#pair-words')") === true, "pair: QR link -> no words needed");
+  check(await fresh.eval("location.hash") === "", "pair: secret removed from the address bar");
+  check((await fresh.eval(text)).includes(info.fingerprint.slice(0, 16)), "pair: certificate fingerprint shown to compare");
+  await fresh.type("#pair-name", "Test phone");
+  await fresh.click("#pair-go");
+  check(await fresh.until("!!document.querySelector('.list')") === true, "pair: paired -> agent list");
+  check((await fresh.eval("localStorage.getItem('flockbook.token')"))?.length > 20, "pair: device token kept");
+  check(await fresh.eval("document.querySelector('.level').textContent") === "Read only", "read: level shown as Read only");
+
+  // A read device: cards say so, no buttons, no composer.
+  await fresh.click("[data-pane='w1:p1']");
+  check(await fresh.until("!!document.querySelector('.card.approval')") === true, "read: approval card shown");
+  check(await fresh.eval("!document.querySelector('#allow') && !document.querySelector('#deny') && !document.querySelector('.composer')") === true,
+    "read: no Allow/Deny, no composer");
+  check((await fresh.eval(text)).includes("Read only"), "read: card says read only");
+
+  // An unknown token: back to pairing with a reason.
+  const gone = await page(await context());
+  pages.push(gone);
+  await gone.goto(origin + "/");
+  await gone.eval("localStorage.setItem('flockbook.token', 'no-such-token')");
+  await gone.goto(origin + "/");
+  check(await gone.until(`${text}.includes('not paired')`) === true, "token: unknown token -> pair screen with a reason");
+  check(await gone.eval("localStorage.getItem('flockbook.token')") === null, "token: unknown token removed");
+
+  // An input device.
+  const p = await page(await context());
+  pages.push(p);
+  await p.goto(origin + "/");
+  await p.eval("localStorage.setItem('flockbook.token', 'input-token')");
+  await p.goto(origin + "/");
+  check(await p.until("!!document.querySelector('.list')") === true, "list: shown after hello");
+  const order = await p.eval("[...document.querySelectorAll('[data-pane]')].map(e => e.dataset.pane)");
+  check(JSON.stringify(order.slice(0, 2)) === JSON.stringify(["w1:p1", "w1:p2"]) && order.length === 4, `list: Needs you first (${order})`);
+  check(await p.eval("document.querySelector('#needs-you').textContent") === "Needs you · 2", "list: Needs you count");
+  check(await p.eval("document.title") === "(2) Flockbook", "list: count in the title");
+  check(await p.eval("document.querySelectorAll('.dot.blocked').length") === 2 && await p.eval("document.querySelectorAll('.dot.working').length") === 1,
+    "list: status shapes");
+  check(await p.eval(noScroll), "list: no sideways scroll at 390 pt");
+  await p.shot("list");
+  await p.shot("list", true);
+
+  // Conversation with an approval.
+  await p.click("[data-pane='w1:p1']");
+  check(await p.until("!!document.querySelector('#allow')") === true, "approval: card with Allow");
+  check(await p.eval("location.hash") === "#pane=w1%3Ap1", "nav: pane in the address (back button works)");
+  check(await p.eval("document.querySelector('.msg.assistant strong')?.textContent") === "src/app.ts", "conversation: markdown bold");
+  check(await p.eval("document.querySelector('.msg.assistant pre code')?.textContent") === "npm run build", "conversation: code block");
+  check(await p.eval("document.querySelector('.chip summary')?.textContent") === "Ran 2 commands", "conversation: tool chip");
+  check(await p.eval("document.querySelector('.card.approval .command')?.textContent") === "npm run build", "approval: command shown");
+  check(await p.eval("document.querySelector('#composer-text')?.disabled") === true, "composer: off while a prompt is open");
+  check(await p.eval(noScroll), "conversation: no sideways scroll");
+  await p.shot("approval");
+  await p.shot("approval", true);
+  await p.click("#load-earlier");
+  check(await p.until("document.querySelectorAll('.msg.assistant').length === 4") === true, "conversation: Load earlier prepends older items");
+  check(await p.eval("document.querySelector('.msg.assistant').textContent") === "Older message 1.", "conversation: older items first");
+  await p.click("#allow");
+  check(await p.until(`${text}.includes('Build passed.')`) === true, "approval: Allow -> agent goes on");
+  check(await p.until("!document.querySelector('.card.approval')") === true, "approval: card gone");
+  check(await p.until("document.title === '(1) Flockbook'") === true, "approval: one less needs you");
+
+  // A question.
+  await p.eval("location.hash = ''");
+  await p.until("!!document.querySelector('.list')");
+  await p.click("[data-pane='w1:p2']");
+  check(await p.until("document.querySelectorAll('.option').length === 2") === true, "question: two options");
+  check((await p.eval("document.querySelector('.option').textContent")).includes("Recommended"), "question: recommended marked");
+  check(await p.eval("document.querySelector('#submit-answer').disabled") === true, "question: no answer, no send");
+  await p.shot("question");
+  await p.click(".option");
+  check(await p.eval("document.querySelector('.option').getAttribute('aria-pressed')") === "true", "question: option picked");
+  await p.click("#submit-answer");
+  check(await p.until(`${text}.includes('Deploying to the chosen target.')`) === true, "question: answer sent, agent goes on");
+
+  // Composer on an idle agent, and the in-app alert when another agent starts to wait.
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  check(await p.until("document.querySelector('#composer-text')?.disabled === false") === true, "composer: on for an idle agent");
+  await p.type("#composer-text", "hello from the phone");
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
+  check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
+  await p.shot("composer");
+  await p.type("#composer-text", "block me");
+  await p.click("#composer-send");
+  check(await p.until("!!document.querySelector('.banner')") === true, "alert: banner when another agent needs you");
+  await p.shot("banner");
+  await p.click(".banner");
+  check(await p.until("location.hash === '#pane=w2%3Ap1'") === true, "alert: banner opens that agent");
+
+  for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
+}
+

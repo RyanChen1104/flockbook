@@ -27,7 +27,9 @@ execFileSync("deno", ["check", "--quiet", "--config", join(web, "deno.json"), ..
 const files = {};
 for (const f of ["index.html", "style.css", "manifest.webmanifest", "icon.svg"]) files[f] = readFileSync(join(web, f));
 for (const f of sources) {
-  const js = stripTypeScriptTypes(readFileSync(join(web, "src", f), "utf8"), { mode: "strip" });
+  // Module imports name the .ts sources (for deno check); the browser loads the .js files.
+  const js = stripTypeScriptTypes(readFileSync(join(web, "src", f), "utf8"), { mode: "strip" })
+    .replace(/(from\s+["']\.\/[\w-]+)\.ts(["'])/g, "$1.js$2");
   files[f.replace(/\.ts$/, ".js")] = Buffer.from(js);
 }
 

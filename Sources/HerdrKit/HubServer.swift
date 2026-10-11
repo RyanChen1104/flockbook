@@ -29,6 +29,10 @@ import Network
     public var helloTimeout: Duration = .seconds(10)
     /// The largest client message taken (bytes).
     public static let maxMessage = 1 << 20
+    /// Connections without a paired device (a page load, pairing, before hello) held at once; more are refused.
+    public static let maxPending = 16
+    /// Connections held at once in all.
+    public static let maxConnections = 64
 
     private var listener: NWListener?
     private var conns: [ObjectIdentifier: Conn] = [:]
@@ -116,6 +120,9 @@ import Network
 
     private func accept(_ nw: NWConnection) {
         guard listener != nil else { nw.cancel(); return }
+        // Unpaired connections cost nothing to open: hold only a few at once.
+        let pending = conns.values.filter { $0.session.device == nil }.count
+        guard pending < Self.maxPending, conns.count < Self.maxConnections else { nw.cancel(); return }
         let c = Conn(nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing))
         let key = ObjectIdentifier(c)
         conns[key] = c

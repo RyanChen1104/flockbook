@@ -148,6 +148,18 @@ Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" s
 - Screens: agent list (Needs you first), conversation (read), approval card, question card, composer (only with `input`).
 - Notifications: Web Push needs a push service; v1 uses in-app alerts while the PWA is open. Web Push (iOS 16.4+ for installed PWAs) is a later phase.
 - Small: plain TypeScript + one view library, no build server in production; files are embedded in the hub binary.
+- Built (phase 3, 2026-10-12): plain TypeScript and the DOM, no view library and no packages (`web/`;
+  `scripts/web-build.mjs` writes `HubWebAssets.swift`). Pairing: the QR link (`#pair=…&fp=…`, read once, then removed
+  from the address bar; the page shows the fingerprint to compare with the Mac) or the 6 words. The token is kept in
+  the page's storage for its origin. List: Needs you first, then each workspace. Conversation: `#pane=<id>` (the back
+  button works), Load earlier, tool chips, screen text. Cards: Allow / Deny and the picker question (a Claude set of
+  questions uses the full set from the log, else "answer on the Mac"). Composer only for `input` devices, off while a
+  prompt is open. In-app alert when another agent starts to need you; the count is in the page title. Reconnects
+  (1–15 s) while paired. Not yet: service worker (offline shell), touch icon PNG, Web Push (phase 4).
+- With a self-signed certificate the phone browser warns once; the page cannot check the pin itself (the browser
+  owns TLS). A `tailscale cert` certificate avoids the warning.
+- Tests: `node scripts/web-test.mjs` (headless Chrome shell over DevTools, fake hub with TLS on 127.0.0.1, every
+  screen and action) and `--live <session>` (the app's own hub, a read device, no input).
 
 ## 10. Phased plan
 

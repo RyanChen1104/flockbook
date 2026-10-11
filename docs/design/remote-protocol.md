@@ -10,7 +10,10 @@ Swift types: `Sources/HerdrKit/HubProtocol.swift`. Fixtures: `Tests/HerdrKitTest
   socket on `GET /ws` (RFC 6455 upgrade). Other paths: 404. Other methods: 405. Request head over 16 KB: 431.
 - An upgrade with an `Origin` header is taken only when the origin's host and port equal the `Host` header (the hub's own page); else 403.
   Clients without `Origin` (native apps) are let in; the token still decides.
-- Client frames must be masked (else close 1002). A message over the size limit closes with 1009.
+- Client frames must be masked and have no RSV bits (no extensions); else close 1002. A message over the size limit
+  (1 MB) closes with 1009, read from the length field before any payload.
+- Limits: a connection without a paired device (a file request, pairing, before `hello`) is closed after 10 s; at most
+  16 such connections and 64 in all are held at once; more are refused at accept.
 - Off by default; listens on one address only (`remote-access.md` section 5).
 
 ## 2. Envelope

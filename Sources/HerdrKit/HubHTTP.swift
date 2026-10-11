@@ -26,7 +26,7 @@ public struct HTTPHead: Equatable, Sendable {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         var lines = text.components(separatedBy: "\r\n")
         guard !lines.isEmpty else { return nil }
-        let first = lines.removeFirst().split(separator: " ")
+        let first = lines.removeFirst().split(separator: " ", omittingEmptySubsequences: false)
         guard first.count == 3, first[2].hasPrefix("HTTP/1."), first[1].hasPrefix("/") else { return nil }
         var headers: [(String, String)] = []
         for l in lines where !l.isEmpty {
@@ -94,7 +94,7 @@ public struct WebSocketFrames: Sendable {
                 guard l <= UInt64(maxMessage) else { return fail(1009, out) }
                 len = Int(l); at = 10
             }
-            guard masked else { return fail(1002, out) }
+            guard masked, b[0] & 0x70 == 0 else { return fail(1002, out) }      // no extensions: RSV bits must be 0
             if opcode >= 8 { guard fin, len <= 125 else { return fail(1002, out) } }
             if len > maxMessage || (partial?.count ?? 0) + len > maxMessage { return fail(1009, out) }
             guard buffer.count >= at + 4 + len else { break }

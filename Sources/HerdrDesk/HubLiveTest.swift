@@ -133,6 +133,31 @@ enum HubLiveTest {
         finish(ok)
     }
 
+    /// `--session <named> --serve-remote`: the app's RemoteHub on 127.0.0.1 (temp folder, new certificate) with one
+    /// read-level test device, for the browser smoke run (`scripts/web-test.mjs --live`). Prints one JSON line, serves
+    /// until stdin closes. A read device cannot send input.
+    static func serve(model: AppModel) async {
+        try? await Task.sleep(for: .seconds(2))
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkserve-\(UUID().uuidString)")
+        AppDefaults.store.set("127.0.0.1", forKey: RemoteHub.hostKey)
+        AppDefaults.store.set(0, forKey: RemoteHub.portKey)
+        let store = FileDeviceStore(url: dir.appendingPathComponent("devices.json"))
+        let token = HubToken.random()
+        store.add(token: token, device: HubDevice(id: "live-read", name: "Live read test", level: .read), paired: Date())
+        let hub = RemoteHub(model: model, devices: store, dir: dir)
+        hub.enabled = true
+        for _ in 0..<50 where !hub.running && hub.problem == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        guard hub.running, let port = hub.port else { print("serve-remote: FAIL \(hub.problem ?? "not running")"); hub.enabled = false; NSApp.terminate(nil); return }
+        let info: [String: Any] = ["port": Int(port), "cert": dir.appendingPathComponent("tls/cert.pem").path, "token": token]
+        if let d = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]) { print(String(decoding: d, as: UTF8.self)) }
+        fflush(stdout)
+        await Task.detached { while FileHandle.standardInput.availableData.count > 0 {} }.value
+        hub.enabled = false
+        try? await Task.sleep(for: .milliseconds(200))
+        try? FileManager.default.removeItem(at: dir)
+        NSApp.terminate(nil)
+    }
+
     private static func finish(_ ok: Bool) {
         print("test-hub/remote: \(ok ? "PASS" : "FAIL")")
         NSApp.terminate(nil)

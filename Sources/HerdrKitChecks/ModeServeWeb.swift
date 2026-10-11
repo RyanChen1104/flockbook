@@ -109,6 +109,8 @@ import Foundation
             let pane = String(last.split(separator: " ")[0]), text = String(last.drop(while: { $0 != " " }).dropFirst())
             let sid = ws.flatMap(\.tabs).flatMap(\.panes).first { $0.id == pane }?.agent?.sessionId ?? ""
             b.items[sid, default: []].append(ConversationItem(id: "u\(now.2)", kind: .userText(text)))
+            // "block me": another agent starts to wait (the PWA's in-app alert).
+            if text == "block me" { b.screens["w2:p1"] = "Waiting for you"; setStatus("w2:p1", .blocked) }
         }
         seen = now
         try? await Task.sleep(for: .milliseconds(100))
