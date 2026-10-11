@@ -4,6 +4,9 @@
 
 	let { data } = $props();
 	const slides = data.slides;
+
+	// No-JS footer: the flock's resting V as ASCII, one row per wing step; the leader is row 5.
+	const still = Array.from({ length: 11 }, (_, r) => '\u00a0'.repeat(30 - Math.abs(r - 5) * 5) + '>');
 </script>
 
 <svelte:head>
@@ -120,7 +123,13 @@
 			affiliated with, endorsed by, or supported by Herdr, Inc.
 		</p>
 	</div>
-	<canvas class="flock" aria-hidden="true"></canvas>
+	<div class="flock-box">
+		<canvas class="flock" aria-hidden="true"></canvas>
+		<noscript>
+			<pre class="flock-still" aria-hidden="true">{#each still as row, r}{row.slice(0, -1)}{#if r === 5}<span>&gt;</span
+						>{:else}&gt;{/if}{'\n'}{/each}</pre>
+		</noscript>
+	</div>
 </footer>
 
 <style>
@@ -417,11 +426,27 @@
 		margin: 0;
 	}
 	/* Fixed height: the canvas never shifts layout. */
+	.flock-box {
+		position: relative;
+		margin-top: 48px;
+	}
 	.flock {
 		display: block;
 		width: 100%;
 		height: 300px;
-		margin-top: 48px;
+	}
+	/* No JS: a static ASCII V over the empty canvas, out of flow. */
+	.flock-still {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
+		margin: 0;
+		font: 13px/17px ui-monospace, 'SF Mono', Menlo, monospace;
+		color: var(--fg-2);
+	}
+	.flock-still span {
+		color: var(--accent);
 	}
 
 	@media (max-width: 760px) {
@@ -449,9 +474,15 @@
 		.foot-in {
 			padding-top: 28px;
 		}
+		.flock-box {
+			margin-top: 36px;
+		}
 		.flock {
 			height: 220px;
-			margin-top: 36px;
+		}
+		.flock-still {
+			font-size: 11px;
+			line-height: 14px;
 		}
 	}
 </style>

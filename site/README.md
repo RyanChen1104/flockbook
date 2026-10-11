@@ -3,7 +3,10 @@
 One static page. SvelteKit with adapter-static (csr=false: no framework JS), no tracking.
 Small hand-written scripts in `static/`: `carousel.js` (active dot) and `flock.js` (footer canvas:
 the icon's arrowheads drift as boids, settle into a V, break up; paused offscreen; one static
-frame for reduced motion).
+frame for reduced motion). The flock draws as ASCII on a monospace grid by default; `?flock=dots`
+draws the arrowheads instead (a temporary switch for comparing). Without JS the footer shows a
+static ASCII V. `node scripts/flock-sim.mjs static/flock.js` prints the drift spread and the
+break-up speed and acceleration curve.
 
 ```sh
 npm install
