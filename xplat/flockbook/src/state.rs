@@ -78,6 +78,7 @@ pub struct State {
     pub composer: crate::composer::ComposerState,
     pub cards: crate::cards::CardsState,
     pub search: crate::search::SearchState,
+    pub terminal: crate::terminal::TerminalState,
 }
 
 impl State {
@@ -101,6 +102,7 @@ impl State {
             composer: Default::default(),
             cards: Default::default(),
             search: Default::default(),
+            terminal: Default::default(),
         }
     }
 

@@ -1,9 +1,9 @@
 //! Flockbook binary.
 //!
 //! Normal run: opens a real window (for the owner only).
-//! Headless: `flockbook --snapshot out.png --screen conversation|overview [--theme light|dark] [--tab LABEL] [--query TEXT] [--size 1280x852] [--demo]`
+//! Headless: `flockbook --snapshot out.png --screen conversation|overview [--theme light|dark] [--tab LABEL] [--query TEXT] [--terminal] [--size 1280x852] [--demo]`
 //! renders one demo frame offscreen and exits. It never opens a window.
-//! `--read-only` (or env `FLOCKBOOK_READ_ONLY=1`): nothing is ever sent to a pane; the composer and the cards only read.
+//! `--terminal` opens the Show terminal sheet on demo frames (fake backend, no process). `--read-only` (or env `FLOCKBOOK_READ_ONLY=1`): nothing is ever sent to a pane; the composer and the cards only read.
 
 use fb_ui::Mode;
 use flockbook::state::Screen;
@@ -25,7 +25,12 @@ fn main() -> iced::Result {
         // Snapshots always use the demo source: they never touch a live herdr.
         // `--tab LABEL` shows that demo tab (e.g. `deploy` or `getting started`: the two blocked ones show a card).
         // `--query TEXT` types TEXT into Search (all demo conversations are loaded first).
-        let img = if let Some(q) = arg_value(&args, "--query") {
+        // `--terminal` opens the sheet over the conversation, on the demo shell screen. With `--read-only` it is the Observe look.
+        let terminal = args.iter().any(|a| a == "--terminal");
+        let read_only = args.iter().any(|a| a == "--read-only");
+        let img = if terminal {
+            snapshot::render_app(&flockbook::terminal::demo_app(mode, screen, !read_only), size)
+        } else if let Some(q) = arg_value(&args, "--query") {
             let mut app = App::demo(mode, Screen::Search);
             flockbook::search::preload_all(&mut app);
             let _ = app.update(Message::Search(flockbook::search::SearchMsg::Open));
@@ -53,7 +58,7 @@ fn main() -> iced::Result {
     iced::application(move || boot(demo, &args), App::update, App::view)
         .title(App::title)
         .theme(|app: &App| -> Theme { app.theme() })
-        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app)]) })
+        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app), flockbook::terminal::subscription(app)]) })
         .font(fb_ui::fonts::BUNDLED[0])
         .font(fb_ui::fonts::BUNDLED[1])
         .font(fb_ui::fonts::BUNDLED[2])
@@ -95,14 +100,16 @@ fn live_app(args: &[String]) -> App {
     // Read-only: the live source only subscribes to snapshots and events.
     let source = flockbook::source::LiveSource::from_args(args);
     let mut app = App::new(Box::new(source), Mode::Light, Screen::Conversation);
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let session = herdr_core::HerdrSession::resolve(args, &env, &home);
+    // The terminal sheet is always available. It opens in Observe mode (no input path) when writes are off.
+    flockbook::terminal::install_live(&mut app, &session);
     // Read-only: no sender and no pane actions are installed at all.
     if !writes_enabled(args) {
         return app;
     }
     // The composer is the only mutating path (sends text to a pane). It is wired to the live source only.
-    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-    let session = herdr_core::HerdrSession::resolve(args, &env, &home);
     flockbook::composer::install_live(&mut app, &session);
     // Allow, Deny and question answers send keys to a pane: live path only.
     flockbook::cards::install_live(&mut app, &session);

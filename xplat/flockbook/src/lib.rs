@@ -26,6 +26,7 @@
 //! | `toprow.rs`       | top row (tabs strip, actions)         | `state.toprow`       | `Message::TopRow`    |
 //! | `overview.rs`     | Overview, NeedsYou, Search screens    | `state.overview`     | `Message::Overview`  |
 //! | `conversation.rs` | conversation list                     | `state.conversation` | `Message::Conversation` |
+//! | `terminal.rs`     | live terminal sheet (Show terminal)   | `state.terminal`     | `Message::Terminal`  |
 //! | `composer.rs`     | composer and approval/question cards  | `state.composer`     | `Message::Composer`  |
 //!
 //! Shared and cross-cutting things live in `state.rs` (State, Screen, selection, helpers), `source.rs` (DataSource),
@@ -50,6 +51,7 @@ pub mod snapshot;
 pub mod source;
 pub mod state;
 pub mod style;
+pub mod terminal;
 pub mod toprow;
 
 use fb_ui::theme::{Tokens, SIDEBAR_W};
@@ -81,6 +83,7 @@ pub enum Message {
     Composer(composer::ComposerMsg),
     Cards(cards::CardsMsg),
     Search(search::SearchMsg),
+    Terminal(terminal::TerminalMsg),
 }
 
 pub struct App {
@@ -109,6 +112,8 @@ impl App {
         app.refresh();
         // The demo's blocked panes show their cards; the actions only record (no socket).
         cards::install_demo(&mut app);
+        // Demo terminals are canned frames: no process, no socket.
+        terminal::install_demo(&mut app);
         app
     }
 
@@ -142,6 +147,22 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // The sheet is a modal: the composer and the cards below it get no input and send nothing while it shows.
+        if self.state.terminal.is_open() && terminal::blocks_underlying(&message) {
+            return Task::none();
+        }
+        let was_open = self.state.terminal.is_open();
+        let mut task = self.route(message);
+        // The sheet just opened: the widget that had the keyboard (the composer) lets go of it.
+        if !was_open && self.state.terminal.is_open() {
+            task = Task::batch([task, iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus())]);
+        }
+        // The terminal sheet follows the screen and the pane: leaving either releases it.
+        terminal::after_update(self);
+        task
+    }
+
+    fn route(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(screen) => {
                 self.state.screen = screen;
@@ -182,6 +203,7 @@ impl App {
             Message::Composer(m) => composer::update(self, m),
             Message::Cards(m) => cards::update(self, m),
             Message::Search(m) => search::update(self, m),
+            Message::Terminal(m) => terminal::update(self, m),
         }
     }
 
@@ -198,7 +220,7 @@ impl App {
             container(sidebar::view(self)).width(Length::Fixed(SIDEBAR_W)).height(Length::Fill).style(style::sidebar(t)),
             container(right).width(Length::Fill).height(Length::Fill).style(style::content(t)),
         ];
-        container(iced::widget::stack![body, toprow::menu_layer(self)]).width(Length::Fill).height(Length::Fill).style(style::content(t)).into()
+        container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self)]).width(Length::Fill).height(Length::Fill).style(style::content(t)).into()
     }
 }
 

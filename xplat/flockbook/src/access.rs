@@ -3,7 +3,8 @@
 //! Writes are on by default. They are off with `--read-only`, with `FLOCKBOOK_READ_ONLY=1`, or when the "Allow sending
 //! input" setting is off (the Rust app has no settings store yet, so `main.rs` passes `None`: "not set" = on, like Swift).
 //! Read-only means no [`crate::composer::MessageSender`] and no [`crate::actions::PaneActions`] are installed: the composer
-//! shows "Read-only: input is off" and the cards say "Answer in the terminal".
+//! shows "Read-only: input is off" and the cards say "Answer in the terminal". The terminal sheet opens in Observe mode:
+//! no key, paste, resize or wheel goes to the program.
 
 use crate::App;
 use std::collections::HashMap;
@@ -23,6 +24,9 @@ pub fn writes_enabled(args: &[String], env: &HashMap<String, String>, allow_inpu
 pub fn make_read_only(app: &mut App) {
     app.state.composer.sender = None;
     app.state.cards.actions = None;
+    // Terminals open in Observe mode from now on; an open control sheet is released.
+    app.state.terminal.writable = false;
+    crate::terminal::close(app);
     app.refresh();
 }
 

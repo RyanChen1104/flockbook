@@ -70,7 +70,7 @@ pub struct TopRowState {
     pub menu: Option<MenuKind>,
     /// Working-arc rotation in radians, advanced by `TopRowMsg::Spin`. The sidebar reads it too.
     pub spin: f32,
-    /// "Show terminal" toggle. The terminal feature reads this; the top row only draws the pressed state.
+    /// "Show terminal" pressed state. `terminal.rs` sets it when the sheet opens or closes.
     pub terminal_on: bool,
 }
 
@@ -105,7 +105,8 @@ pub fn update(app: &mut App, msg: TopRowMsg) -> Task<Message> {
             Task::none()
         }
         TopRowMsg::ToggleTerminal => {
-            app.state.toprow.terminal_on = !app.state.toprow.terminal_on;
+            // The sheet is the state: the button shows it. Without a terminal backend nothing opens.
+            crate::terminal::toggle(app);
             Task::none()
         }
         TopRowMsg::Scroll(dx) => {
