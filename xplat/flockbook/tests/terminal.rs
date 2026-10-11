@@ -505,7 +505,7 @@ fn ctrl_backtick_opens_the_sheet_only_on_the_conversation_screen() {
     assert!(r.app.state.terminal.is_open(), "the conversation screen opens it");
 }
 
-// 4. The history grid never loses a top line.
+// 4. The history grid never loses a top line under the row cap.
 
 #[test]
 fn history_with_emoji_tabs_and_osc_keeps_every_line() {
@@ -526,6 +526,17 @@ fn a_long_history_of_wide_lines_keeps_its_first_and_last_line() {
     assert!(h.snap.row_text(0).starts_with("000 "), "{}", h.snap.row_text(0));
     assert!(h.snap.row_text(h.snap.rows - 1).contains("399"), "{}", h.snap.row_text(h.snap.rows - 1));
     assert_eq!(h.snap.cursor, None);
+}
+
+#[test]
+fn one_huge_history_line_is_capped_to_the_newest_rows() {
+    // One 10 MB line (minified JSON, a log blob) wraps into 50000 rows at 200 columns. Only the newest are kept.
+    let mut text = "a".repeat(10 * 1024 * 1024 - 3);
+    text.push_str("END\r\n");
+    let h = terminal::history_view(&text, 200, 1);
+    assert!(h.snap.rows <= terminal::HISTORY_MAX_ROWS, "{} rows", h.snap.rows);
+    assert_eq!(h.snap.rows, terminal::HISTORY_MAX_ROWS, "the grid is full: the cap, not the text, bounds it");
+    assert!(h.snap.row_text(h.snap.rows - 1).ends_with("END"), "the newest row is kept");
 }
 
 // 6. Wheel down at the bottom of the history returns to live.

@@ -801,17 +801,20 @@ pub fn at_bottom(offset_y: f32, content_h: f32, view_h: f32) -> bool {
     content_h <= view_h + 0.5 || offset_y >= content_h - view_h - 1.0
 }
 
-/// The most lines of history the grid keeps (herdr returns at most 1000 lines, a wrapped line takes a few rows).
-const HISTORY_KEEP: usize = 100_000;
+/// The most rows the history grid keeps, screen included. herdr returns at most 1000 lines, but one long line (minified
+/// JSON, a log blob) wraps into many rows. The newest rows stay; the oldest scroll out.
+pub const HISTORY_MAX_ROWS: usize = 20_000;
+const HISTORY_SCREEN_ROWS: usize = 24;
 
 /// Builds the history grid. The text is fed into a small screen with scrollback, so every row is kept whatever its
-/// width (wide characters, tabs and escape sequences make a row count guess unsafe). Blank rows at the end are trimmed.
+/// width (wide characters, tabs and escape sequences make a row count guess unsafe), up to [`HISTORY_MAX_ROWS`].
+/// Blank rows at the end are trimmed.
 pub fn history_view(text: &str, cols: usize, lines: usize) -> History {
     let norm = text.replace("\r\n", "\n");
     let body = norm.trim_end_matches('\n');
     let cols = cols.clamp(1, fb_ui::term::grid::MAX_COLS);
-    let mut grid = TermGrid::with_history(cols, 24, HISTORY_KEEP);
-    grid.feed(true, cols as u32, 24, body.replace('\n', "\r\n").as_bytes());
+    let mut grid = TermGrid::with_history(cols, HISTORY_SCREEN_ROWS, HISTORY_MAX_ROWS - HISTORY_SCREEN_ROWS);
+    grid.feed(true, cols as u32, HISTORY_SCREEN_ROWS as u32, body.replace('\n', "\r\n").as_bytes());
     // No more bytes come: a synchronized update the text left open would hide everything, so end it now.
     grid.flush_sync(std::time::Instant::now() + std::time::Duration::from_secs(3600));
     History { snap: grid.snapshot_all(), lines, at_bottom: true }
