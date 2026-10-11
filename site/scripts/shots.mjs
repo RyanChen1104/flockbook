@@ -42,11 +42,28 @@ for (const width of [1440, 390]) {
 				const t = document.querySelector('.track');
 				return Math.round(t.scrollLeft / t.clientWidth) + 1;
 			});
-			console.log(`  dot 3 -> slide ${slide}`);
-			if (slide !== 3) failed = true;
+			const current = () => page.evaluate(() => [...document.querySelectorAll('.dots a')].findIndex((a) => a.hasAttribute('aria-current')) + 1);
+			const afterClick = await current();
+			await page.evaluate(() => { const t = document.querySelector('.track'); t.scrollLeft = 3 * t.clientWidth; });
+			await page.waitForTimeout(300);
+			const afterScroll = await current();
+			console.log(`  dot 3 -> slide ${slide}, active dot ${afterClick}; scroll to 4 -> active dot ${afterScroll}`);
+			if (slide !== 3 || afterClick !== 3 || afterScroll !== 4) failed = true;
 		}
 		await page.close();
 	}
+}
+// No-JS fallback: dots are plain anchors and still move the track.
+{
+	const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: false });
+	const page = await ctx.newPage();
+	await page.goto(url, { waitUntil: 'networkidle' });
+	await page.locator('.dots a').nth(2).click();
+	await page.waitForTimeout(800);
+	const slide = await page.evaluate(() => { const t = document.querySelector('.track'); return Math.round(t.scrollLeft / t.clientWidth) + 1; });
+	console.log(`no JS: dot 3 -> slide ${slide}`);
+	if (slide !== 3) failed = true;
+	await ctx.close();
 }
 await browser.close();
 server.close();

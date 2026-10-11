@@ -12,6 +12,7 @@
 		name="description"
 		content="A native macOS reading view for your Herdr agents. Read what each agent did, see which one needs you, and reply in one place."
 	/>
+	<script src="{base}/carousel.js" defer></script>
 </svelte:head>
 
 <a class="skip" href="#features">Skip to features</a>
@@ -348,6 +349,9 @@
 	}
 	.dots a:hover span {
 		background: var(--fg-2);
+	}
+	.dots a[aria-current] span {
+		background: var(--fg);
 	}
 
 	.foot {
