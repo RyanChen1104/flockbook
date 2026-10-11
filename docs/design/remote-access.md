@@ -2,6 +2,7 @@
 
 Status: design, not built. Date: 2026-10-11.
 Decision so far: the Mac is the hub, the network is Tailscale, the phone client is a web PWA. Remote access is opt-in and off by default.
+Order (owner, 2026-10-11): phone for the Mac first (Swift hub in the app + PWA). The Linux remote comes later, as one block: option 0 (`ssh -L`), the Rust hub and the Mac app remote mode together.
 
 ## 1. Goals
 
@@ -25,7 +26,7 @@ Non-goals: a public internet service, accounts, a relay server, multi-user shari
 
 Conclusion: the socket carries status, screens and input. The conversation, the core of the app, needs code that runs next to the log files.
 
-## 3. Option 0: SSH socket forward (first step, no new code)
+## 3. Option 0: SSH socket forward (deferred to the Linux remote block)
 
 ```
 ssh -N -L ~/.flockbook/remote/devbox.sock:/home/me/.config/herdr/herdr.sock me@devbox
@@ -37,7 +38,7 @@ What works: sidebar, status, the "Needs you" list, notifications, the approval c
 
 What fails: conversation text (empty, "log not found"), log-based question cards (Codex), the terminal sheet unless `herdr` is installed on the Mac, git branch, file attach and image paste (wrong machine).
 
-Size: S (one launch option, one "Remote (limited)" banner, hide what cannot work). Value: try remote use this week, and learn which parts people use.
+Size: S (one launch option, one "Remote (limited)" banner, hide what cannot work). It is done together with the Linux remote (phase 5), not first: alone it gives a Mac view without conversations, and the phone does not need it.
 
 ## 4. Target design: one hub, one protocol
 
@@ -91,8 +92,8 @@ Rules:
 | Mac hub | Natural: the app process already has the data | Possible as a sidecar binary |
 
 Recommendation:
-- **Linux hub = Rust**, a new crate `xplat/flockbook-hub` on top of `herdr-core`. It runs headless (`flockbook-hub --session <name>`), as a user service.
-- **Mac hub = Swift, inside the app** (phase 2), because the app already holds the store, the logs and the approval rules. Same protocol, same message types.
+- **Mac hub = Swift, inside the app**, built first (phase 2), because the app already holds the store, the logs and the approval rules. It uses `Network.framework` (`NWListener` with TLS and WebSocket); no new dependency.
+- **Linux hub = Rust**, a new crate `xplat/flockbook-hub` on top of `herdr-core`, built later (phase 5). It runs headless (`flockbook-hub --session <name>`), as a user service. Same protocol, same message types.
 - Keep the two in step with **shared protocol fixtures**: JSON files of every message type, checked by HerdrKitChecks and by `cargo test`.
 
 Risk: two implementations of the same rules. Mitigation: the fixtures, and the hub rules stay thin (they call the parsers both sides already have).
@@ -128,12 +129,12 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 
 Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" setting still applies on top of the device level.
 
-## 8. Mac app: adding a remote host
+## 8. Mac app: adding a remote host (phase 5)
 
 - Sidebar footer: a host switcher ("This Mac", "devbox"). One window shows one host; a second window can show another.
 - Settings > Hosts > "Add host": paste the hub URL and type the 6-word code that the hub shows (a Mac has no QR scan step). The app stores the device token in the Keychain.
 - Status per host: connected / reconnecting / offline, and the device level (`read` / `input`). When the level is `read`, the composer shows "Read-only on devbox" (same pattern as the read-only launch).
-- Things that need the local machine are hidden for a remote host: file attach, image paste, git branch, terminal sheet (until phase 4).
+- Things that need the local machine are hidden for a remote host: file attach, image paste, git branch, terminal sheet (until phase 6).
 - Notifications: the Allow / Deny buttons are shown only when the device level is `input`.
 
 ## 9. Phone PWA
@@ -145,19 +146,20 @@ Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" s
 
 ## 10. Phased plan
 
+Phone for the Mac first. The Linux remote follows as one block.
+
 | Phase | Content | Size |
 |---|---|---|
-| 0 | `--socket` launch option, "Remote (limited)" banner, hide what cannot work over a forwarded socket. Doc for the `ssh -L` setup. | S (2–3 days) |
-| 1 | Protocol spec + JSON fixtures. Rust `flockbook-hub` on Linux: snapshot, events, conversation (tail + append + loadEarlier), screen, `send`/`approve`/`answer`, pairing, tokens, TLS. Headless tests against a fake herdr and fixture logs. | L (2–3 weeks) |
-| 2 | Mac app remote mode: host list, Keychain token, a `RemoteStore` that feeds the same views as `HerdrStore`. | M (1–2 weeks) |
-| 3 | PWA: list, conversation, approval and question cards, composer. Hub serves it. Phone check by the owner. | M (1–2 weeks) |
-| 4 | Mac app as hub (Swift, same protocol) so the phone can reach a Mac-only setup; Web Push; remote terminal stream. | L (3+ weeks) |
-
-Order note: if the first need is "phone for my Mac", swap phases 2 and 4 partly: build the Swift hub in the app first, then the PWA. The protocol and fixtures from phase 1 come first either way.
+| 1 | Protocol spec + JSON fixtures for every message type. Checked by HerdrKitChecks now and by `cargo test` later. | S (3–5 days) |
+| 2 | Swift hub in the Mac app: Settings > Remote access (off by default), `NWListener` on the Tailscale address, TLS (`tailscale cert`), pairing (QR + 6-word code), device tokens (hash in the Keychain), per-device `read`/`input`, revoke. Serves snapshot, events, conversation, screen, `send`/`approve`/`answer`. Headless tests with a test client against a named session. | L (2–3 weeks) |
+| 3 | PWA served by the hub: agent list, conversation, approval and question cards, composer (only with `input`). Phone check by the owner. | M (1–2 weeks) |
+| 4 | Web Push for "Needs you" (installed PWA, iOS 16.4+), with Allow / Deny only for `input` devices. | S–M (1 week) |
+| 5 | Linux remote, one block: option 0 (`--socket` + `ssh -L`, the limited mode), the Rust `flockbook-hub` on Linux (same protocol and fixtures), and the Mac app remote mode (host list, Keychain token, a `RemoteStore` that feeds the same views as `HerdrStore`). | L (3–4 weeks) |
+| 6 | Remote terminal stream (both hubs). | L (3+ weeks) |
 
 ## 11. Open questions
 
-1. Does herdr plan its own remote or TCP listener? If yes, phase 0 and the hub's herdr link may change.
+1. Does herdr plan its own remote or TCP listener? If yes, option 0 and the hub's herdr link (phase 5) may change.
 2. The minimum Linux distro and the service manager (systemd user unit only?).
 3. Should a device's `input` level expire (for example after 24 hours) and need a re-confirm on the hub?
 4. Is one hub per herdr session enough, or should one hub serve all sessions on a machine?
