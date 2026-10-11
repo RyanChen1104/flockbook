@@ -249,6 +249,8 @@ fn snapshots() {
     snap("composer-dark", Mode::Dark, "", true);
     snap("composer-filled-light", Mode::Light, "Try the new decay and show me the same query.\nThen run the bench.", true);
     snap("composer-filled-dark", Mode::Dark, "Try the new decay and show me the same query.\nThen run the bench.", true);
+    snap("composer-read-only-light", Mode::Light, "", false);
+    snap("composer-read-only-dark", Mode::Dark, "", false);
 }
 
 // ------------------------------------------------------------------ drafts per pane
@@ -300,4 +302,101 @@ fn a_failed_send_returns_to_the_pane_it_was_for() {
     assert!(app.state.composer.error.is_none());
     let _ = app.update(to_a);
     assert_eq!(app.state.composer.text(), "lost");
+}
+
+// ------------------------------------------------------------------ attach (+)
+
+/// A picker that returns fixed paths and counts its calls. No dialog opens.
+#[derive(Default)]
+struct FakePicker {
+    paths: Vec<std::path::PathBuf>,
+    calls: Mutex<Vec<Option<std::path::PathBuf>>>,
+}
+impl composer::FilePicker for FakePicker {
+    fn pick(&self, start: Option<std::path::PathBuf>) -> composer::PickFuture {
+        self.calls.lock().unwrap().push(start);
+        let paths = self.paths.clone();
+        Box::pin(async move { paths })
+    }
+}
+
+/// Runs a task to its end and returns its messages (the iced runtime does this in the app).
+fn run_task(task: iced::Task<Message>) -> Vec<Message> {
+    use iced_test::futures::futures::StreamExt;
+    let Some(stream) = iced_test::runtime::task::into_stream(task) else { return vec![] };
+    iced_test::futures::futures::executor::block_on(stream.collect::<Vec<_>>())
+        .into_iter()
+        .filter_map(|a| if let iced_test::runtime::Action::Output(m) = a { Some(m) } else { None })
+        .collect()
+}
+
+/// Every point of the composer that sends `Attach` when clicked (the view is scanned on a 4 pt grid).
+fn attach_points(app: &App) -> usize {
+    let mut renderer = iced_test::futures::futures::executor::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia"))).unwrap();
+    let mut hits = 0;
+    let mut cache = Cache::default();
+    for y in (0..SIZE.height as i32).step_by(4) {
+        for x in (0..160).step_by(4) {
+            let cursor = mouse::Cursor::Available(Point::new(x as f32, y as f32));
+            let mut ui = UserInterface::build(composer::view(app), SIZE, cache, &mut renderer);
+            let mut msgs: Vec<Message> = Vec::new();
+            let events = [Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))];
+            ui.update(&events, cursor, &mut renderer, &mut clipboard::Null, &mut msgs);
+            cache = ui.into_cache();
+            hits += msgs.iter().filter(|m| matches!(m, Message::Composer(ComposerMsg::Attach))).count();
+        }
+    }
+    hits
+}
+
+#[test]
+fn paths_are_quoted_like_a_shell_word() {
+    use std::path::Path;
+    assert_eq!(composer::quoted(Path::new("/tmp/plain.txt")), "/tmp/plain.txt");
+    assert_eq!(composer::quoted(Path::new("/tmp/with space.png")), "'/tmp/with space.png'");
+    assert_eq!(composer::quoted(Path::new("/tmp/it's (1).md")), r"'/tmp/it'\''s (1).md'");
+    assert_eq!(composer::quoted(Path::new("/tmp/a&b;c")), "'/tmp/a&b;c'");
+}
+
+#[test]
+fn plus_opens_the_picker_and_inserts_the_paths_at_the_caret() {
+    let mut h = H::new();
+    let picker = Arc::new(FakePicker { paths: vec!["/tmp/a.txt".into(), "/tmp/b c.png".into()], ..Default::default() });
+    h.app.state.composer.picker = Some(picker.clone());
+    assert!(attach_points(&h.app) > 0, "the + button sends Attach");
+    h.type_text("see ");
+    let task = h.app.update(Message::Composer(ComposerMsg::Attach));
+    let msgs = run_task(task);
+    assert_eq!(picker.calls.lock().unwrap().len(), 1, "one dialog");
+    for m in msgs {
+        let _ = h.app.update(m);
+    }
+    assert_eq!(h.text(), "see /tmp/a.txt '/tmp/b c.png' ");
+    // Nothing chosen: the text stays.
+    let empty = Arc::new(FakePicker::default());
+    h.app.state.composer.picker = Some(empty);
+    for m in run_task(h.app.update(Message::Composer(ComposerMsg::Attach))) {
+        let _ = h.app.update(m);
+    }
+    assert_eq!(h.text(), "see /tmp/a.txt '/tmp/b c.png' ");
+}
+
+#[test]
+fn read_only_plus_is_disabled_and_opens_nothing() {
+    let mut app = App::demo(Mode::Light, Screen::Conversation);
+    let picker = Arc::new(FakePicker { paths: vec!["/tmp/a.txt".into()], ..Default::default() });
+    app.state.composer.picker = Some(picker.clone());
+    assert!(app.state.composer.sender.is_none());
+    assert_eq!(attach_points(&app), 0, "no click target");
+    assert!(run_task(app.update(Message::Composer(ComposerMsg::Attach))).is_empty());
+    assert!(picker.calls.lock().unwrap().is_empty(), "no dialog in read-only");
+    let _ = app.update(Message::Composer(ComposerMsg::Attached(vec!["/tmp/a.txt".into()])));
+    assert_eq!(app.state.composer.text(), "", "a late result does not write into a read-only box");
+}
+
+#[test]
+fn read_only_plus_looks_disabled() {
+    // The + icon is drawn in the dimmed color in read-only, the normal one with writes on.
+    let t = fb_ui::theme::Tokens::of(Mode::Light);
+    assert_ne!(composer::attach_icon_color(t, false), composer::attach_icon_color(t, true));
 }

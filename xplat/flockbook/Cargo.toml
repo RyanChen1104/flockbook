@@ -27,6 +27,8 @@ serde.workspace = true
 dirs = "6"
 pulldown-cmark = { version = "0.12", default-features = false }
 window-vibrancy = "0.6"
+# The file dialog behind the composer's +. Linux: the XDG desktop portal (no GTK needed).
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

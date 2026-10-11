@@ -12,6 +12,13 @@
 //! session `c9-input-test` only, never the default session.
 //!
 //! With no sender installed the composer is read-only ("Read-only: input is off"), like the Swift app.
+//!
+//! # Attach (+)
+//!
+//! The + button opens the system file dialog ([`FilePicker`]; live: [`NativePicker`]) and inserts the chosen paths
+//! at the caret, shell-quoted, with a trailing space (Swift `attach()`). The agent reads a path as an attachment. In
+//! read-only the button is dimmed and has no action. Unlike Swift, only files can be chosen, not folders: the
+//! Windows and Linux dialogs pick one or the other.
 
 use crate::{style, App, Message};
 use fb_ui::icons::{icon, Icon, SIZE_DEFAULT, SIZE_INLINE};
@@ -21,6 +28,9 @@ use iced::widget::text_editor::{self, Action, Binding, Content};
 use iced::widget::{button, column, container, row, text, text_editor as text_editor_fn, Space};
 use iced::{Alignment, Background, Border, Element, Length, Task};
 use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,6 +75,38 @@ impl MessageSender for LiveSender {
     }
 }
 
+/// What a file dialog gives back: the chosen paths, empty when cancelled.
+pub type PickFuture = Pin<Box<dyn Future<Output = Vec<PathBuf>> + Send>>;
+
+/// Opens a file dialog. Tests use a fake; the app uses [`NativePicker`].
+pub trait FilePicker: Send + Sync {
+    /// `start`: the folder the dialog opens in (the pane's working folder), if known.
+    fn pick(&self, start: Option<PathBuf>) -> PickFuture;
+}
+
+/// The system file dialog (NSOpenPanel, the Windows file dialog, the XDG desktop portal on Linux).
+pub struct NativePicker;
+
+impl FilePicker for NativePicker {
+    fn pick(&self, start: Option<PathBuf>) -> PickFuture {
+        let mut dialog = rfd::AsyncFileDialog::new().set_title("Attach");
+        if let Some(dir) = start.filter(|d| d.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        Box::pin(async move { dialog.pick_files().await.unwrap_or_default().into_iter().map(|f| f.path().to_path_buf()).collect() })
+    }
+}
+
+/// A path as one shell word: quoted with '…' when it has a space or one of `()'"&;` (Swift `ComposerHandle.quoted`).
+pub fn quoted(path: &Path) -> String {
+    let p = path.to_string_lossy();
+    if p.chars().any(|c| " ()'\"&;".contains(c)) {
+        format!("'{}'", p.replace('\'', r"'\''"))
+    } else {
+        p.into_owned()
+    }
+}
+
 #[derive(Default)]
 pub struct ComposerState {
     pub content: Content,
@@ -80,6 +122,8 @@ pub struct ComposerState {
     pub pane: Option<String>,
     /// Unsent text of the panes that are not shown, by pane id. One draft per pane, like the Swift app.
     pub drafts: HashMap<String, String>,
+    /// The file dialog behind +. `None`: + does nothing (tests that do not need it).
+    pub picker: Option<Arc<dyn FilePicker>>,
 }
 
 impl ComposerState {
@@ -125,7 +169,11 @@ pub enum ComposerMsg {
     Submit,
     /// Result of a send. `text` is given back to an empty box on failure.
     Sent { pane: String, text: String, error: Option<String> },
-    /// Buttons without a function yet (attach, dictate).
+    /// + : open the file dialog.
+    Attach,
+    /// The dialog's result: these paths go in at the caret.
+    Attached(Vec<PathBuf>),
+    /// Buttons without a function yet (dictate).
     Noop,
 }
 
@@ -135,6 +183,8 @@ impl std::fmt::Debug for ComposerMsg {
             ComposerMsg::Edit(_) => write!(f, "Edit"),
             ComposerMsg::Submit => write!(f, "Submit"),
             ComposerMsg::Sent { error, .. } => write!(f, "Sent({})", error.is_some()),
+            ComposerMsg::Attach => write!(f, "Attach"),
+            ComposerMsg::Attached(p) => write!(f, "Attached({})", p.len()),
             ComposerMsg::Noop => write!(f, "Noop"),
         }
     }
@@ -189,6 +239,23 @@ pub fn update(app: &mut App, msg: ComposerMsg) -> Task<Message> {
             }
             Task::none()
         }
+        ComposerMsg::Attach => {
+            let st = &app.state.composer;
+            let (Some(_), Some(picker)) = (&st.sender, st.picker.clone()) else { return Task::none() };
+            let start = app.state.selected_pane().map(|p| expand_home(&p.cwd));
+            Task::perform(picker.pick(start), |paths| Message::Composer(ComposerMsg::Attached(paths)))
+        }
+        ComposerMsg::Attached(paths) => {
+            // Read-only now (input turned off while the dialog was open): drop the result.
+            if app.state.composer.sender.is_none() || paths.is_empty() {
+                return Task::none();
+            }
+            let words: Vec<String> = paths.iter().map(|p| quoted(p)).collect();
+            let insert = format!("{} ", words.join(" "));
+            app.state.composer.content.perform(Action::Edit(text_editor::Edit::Paste(Arc::new(insert))));
+            app.state.composer.error = None;
+            iced::widget::operation::focus(EDITOR_ID)
+        }
         ComposerMsg::Noop => Task::none(),
     }
 }
@@ -230,7 +297,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let can_send = st.can_send();
     // The svg renderer drops icon alpha, so translucent icon colors are blended with the surface by hand.
-    let card_bg = if t.mode.is_dark() { rgba(48, 48, 52, 1.0) } else { rgba(255, 255, 255, 1.0) };
+    let card_bg = card_bg(t);
     let send_icon = if can_send { t.on_accent } else { over(t.label_3, over(t.fill_2, card_bg)) };
     let send_btn = button(container(icon(Icon::ArrowUp, SIZE_DEFAULT, send_icon)).center(Length::Fixed(28.0)))
         .padding(0)
@@ -247,10 +314,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             button::Style { background: Some(Background::Color(bg)), border: Border { radius: 14.0.into(), ..Default::default() }, ..Default::default() }
         });
 
-    let ghost = move |ic: Icon, size: f32| {
-        button(container(icon(ic, size, over(t.label_2, card_bg))).center(Length::Fixed(28.0)))
+    let ghost = move |ic: Icon, size: f32, msg: Message| {
+        button(container(icon(ic, size, attach_icon_color(t, !read_only))).center(Length::Fixed(28.0)))
             .padding(0)
-            .on_press_maybe((!read_only).then_some(Message::Composer(ComposerMsg::Noop)))
+            .on_press_maybe((!read_only).then_some(msg))
             .style(move |_, status| button::Style {
                 background: matches!(status, button::Status::Hovered | button::Status::Pressed).then(|| Background::Color(t.fill_2)),
                 border: Border { radius: 14.0.into(), ..Default::default() },
@@ -258,7 +325,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             })
     };
 
-    let mut controls = row![ghost(Icon::Plus, SIZE_DEFAULT + 2.0)].spacing(SP_8).align_y(Alignment::Center);
+    let plus = ghost(Icon::Plus, SIZE_DEFAULT + 2.0, Message::Composer(ComposerMsg::Attach));
+    let tip = if read_only { "Attach file (input is off)" } else { "Attach file (inserts its path)" };
+    let plus = iced::widget::tooltip(plus, container(CALLOUT.text(tip).color(t.label)).padding([5, 9]).style(style::float_e2(t, R_ROW)), iced::widget::tooltip::Position::Top).gap(6);
+    let mut controls = row![plus].spacing(SP_8).align_y(Alignment::Center);
     if let Some(b) = branch_for(app) {
         controls = controls.push(
             row![icon(Icon::GitBranch, SIZE_INLINE, over(t.label_2, card_bg)), CAPTION.text(b).color(t.label_2).wrapping(text::Wrapping::None)]
@@ -266,7 +336,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .align_y(Alignment::Center),
         );
     }
-    controls = controls.push(Space::new().width(Length::Fill)).push(ghost(Icon::Mic, SIZE_DEFAULT)).push(send_btn);
+    controls = controls.push(Space::new().width(Length::Fill)).push(ghost(Icon::Mic, SIZE_DEFAULT, Message::Composer(ComposerMsg::Noop))).push(send_btn);
 
     let mut body = column![editor].spacing(SP_4);
     if let Some(e) = &st.error {
@@ -276,6 +346,28 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let card = container(body.padding([12, 16])).width(Length::Fill).max_width(CARD_MAX_W).style(style::float_e2(t, R_COMPOSER));
     container(card).padding([SP_8, SP_24]).width(Length::Fill).align_x(Alignment::Center).into()
+}
+
+/// The card surface the icons sit on (the svg renderer drops icon alpha, so colors are blended by hand).
+fn card_bg(t: Tokens) -> iced::Color {
+    if t.mode.is_dark() {
+        rgba(48, 48, 52, 1.0)
+    } else {
+        rgba(255, 255, 255, 1.0)
+    }
+}
+
+/// The + and mic icons: secondary label color, dimmed to the tertiary one when input is off.
+pub fn attach_icon_color(t: Tokens, enabled: bool) -> iced::Color {
+    over(if enabled { t.label_2 } else { t.label_3 }, card_bg(t))
+}
+
+/// `~/x` as an absolute path (pane working folders come with `~`).
+fn expand_home(cwd: &str) -> PathBuf {
+    match cwd.strip_prefix('~') {
+        Some(rest) => dirs::home_dir().map(|h| h.join(rest.trim_start_matches('/'))).unwrap_or_else(|| PathBuf::from(cwd)),
+        None => PathBuf::from(cwd),
+    }
 }
 
 // ---------------------------------------------------------------- branch line
@@ -341,6 +433,7 @@ pub fn parse_head(s: &str) -> Option<String> {
 #[cfg(unix)]
 pub fn install_live(app: &mut App, session: &herdr_core::HerdrSession) {
     app.state.composer.sender = Some(Arc::new(LiveSender::new(session)));
+    app.state.composer.picker = Some(Arc::new(NativePicker));
 }
 
 #[cfg(test)]
