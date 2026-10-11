@@ -177,13 +177,21 @@ pub fn on_key(key: Key, mods: Modifiers) -> Option<Message> {
         Key::Named(Named::ArrowDown) if mods.command() && mods.alt() => Some(Message::Sidebar(SidebarMsg::NextWorkspace)),
         Key::Named(Named::ArrowUp) if mods.command() && mods.alt() => Some(Message::Sidebar(SidebarMsg::PrevWorkspace)),
         Key::Named(Named::Escape) => Some(Message::TopRow(TopRowMsg::CloseMenu)),
-        Key::Character(c) if mods.command() && !mods.alt() && !mods.shift() => {
-            let n = c.chars().next().and_then(|c| c.to_digit(10))?;
-            (1..=9).contains(&n).then(|| Message::TopRow(TopRowMsg::SelectIndex(n as usize - 1)))
+        // Only digits: an early return here would also swallow Ctrl+` on Linux and Windows, where Ctrl is the
+        // command key.
+        Key::Character(c) if mods.command() && !mods.alt() && !mods.shift() && tab_digit(c).is_some() => {
+            tab_digit(c).map(|n| Message::TopRow(TopRowMsg::SelectIndex(n - 1)))
         }
         Key::Character("`") if mods.control() => Some(Message::TopRow(TopRowMsg::ToggleTerminal)),
         _ => None,
     }
+}
+
+/// "1" to "9" as 1 to 9.
+fn tab_digit(c: &str) -> Option<usize> {
+    let mut chars = c.chars();
+    let n = chars.next()?.to_digit(10)? as usize;
+    (chars.next().is_none() && (1..=9).contains(&n)).then_some(n)
 }
 
 /// Subscriptions of this module: keys, and the working-arc tick while any tab works.

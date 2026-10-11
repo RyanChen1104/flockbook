@@ -68,6 +68,17 @@ fn tab_numbers_and_escape_work_as_listed() {
     assert!(handlers(&Key::Named(Named::Escape), Modifiers::empty()).iter().any(|m| matches!(m, Message::Shortcut(Action::Dismiss))));
 }
 
+/// Ctrl+` with the command key held too. On Linux and Windows Ctrl IS the command key, so this is plain Ctrl+`
+/// there; it used to fall into the Cmd+digit arm, which returned early on a non-digit.
+#[test]
+fn ctrl_backtick_toggles_the_terminal_when_ctrl_is_the_command_key() {
+    let m = flockbook::toprow::on_key(Key::Character("`".into()), Modifiers::CTRL | Modifiers::COMMAND);
+    assert!(matches!(m, Some(Message::TopRow(flockbook::toprow::TopRowMsg::ToggleTerminal))), "{m:?}");
+    // A command-key letter the top row does not own still reaches nothing here (and Cmd+1 still selects a tab).
+    assert!(flockbook::toprow::on_key(Key::Character("k".into()), Modifiers::COMMAND).is_none());
+    assert!(flockbook::toprow::on_key(Key::Character("1".into()), Modifiers::COMMAND).is_some());
+}
+
 #[test]
 fn keys_read_the_platform_way() {
     let new_ws = TABLE.iter().find(|s| s.label == "New Workspace").unwrap();
