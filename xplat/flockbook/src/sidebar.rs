@@ -152,7 +152,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // Keep the status mapping in one place for builders.
     let _ = status_kind;
 
-    container(column![Space::new().height(52), nav, Space::new().height(SP_24), header, Space::new().height(SP_4), scrollable(list).height(Length::Fill)])
+    container(column![crate::chrome::drag_area(app, Space::new().width(Length::Fill).height(52)), nav, Space::new().height(SP_24), header, Space::new().height(SP_4), scrollable(list).height(Length::Fill)])
         .padding([0, 12])
         .height(Length::Fill)
         .into()

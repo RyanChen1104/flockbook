@@ -1,0 +1,79 @@
+//! Window chrome: the title bar per platform.
+//!
+//! - macOS: no visible title bar, like the Swift app. The title bar is transparent, the title is hidden and the
+//!   content runs to the top of the window. The sidebar starts at the top; its first 52 pt are empty, and the
+//!   traffic lights sit there. With the title bar gone, the empty parts of the top row and of the sidebar top move
+//!   the window (drag) and zoom it (double-click), the way a title bar does.
+//! - Windows and Linux: the native title bar stays. Our own decorations would need resize borders, snap layouts,
+//!   the Wayland decoration protocol and the window menu re-done by hand, and they would break on some compositors.
+//!   The native bar drags, resizes and snaps the way users of each system expect. So no drag areas there: a drag
+//!   inside the content would be a behavior these systems do not have.
+
+use iced::widget::mouse_area;
+use iced::{window, Element, Task};
+
+use crate::glass::Os;
+use crate::{App, Message};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TitleBar {
+    /// The system title bar with the window title.
+    #[default]
+    Native,
+    /// macOS: transparent, no title, the content under it.
+    Hidden,
+}
+
+pub fn choose(os: Os) -> TitleBar {
+    match os {
+        Os::MacOs => TitleBar::Hidden,
+        Os::Windows | Os::Other => TitleBar::Native,
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ChromeState {
+    pub title_bar: TitleBar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChromeMsg {
+    /// A press on an empty part of the top: move the window.
+    Drag,
+    /// A double-click there: zoom, as on a title bar.
+    Zoom,
+}
+
+pub fn update(app: &mut App, msg: ChromeMsg) -> Task<Message> {
+    if app.state.chrome.title_bar != TitleBar::Hidden {
+        return Task::none();
+    }
+    match msg {
+        ChromeMsg::Drag => window::oldest().and_then(window::drag),
+        ChromeMsg::Zoom => window::oldest().and_then(window::toggle_maximize),
+    }
+}
+
+/// Makes `content` (empty space at the top of the window) act as the title bar when the native one is hidden.
+pub fn drag_area<'a>(app: &App, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    if app.state.chrome.title_bar == TitleBar::Hidden {
+        mouse_area(content).on_press(Message::Chrome(ChromeMsg::Drag)).on_double_click(Message::Chrome(ChromeMsg::Zoom)).into()
+    } else {
+        content.into()
+    }
+}
+
+/// The window settings for the title bar.
+pub fn window_settings(title_bar: TitleBar, settings: window::Settings) -> window::Settings {
+    #[cfg(target_os = "macos")]
+    {
+        if title_bar == TitleBar::Hidden {
+            return window::Settings {
+                platform_specific: window::settings::PlatformSpecific { title_hidden: true, titlebar_transparent: true, fullsize_content_view: true },
+                ..settings
+            };
+        }
+    }
+    let _ = title_bar;
+    settings
+}

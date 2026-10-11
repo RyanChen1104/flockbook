@@ -582,7 +582,8 @@ fn view_sized(app: &App, width: f32) -> Element<'_, Message> {
         .push(tip(t, menu_button(t, Icon::Columns2, ts.menu == Some(MenuKind::Split), Message::TopRow(TopRowMsg::ToggleMenu(MenuKind::Split))), "Split".into(), tooltip::Position::Bottom))
         .push(tip(t, icon_button(t, Icon::SquareTerminal, ts.terminal_on, Message::TopRow(TopRowMsg::ToggleTerminal)), "Show terminal (\u{2303}`)".into(), tooltip::Position::Bottom));
 
-    container(row![left, Space::new().width(Length::Fill), right].align_y(Alignment::Center).padding([0.0, SP_16]))
+    let gap = crate::chrome::drag_area(app, Space::new().width(Length::Fill).height(Length::Fixed(TOPROW_H)));
+    container(row![left, gap, right].align_y(Alignment::Center).padding([0.0, SP_16]))
         .height(Length::Fixed(TOPROW_H))
         .width(Length::Fill)
         .align_y(Alignment::Center)

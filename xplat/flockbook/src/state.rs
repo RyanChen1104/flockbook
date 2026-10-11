@@ -80,6 +80,7 @@ pub struct State {
     pub search: crate::search::SearchState,
     pub terminal: crate::terminal::TerminalState,
     pub glass: crate::glass::GlassState,
+    pub chrome: crate::chrome::ChromeState,
 }
 
 impl State {
@@ -105,6 +106,7 @@ impl State {
             search: Default::default(),
             terminal: Default::default(),
             glass: Default::default(),
+            chrome: Default::default(),
         }
     }
 

@@ -75,12 +75,15 @@ fn main() -> iced::Result {
         .font(fb_ui::fonts::BUNDLED[3])
         .font(fb_ui::fonts::BUNDLED[4])
         .default_font(fb_ui::fonts::default_font())
-        .window(iced::window::Settings {
-            size: Size::new(1280.0, 852.0),
-            min_size: Some(Size::new(900.0, 560.0)),
-            transparent: flockbook::glass::launch_transparent(backdrop),
-            ..Default::default()
-        })
+        .window(flockbook::chrome::window_settings(
+            flockbook::chrome::choose(flockbook::glass::Os::current()),
+            iced::window::Settings {
+                size: Size::new(1280.0, 852.0),
+                min_size: Some(Size::new(900.0, 560.0)),
+                transparent: flockbook::glass::launch_transparent(backdrop),
+                ..Default::default()
+            },
+        ))
         .run()
 }
 
@@ -97,6 +100,7 @@ fn boot(demo: bool, args: &[String], backdrop: flockbook::glass::Backdrop) -> (A
         flockbook::access::make_read_only(&mut app);
     }
     flockbook::glass::install(&mut app, backdrop);
+    app.state.chrome.title_bar = flockbook::chrome::choose(flockbook::glass::Os::current());
     (app, Task::none())
 }
 

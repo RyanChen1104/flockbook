@@ -39,6 +39,7 @@
 pub mod access;
 pub mod actions;
 pub mod cards;
+pub mod chrome;
 pub mod composer;
 pub mod conversation;
 pub mod demo;
@@ -86,6 +87,7 @@ pub enum Message {
     Search(search::SearchMsg),
     Terminal(terminal::TerminalMsg),
     Glass(glass::GlassMsg),
+    Chrome(chrome::ChromeMsg),
 }
 
 pub struct App {
@@ -229,6 +231,7 @@ impl App {
             Message::Search(m) => search::update(self, m),
             Message::Terminal(m) => terminal::update(self, m),
             Message::Glass(m) => glass::update(self, m),
+            Message::Chrome(m) => chrome::update(self, m),
         }
     }
 
