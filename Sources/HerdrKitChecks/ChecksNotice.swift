@@ -71,6 +71,42 @@ import Foundation
     let moved = prompt.replacingOccurrences(of: " ❯ 1. Yes\n   2.", with: "   1. Yes\n ❯ 2.")
     check(N.screenPrompt(moved) == N.screenPrompt(prompt), "notice: the option cursor does not change the screen id")
 
+    // A workflow's call (its transcript is not the main log): 2 options, a danger note and a countdown that changes every second.
+    func workflowPrompt(_ left: String) -> String {
+        """
+        ⏺ Bash(cleanup)
+        ────────────────────────────────────────
+         Bash command · from the "build-r1-t2" workflow
+         Remove probe files
+        ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+         cd /work/app &&
+           rm -f /tmp_probe_check.json &&
+           ls
+        ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+         Dangerous rm operation on critical path: /tmp_probe_check.json
+         ⚠ Claude Code will automatically deny this request in \(left), to avoid blocking progress on an unattended session
+
+         Do you want to proceed?
+         ❯ 1. Yes
+           2. No
+
+         Esc to cancel · Tab to amend
+        """
+    }
+    let wf = workflowPrompt("1:23"), wfLater = workflowPrompt("1:22")
+    let wfReq = N.screenRequest(wf)
+    check(wfReq?.toolName == "Bash" && wfReq?.title.hasPrefix("Bash command") == true && wfReq?.command == "cd /work/app &&\nrm -f /tmp_probe_check.json &&\nls",
+          "notice: workflow prompt -> card request (\(String(describing: wfReq)))")
+    var wfState = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: nil, screen: wf)
+    check(N.prompt(wfState, writes: true) == N.screenPrompt(wf) && N.screenPrompt(wf) != nil, "notice: workflow prompt without a log row -> buttons")
+    check(N.screenPrompt(wf) == N.screenPrompt(wfLater), "notice: the auto-deny countdown is not part of the screen id")
+    wfState.screen = wfLater
+    check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: N.screenPrompt(wf), now: wfState, writes: true) == .send(allow: true),
+          "notice: Allow a second later (countdown moved) -> send")
+    check(N.screenPrompt(wf.replacingOccurrences(of: "rm -f", with: "rm -rf")) != N.screenPrompt(wf), "notice: another command in the workflow prompt -> another id")
+    // Two options: "1" is still Yes and Escape still denies (no option number).
+    check(wf.contains("1. Yes") && ApprovalKeys.allowOnce == "1" && ApprovalKeys.deny == "Escape", "notice: 2-option prompt keeps allow = 1, deny = Escape")
+
     // Action -> outcome, with the stale-prompt guard.
     check(N.Action.allow.allows && !N.Action.deny.allows, "notice: allow allows, deny denies")
     check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: "toolu_1", now: blocked, writes: true) == .send(allow: true), "notice: Allow on the same prompt sends allow")

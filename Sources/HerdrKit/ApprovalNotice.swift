@@ -42,12 +42,17 @@ public enum ApprovalNotice {
 
     /// Claude's permission prompt box on screen. `tool` = the first word of its header ("Bash command" -> "Bash").
     /// `lines` = the whole box, trimmed: from below the box's top rule (or the screen top) down to the last option, without
-    /// blank lines, the rotating "Tip:" line and the option cursor `❯`.
+    /// what changes while the prompt stays: blank lines, the rotating "Tip:" line, the auto-deny countdown and the cursor `❯`.
     struct ScreenBox: Sendable, Hashable {
         var header: String
         var tool: String
         var command: String
         var lines: [String]
+    }
+
+    /// "⚠ Claude Code will automatically deny this request in 1:23, …": its time changes every second.
+    static func isCountdown(_ line: String) -> Bool {
+        line.hasPrefix("⚠") && line.firstMatch(of: /\b\d{1,2}:\d{2}\b/) != nil
     }
 
     static func screenBox(_ screen: String) -> ScreenBox? {
@@ -62,7 +67,7 @@ public enum ApprovalNotice {
         let box = raw[top...end].map { l -> String in
             let t = trim(l)
             return t.hasPrefix("❯") ? trim(String(t.dropFirst())) : t
-        }.filter { !$0.isEmpty && !$0.hasPrefix("Tip:") }
+        }.filter { !$0.isEmpty && !$0.hasPrefix("Tip:") && !isCountdown($0) }
         guard let header = box.first, header != box.last else { return nil }
         let isRule: (String) -> Bool = { $0.hasPrefix("╌") }
         let askAt = box.lastIndex { $0.contains(PermissionGate.promptMarker) } ?? box.count
