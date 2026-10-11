@@ -118,8 +118,8 @@ struct InboxView: View {
                 }
             }
             if let request, request.state == .pending, blockedPane.map({ model.promptVisible.contains($0.id) }) ?? false {
-                ApprovalCard(request: request, agentName: agent?.name ?? "", canRespond: blockedPane.map { model.promptVisible.contains($0.id) } ?? false, onAllow: { if let p = t.panes.first(where: { $0.agent?.status == .blocked }) { model.approve(pane: p, allow: true) } },
-                             onDeny: { if let p = t.panes.first(where: { $0.agent?.status == .blocked }) { model.approve(pane: p, allow: false) } },
+                ApprovalCard(request: request, agentName: agent?.name ?? "", canRespond: blockedPane.map { model.promptVisible.contains($0.id) } ?? false, onAllow: { if let p = t.panes.first(where: { $0.agent?.status == .blocked }) { model.approve(pane: p, allow: true, bound: request) } },
+                             onDeny: { if let p = t.panes.first(where: { $0.agent?.status == .blocked }) { model.approve(pane: p, allow: false, bound: request) } },
                              onOpen: { model.select(tab: t, in: ws); model.showTerminal = true })
                     .frame(maxWidth: 560)
             } else {

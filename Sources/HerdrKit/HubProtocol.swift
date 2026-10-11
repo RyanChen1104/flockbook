@@ -70,6 +70,17 @@ public enum Hub {
         return lines[(at + 1)...].prefix(4).contains { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "❯", with: "").trimmingCharacters(in: .whitespaces).hasPrefix("1.") }
     }
 
+    /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude
+    /// question, or any picker with its key line near the bottom ("Enter to confirm", "Esc to cancel"), such as
+    /// Claude's setup and folder-trust pickers.
+    public static func screenTakesKeys(_ screen: String) -> Bool {
+        if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
+            || unreadablePrompt(screen: screen, blocked: false) { return true }
+        let lines = screen.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(12)
+        guard let keys = lines.lastIndex(where: { $0.hasPrefix("Enter to confirm") || $0.hasPrefix("Esc to cancel") }) else { return false }
+        return lines[..<keys].contains { $0.hasPrefix("1.") || $0.firstMatch(of: /^❯\s*(1\.|\S)/) != nil && $0 != "❯" }
+    }
+
     /// ISO 8601 UTC with milliseconds.
     static func time(_ d: Date?) -> String? {
         guard let d else { return nil }
@@ -420,5 +431,16 @@ public struct HubItem: Codable, Hashable, Sendable {
         case .question(let q): self.init(id: item.id, kind: .question, time: t, question: HubQuestion(q))
         case .status(let s): self.init(id: item.id, kind: .status, time: t, text: s)
         }
+    }
+}
+
+extension HerdrClient {
+    /// Right before remote text is typed: a fresh snapshot and screen. True only when the pane still has an agent, it
+    /// is not blocked, and nothing on screen would take the text as a choice (`Hub.screenTakesKeys`). Read-only.
+    public func readyForText(paneId: String) async -> Bool {
+        guard let ws = try? await snapshot(),
+              let agent = ws.flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == paneId })?.agent, agent.status != .blocked,
+              let screen = try? await visibleText(paneId: paneId) else { return false }
+        return !Hub.screenTakesKeys(screen)
     }
 }

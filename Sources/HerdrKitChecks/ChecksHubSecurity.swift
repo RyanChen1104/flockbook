@@ -175,3 +175,104 @@ import Foundation
         check(p.open == nil && p.redeem(o2.secret, name: "x", source: "owner") == nil, "security: \(HubPairing.maxTries) wrong tries in all end the offer")
     }
 }
+
+// Second review of the fixes: each check failed before its fix.
+@MainActor func checksHubSecurityReview2() async throws {
+    typealias N = ApprovalNotice
+    func msg(_ json: String) -> Data { Data(json.utf8) }
+    func code(_ ms: [HubMessage]) -> HubError.Code? { ms.last.flatMap { if case .reply(let r) = $0 { r.error?.code } else { nil } } }
+    func isOK(_ ms: [HubMessage]) -> Bool { ms.last.map { if case .reply(let r) = $0 { r.ok } else { false } } ?? false }
+    func box(_ command: String) -> String {
+        "────────────────────────────────────────\n Bash command\n Run it\n╌╌╌╌╌╌╌╌╌╌\n \(command)\n╌╌╌╌╌╌╌╌╌╌\n"
+            + " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend"
+    }
+    // A Claude picker that is not a permission prompt (seen live after a turn): typed text + Enter would pick "Yes".
+    let setupPicker = """
+    ────────────────────────────────────────
+    ❯
+    ────────────────────────────────────────
+      ⏵⏵ auto mode on (shift+tab to cycle)
+    ────────────────────────────────────────
+      Teach auto mode about your environment?
+      Auto mode works better when it knows your environment. Takes about a minute.
+      ❯ 1. Yes
+        2. Not now
+        3. Don't show again
+      Enter to confirm · Esc to cancel
+    """
+    let devices = MemoryDeviceStore()
+    devices.add(token: "tok", device: HubDevice(id: "d1", name: "Phone", level: .input))
+    func ws(_ status: AgentStatus) -> [Workspace] {
+        let a = Agent(name: "claude", kind: "claude", status: status, sessionId: "s1", title: "t")
+        return [Workspace(id: "w1", label: "w", tabs: [Tab(id: "w1:t1", label: "t", number: 1,
+                          panes: [Pane(id: "w1:p1", terminalId: "term_1", cwd: "/w", agent: a)], status: status)])]
+    }
+    func session(_ b: FakeHubBackend) async -> HubSession {
+        let s = HubSession(backend: b, devices: devices)
+        _ = await s.receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok","client":"t","clientVersion":"1"}"#))
+        return s
+    }
+
+    // (a) The in-app card: it binds the request it shows, and shows the screen prompt when the log lags.
+    do {
+        let screenB = box("rm -rf build")
+        let onScreen = N.screenRequest(screenB)
+        let lagging = PermissionRequest(title: "Bash", command: "npm run build", toolName: "Bash", toolUseId: "toolu_A")
+        let caughtUp = PermissionRequest(title: "Bash", command: "rm -rf build", toolName: "Bash", toolUseId: "toolu_B")
+        check(N.cardRequest(logged: lagging, onScreen: onScreen)?.toolUseId == N.screenPrompt(screenB),
+              "review2: log lags the screen -> the card shows (and binds) the screen prompt")
+        check(N.cardRequest(logged: caughtUp, onScreen: onScreen)?.toolUseId == "toolu_B", "review2: log matches the box -> the card shows the log's call")
+        check(N.cardRequest(logged: lagging, onScreen: nil)?.toolUseId == "toolu_A", "review2: no box read -> the log's call (the keys still need the box)")
+        let st = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_A", screen: screenB, pendingTool: "Bash", pendingCommand: "npm run build")
+        let bound = N.cardRequest(logged: lagging, onScreen: onScreen)?.toolUseId
+        check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: bound, now: st, writes: true) == .send(allow: true),
+              "review2: the card's bound id passes the re-check")
+    }
+
+    // (b) A screen that cannot be read refuses every input (fail closed), with nothing sent.
+    do {
+        let b = FakeHubBackend(workspaces: ws(.idle))   // no screen: the read fails
+        let s = await session(b)
+        let r = await s.receive(msg(#"{"v":1,"type":"send","id":"c1","pane":"w1:p1","text":"hi"}"#))
+        check(code(r) == .failed && b.sent.isEmpty, "review2: unreadable screen -> send failed, nothing typed (\(String(describing: code(r))))")
+        let bb = FakeHubBackend(workspaces: ws(.blocked))
+        let sb = await session(bb)
+        let ap = await sb.receive(msg(#"{"v":1,"type":"approve","id":"c2","pane":"w1:p1","prompt":"x","allow":true}"#))
+        check(code(ap) == .failed && bb.approved.isEmpty, "review2: unreadable screen -> approve failed (\(String(describing: code(ap))))")
+        let an = await sb.receive(msg(#"{"v":1,"type":"answer","id":"c3","pane":"w1:p1","question":"q","answers":[{"picks":[1]}]}"#))
+        check(code(an) == .failed && bb.answered.isEmpty, "review2: unreadable screen -> answer failed (\(String(describing: code(an))))")
+    }
+
+    // (c) A picker on screen takes typed text as a choice: send refuses it, before and right before the keys.
+    do {
+        check(Hub.screenTakesKeys(setupPicker), "review2: a numbered picker with its key line takes keys")
+        check(Hub.screenTakesKeys(box("ls")), "review2: a permission prompt takes keys")
+        check(!Hub.screenTakesKeys("Done. Two ways on:\n1. Ship it\n2. Wait\n\n> "), "review2: prose with a list is not a picker")
+        check(!Hub.screenTakesKeys("> "), "review2: an empty input line is not a picker")
+        let b = FakeHubBackend(workspaces: ws(.idle))
+        b.screens["w1:p1"] = setupPicker
+        let s = await session(b)
+        let r = await s.receive(msg(#"{"v":1,"type":"send","id":"c1","pane":"w1:p1","text":"hi"}"#))
+        check(code(r) == .promptOpen && b.sent.isEmpty, "review2: idle agent with a picker on screen -> promptOpen")
+        // The backend's own re-read found a change: promptOpen, not ok.
+        b.screens["w1:p1"] = "> "
+        b.sendResult = .changed
+        let r2 = await s.receive(msg(#"{"v":1,"type":"send","id":"c2","pane":"w1:p1","text":"hi"}"#))
+        check(code(r2) == .promptOpen, "review2: pane changed before the keys -> promptOpen (\(String(describing: code(r2))))")
+
+        // On the wire: a fresh snapshot and screen right before the keys.
+        let fake = FakeHerdr(path: NSTemporaryDirectory() + "hkrr-\(getpid()).sock")
+        try fake.start()
+        defer { fake.kill() }
+        let client = HerdrClient(session: HerdrSession(name: "fake", socketPath: fake.path))
+        fake.screen = "> "
+        check(await !client.readyForText(paneId: "w1:p1"), "review2: no agent in the pane now -> not ready")
+        fake.agents = #"[{"pane_id":"w1:p1","agent":"claude","name":"claude","agent_status":"blocked"}]"#
+        check(await !client.readyForText(paneId: "w1:p1"), "review2: agent blocked now -> not ready")
+        fake.agents = #"[{"pane_id":"w1:p1","agent":"claude","name":"claude","agent_status":"idle"}]"#
+        check(await client.readyForText(paneId: "w1:p1"), "review2: idle agent, plain screen -> ready")
+        fake.screen = setupPicker
+        check(await !client.readyForText(paneId: "w1:p1"), "review2: picker on screen now -> not ready")
+        check(fake.requests.allSatisfy { ["session.snapshot", "pane.read"].contains($0.method) }, "review2: the re-check only reads")
+    }
+}

@@ -22,10 +22,12 @@ import Foundation
     func loadEarlier(session: String) async -> Bool { await store.loadEarlier(for: session) }
     func screen(pane: String) async -> String? { try? await store.client.visibleText(paneId: pane) }
 
-    func send(pane id: String, text: String) async -> Bool {
-        guard model.writesEnabled else { return false }
+    func send(pane id: String, text: String) async -> HubSendResult {
+        guard model.writesEnabled else { return .failed }
+        // herdr has no compare-and-send: this read and the keys are two calls, so a small window stays.
+        guard await store.client.readyForText(paneId: id) else { return .changed }
         model.noteSent(id)
-        return await MessageSender.send(text, to: id, client: store.client)
+        return await MessageSender.send(text, to: id, client: store.client) ? .sent : .failed
     }
 
     /// The approval card's keys, without its UI follow-up (the Mac window does not change for a phone action).

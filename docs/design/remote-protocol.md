@@ -56,11 +56,19 @@ The hub re-reads the pane when `approve` arrives (`ApprovalNotice.outcome`). It 
 
 The log can lag the screen. So when a prompt box is on screen, the id must be the screen id, or the log id only when the log's pending call is that box (same tool, same command, spaces aside). A client that holds an older log id gets `stale` while the screen shows another prompt. The hub reads the pane once more right before the keys go out and sends nothing if the prompt changed in between (`stale`). The Mac notification path uses the same two checks.
 
+The in-app card binds its buttons to the request it shows (`ApprovalNotice.cardRequest`: the log's call when it is the box on screen, else the box) and sends through the same re-check.
+
 A screen that shows a permission prompt the hub cannot read (the marker line, but no prompt box it can parse) counts as an open prompt: `approve` replies `stale` (no id matches), `send` replies `promptOpen`. The hub fails closed.
 
 **answer.** The hub reads the open question again (Claude: the picker on screen; Codex: the pending question in the log). It answers only when that question's id equals `question`. Otherwise it replies `stale`. Only a picker question can be answered from a client (`delivery: "picker"`, as in the app); a `message` question replies `failed`. Claude shows one question of a set at a time (`headers` names all of them). The hub then reads the others first (navigation keys only, as the app card does) and needs one answer per question; a different count replies `failed` and nothing is chosen.
 
-**send.** Only to an agent pane: a plain shell replies `readOnly` (shell input stays off remotely). When the pane has an open prompt (an approval, a question, or a prompt the hub cannot read), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends.
+**send.** Only to an agent pane: a plain shell replies `readOnly` (shell input stays off remotely). When the pane has an open prompt (an approval, a question, a prompt the hub cannot read, a blocked agent, or any picker with its key line on screen, such as Claude's setup or folder-trust pickers), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends. Right before the keys, the hub reads the pane again (a fresh snapshot and screen: the agent is still there, not blocked, no picker); if that changed, it replies `promptOpen` and sends nothing.
+
+Multi-line text is one message: the hub types it as the Mac composer does (`pane.send_input`, the text, then Enter). Checked live in a test session on 2026-10-12: Claude Code 2.1.296, Codex 0.162.1 and pi each took a two-line message as one submission (one answer to both lines).
+
+**Unreadable screen.** When the hub cannot read the pane's screen, `send`, `approve` and `answer` reply `failed` and send nothing. Without the screen the hub cannot tell what the keys would answer.
+
+**What stays open.** herdr has no compare-and-send: the last read and the keys are two calls. A prompt that opens in the milliseconds between them can still get the keys. The checks make this window small; they cannot close it. (The Mac card and notification buttons have the same window.)
 
 **Text rules (send, and each `other` of answer).** At most 16,000 characters for `send` and 2,000 for `other`. No control characters except line feed and tab: no ESC (so no bracketed-paste markers or key sequences), no CR, no other C0, no DEL, no C1 (U+0080–U+009F). A breach replies `badRequest` and sends nothing.
 

@@ -438,6 +438,21 @@ import Foundation
     }
 }
 
+// `HerdrKitChecks --ready <session> <pane>...`: the remote send gate (`readyForText`) on live panes. Read-only.
+@MainActor func modeReady() async throws {
+    if let i = CommandLine.arguments.firstIndex(of: "--ready") {
+        let a = CommandLine.arguments
+        guard a.count > i + 2 else { print("usage: --ready <session> <pane>..."); exit(2) }
+        let client = HerdrClient(session: .named(a[i + 1]))
+        let panes = ((try? await client.snapshot()) ?? []).flatMap(\.tabs).flatMap(\.panes)
+        for id in a[(i + 2)...] {
+            let agent = panes.first { $0.id == id }?.agent
+            print("\(id) agent=\(agent?.kind ?? "none") status=\(agent?.status.rawValue ?? "-") picker=\(Hub.screenTakesKeys((try? await client.visibleText(paneId: id)) ?? "")) ready=\(await client.readyForText(paneId: id))")
+        }
+        exit(0)
+    }
+}
+
 @MainActor func modeKeys() async throws {
     if let i = CommandLine.arguments.firstIndex(of: "--keys") {
         let a = CommandLine.arguments

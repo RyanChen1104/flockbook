@@ -129,6 +129,7 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 | A malicious client sends raw keys | No raw-key API; only `send`, `approve`, `answer` with hub-side checks |
 | Approve the wrong prompt (screen changed) | Hub re-reads the pane; prompt id must match the prompt on screen (a log id only when the log's call is that box); one more read right before the keys; an unreadable prompt counts as open (same rules as the notification) |
 | Remote text into a shell, or control keys in text | `send` goes to agent panes only; text has no control characters except LF and tab, and a length cap |
+| Remote text lands in a picker | `send` refuses while any prompt or picker is on screen or the agent is blocked, and reads the pane again right before the keys; an unreadable screen refuses every input. Residual: herdr has no compare-and-send, so a prompt that opens between the last read and the keys can still get them (milliseconds) |
 | A fake certificate on the LAN takes the pairing | Tailscale recommended (and default); LAN marked "less safe"; the fingerprint is for reference only in a browser |
 | One peer burns the pairing offer | 3 wrong tries per source, 20 in all |
 | Logs contain secrets (code, keys, tokens) | Read access is sensitive too: pairing is required even for `read`; nothing is cached on the phone beyond the open session (no offline store of conversations in v1) |

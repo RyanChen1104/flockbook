@@ -161,22 +161,34 @@ final class AppModel {
     /// transcript, or a log that lags the screen).
     var screenPrompts: [String: PermissionRequest] = [:]
 
-    /// The request the approval card shows: the log's pending tool call, else the prompt on screen.
+    /// The request the approval card shows and binds its buttons to: the log's pending call when it is the prompt on
+    /// screen, else the prompt on screen (`ApprovalNotice.cardRequest`).
     func approvalRequest(_ pane: Pane) -> PermissionRequest? {
         let logged = store.conversation(for: pane.agent?.sessionId).reversed().lazy.compactMap { item -> PermissionRequest? in
             if case .permissionRequest(let r) = item.kind { return r }
             return nil
         }.first
-        if let logged, logged.state == .pending { return logged }
-        return pane.agent?.status == .blocked ? screenPrompts[pane.id] : nil
+        return ApprovalNotice.cardRequest(logged: logged?.state == .pending ? logged : nil,
+                                          onScreen: pane.agent?.status == .blocked ? screenPrompts[pane.id] : nil)
     }
 
     /// Allow once = "1" (no Enter), Deny = Escape (verified in a named test session). Only when the prompt is on screen.
-    func approve(pane: Pane, allow: Bool) {
-        guard writesEnabled, promptVisible.contains(pane.id) else { showTerminal = true; return }
+    /// `bound`: the request the card showed (nil: the card's request now). The keys go out only while that prompt is
+    /// still open (`respondIfOpen` reads the pane right before them); else nothing is sent and the terminal opens.
+    func approve(pane: Pane, allow: Bool, bound: PermissionRequest? = nil) {
+        guard writesEnabled, promptVisible.contains(pane.id), let agent = pane.agent,
+              let prompt = (bound ?? approvalRequest(pane))?.toolUseId else { showTerminal = true; return }
         let id = pane.id
+        let pending = pendingRequest(pane)
         Task {
-            try? await store.client.respond(to: id, allow: allow)
+            let sent = (try? await store.client.respondIfOpen(paneId: id, prompt: prompt, allow: allow, agentKind: agent.kind,
+                                                             blocked: agent.status == .blocked, pending: pending)) == true
+            noticeLog.info("card \(allow ? "allow" : "deny", privacy: .public) pane \(id, privacy: .public) prompt \(prompt, privacy: .public): \(sent ? "keys sent" : "not sent, prompt changed", privacy: .public)")
+            guard sent else {
+                notice = "The prompt changed. Nothing was sent."; showTerminal = true
+                await checkPrompt(for: pane)
+                return
+            }
             try? await Task.sleep(for: .seconds(1.5))
             await store.refresh()
             let still = store.workspaces.flatMap(\.tabs).flatMap(\.panes).first { $0.id == id }?.agent?.status == .blocked

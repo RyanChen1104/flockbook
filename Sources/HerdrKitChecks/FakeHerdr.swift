@@ -14,6 +14,7 @@ final class FakeHerdr: @unchecked Sendable {
     private var _label = "v0"
     private var _snapshots = 0
     private var _screen = ""
+    private var _agents = "[]"
     private var _requests: [(method: String, params: [String: Any])] = []
 
     init(path: String) { self.path = path }
@@ -22,6 +23,8 @@ final class FakeHerdr: @unchecked Sendable {
     var snapshotCount: Int { lock.withLock { _snapshots } }
     /// What `pane.read` returns as the visible screen.
     var screen: String { get { lock.withLock { _screen } } set { lock.withLock { _screen = newValue } } }
+    /// The snapshot's `agents` array, as JSON.
+    var agents: String { get { lock.withLock { _agents } } set { lock.withLock { _agents = newValue } } }
     /// Every request received, in order.
     var requests: [(method: String, params: [String: Any])] { lock.withLock { _requests } }
 
@@ -79,15 +82,15 @@ final class FakeHerdr: @unchecked Sendable {
                 let reply: String
                 switch o["method"] as? String {
                 case "session.snapshot":
-                    let l = lock.withLock { _snapshots += 1; return _label }
-                    reply = #"{"id":"\#(id)","result":{"type":"snapshot","snapshot":{"workspaces":[{"workspace_id":"w1","label":"\#(l)","number":1}],"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"1","number":1}],"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","terminal_id":"term_1","cwd":"/tmp"}],"agents":[]}}}"#
+                    let (l, agents) = lock.withLock { _snapshots += 1; return (_label, _agents) }
+                    reply = #"{"id":"\#(id)","result":{"type":"snapshot","snapshot":{"workspaces":[{"workspace_id":"w1","label":"\#(l)","number":1}],"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"1","number":1}],"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","terminal_id":"term_1","cwd":"/tmp"}],"agents":\#(agents)}}}"#
                 case "events.subscribe":
                     lock.withLock { subscribers.append(c) }
                     reply = #"{"id":"\#(id)","result":{"type":"subscription_started"}}"#
                 case "pane.read":
                     let text = String(decoding: try! JSONSerialization.data(withJSONObject: [screen]), as: UTF8.self).dropFirst().dropLast()
                     reply = #"{"id":"\#(id)","result":{"type":"pane_read","read":{"text":\#(text)}}}"#
-                case "pane.send_text", "pane.send_keys":
+                case "pane.send_text", "pane.send_keys", "pane.send_input":
                     reply = #"{"id":"\#(id)","result":{"type":"ok"}}"#
                 default:
                     reply = #"{"id":"\#(id)","error":{"code":"unknown","message":"fake"}}"#

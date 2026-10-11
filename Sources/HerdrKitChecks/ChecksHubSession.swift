@@ -27,7 +27,8 @@ import Foundation
         return false
     }
     func screen(pane: String) async -> String? { screens[pane] }
-    func send(pane: String, text: String) async -> Bool { sent.append("\(pane) \(text)"); return sendOK }
+    var sendResult = HubSendResult.sent
+    func send(pane: String, text: String) async -> HubSendResult { sent.append("\(pane) \(text)"); return sendOK ? sendResult : .failed }
     var approveOK = true
     func approve(pane: String, prompt: String, allow: Bool) async -> Bool { approved.append("\(pane) \(prompt) \(allow)"); return approveOK }
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws {
@@ -210,6 +211,7 @@ import Foundation
         let cb = FakeHubBackend(workspaces: ws(.idle, kind: "codex"))
         let cq = QuestionRequest(toolUseId: "call_1", agent: "codex", delivery: .message, questions: [.init(header: "", text: "Which?", options: [.init(label: "A")])])
         cb.items["s1"] = [ConversationItem(id: "q", kind: .question(cq))]
+        cb.screens["w1:p1"] = "› "
         let (cs, _) = await session(cb)
         check(code(await cs.receive(msg(#"{"v":1,"type":"answer","id":"c4","pane":"w1:p1","question":"call_1","answers":[{"picks":[0]}]}"#))) == .failed && cb.answered.isEmpty,
               "hub session: a message-delivery question -> failed")

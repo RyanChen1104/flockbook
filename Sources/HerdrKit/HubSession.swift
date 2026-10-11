@@ -22,12 +22,14 @@ import CryptoKit
     /// The pane's visible screen text (read-only).
     func screen(pane: String) async -> String?
     /// Types the text and submits it, as the composer does. False when herdr did not take it.
-    func send(pane: String, text: String) async -> Bool
+    func send(pane: String, text: String) async -> HubSendResult
     /// The approval card's input (`HerdrClient.respond`). Called only after the prompt was checked.
     func approve(pane: String, prompt: String, allow: Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws
 }
+
+public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
 
 public struct HubDevice: Codable, Hashable, Sendable {
     public var id: String
@@ -136,12 +138,21 @@ extension Hub {
             guard p.agent != nil else { return [fail(m.id, .readOnly, "Remote input goes to agents only.")] }
             if let why = Hub.inputProblem(text, limit: Hub.maxSendText) { return [fail(m.id, .badRequest, why)] }
             let st = await state(p)
-            guard st.approval == nil, st.question == nil, !st.unreadablePrompt else { return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")] }
-            return await backend.send(pane: id, text: text) ? [ok(m.id)] : [fail(m.id, .failed, "herdr did not take the message.")]
+            guard let screen = st.screen else { return [unreadable(m.id)] }
+            guard st.approval == nil, st.question == nil, !st.unreadablePrompt, p.agent?.status != .blocked, !Hub.screenTakesKeys(screen) else {
+                return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")]
+            }
+            // The backend reads the pane once more right before the keys (`HerdrClient.readyForText`).
+            switch await backend.send(pane: id, text: text) {
+            case .sent: return [ok(m.id)]
+            case .changed: return [fail(m.id, .promptOpen, "The pane changed before the text went out. Nothing was sent.")]
+            case .failed: return [fail(m.id, .failed, "herdr did not take the message.")]
+            }
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             let st = await state(p)
+            guard st.screen != nil else { return [unreadable(m.id)] }
             let action = (allow ? ApprovalNotice.Action.allow : .deny).rawValue
             guard case .send(let a) = ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: st.pane, writes: true) else {
                 return [fail(m.id, .stale, "The prompt changed. Nothing was sent.")]
@@ -155,6 +166,7 @@ extension Hub {
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             for a in answers { if let o = a.other, let why = Hub.inputProblem(o, limit: Hub.maxOtherText) { return [fail(m.id, .badRequest, why)] } }
             let st = await state(p)
+            guard st.screen != nil else { return [unreadable(m.id)] }
             guard let q = st.question, q.toolUseId == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
             do {
@@ -188,6 +200,8 @@ extension Hub {
         .reply(HubReply(re: re, ok: false, error: HubError(code: code, message: message)))
     }
     private func readOnly(_ re: String) -> HubMessage { fail(re, .readOnly, "Input is off for this device.") }
+    /// Fail closed: without the screen the hub cannot tell what the keys would answer.
+    private func unreadable(_ re: String) -> HubMessage { fail(re, .failed, "Could not read the pane. Nothing was sent.") }
 
     /// The id of a message that did not decode, so its error reply can still name it.
     static func requestID(_ data: Data) -> String {

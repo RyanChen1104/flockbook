@@ -39,9 +39,14 @@ public enum ApprovalNotice {
         guard writes, s.blocked, s.agentKind == "claude",
               QuestionAdapter.claudeScreen(s.screen) == nil,
               let box = screenBox(s.screen), let onScreen = screenPrompt(s.screen) else { return [] }
-        guard let logged = s.pendingToolUseId, !logged.isEmpty, let tool = s.pendingTool, let command = s.pendingCommand,
-              tool == box.tool, words(command) == words(box.command), !words(command).isEmpty else { return [onScreen] }
+        guard let logged = s.pendingToolUseId, !logged.isEmpty, sameCall(tool: s.pendingTool, command: s.pendingCommand, box.tool, box.command) else { return [onScreen] }
         return [logged, onScreen]
+    }
+
+    /// The log's call is the prompt box: same tool, same non-empty command (spaces aside).
+    private static func sameCall(tool: String?, command: String?, _ boxTool: String, _ boxCommand: String) -> Bool {
+        guard let tool, let command, !words(command).isEmpty else { return false }
+        return tool == boxTool && words(command) == words(boxCommand)
     }
 
     /// Whitespace-insensitive: the box wraps and indents a long command.
@@ -107,6 +112,15 @@ public enum ApprovalNotice {
     public static func screenRequest(_ screen: String) -> PermissionRequest? {
         guard let box = screenBox(screen), let id = screenPrompt(screen) else { return nil }
         return PermissionRequest(title: box.header, command: box.command, toolName: box.tool, toolUseId: id, state: .pending)
+    }
+
+    /// The request the in-app card shows and binds its buttons to: the log's call when it is the box on screen, else
+    /// the box (a log that lags the screen still names the previous call). No box read: the log's call; its keys then
+    /// wait for the box (`respondIfOpen`).
+    public static func cardRequest(logged: PermissionRequest?, onScreen: PermissionRequest?) -> PermissionRequest? {
+        guard let onScreen else { return logged }
+        guard let logged, sameCall(tool: logged.toolName, command: logged.command, onScreen.toolName, onScreen.command) else { return onScreen }
+        return logged
     }
 
     public enum Outcome: Sendable, Hashable {

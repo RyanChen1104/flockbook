@@ -97,8 +97,8 @@ struct PaneView: View {
                 // scroll edges, instead of being cut by a hard rectangle.
                 ConversationView(items: model.store.conversation(for: agent.sessionId), agentName: agent.name,
                                  canRespond: model.promptVisible.contains(pane.id),
-                                 onAllow: { model.approve(pane: pane, allow: true) },
-                                 onDeny: { model.approve(pane: pane, allow: false) },
+                                 onAllow: { model.approve(pane: pane, allow: true, bound: $0) },
+                                 onDeny: { model.approve(pane: pane, allow: false, bound: $0) },
                                  onOpenTerminal: { model.showTerminal = true },
                                  agentStatus: agent.status,
                                  onFresh: { if focused { focusRequest += 1 } },
@@ -152,8 +152,8 @@ extension PaneView {
         } else if !model.hasPending(pane), let r = model.approvalRequest(pane), model.promptVisible.contains(pane.id) {
             // A prompt the log does not have (no transcript): the card from the screen, where the question card goes.
             ApprovalCard(request: r, agentName: agent.name, canRespond: true,
-                         onAllow: { model.approve(pane: pane, allow: true) },
-                         onDeny: { model.approve(pane: pane, allow: false) },
+                         onAllow: { model.approve(pane: pane, allow: true, bound: r) },
+                         onDeny: { model.approve(pane: pane, allow: false, bound: r) },
                          onOpen: { model.showTerminal = true })
                 .id(r.toolUseId)
                 .frame(maxWidth: 780)

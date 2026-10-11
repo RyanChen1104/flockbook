@@ -5,8 +5,9 @@ struct ConversationView: View {
     let items: [ConversationItem]
     let agentName: String
     var canRespond = false
-    var onAllow: () -> Void = {}
-    var onDeny: () -> Void = {}
+    /// The card's buttons, with the request the card shows (its prompt id binds the keys).
+    var onAllow: (PermissionRequest) -> Void = { _ in }
+    var onDeny: (PermissionRequest) -> Void = { _ in }
     var onOpenTerminal: () -> Void = {}
     /// The agent's state: picks the empty-state copy (a fresh agent has no log until its first message).
     var agentStatus: AgentStatus? = nil
@@ -283,7 +284,7 @@ struct ConversationView: View {
     }
 
     @ViewBuilder private func approval(_ r: PermissionRequest) -> some View {
-        ApprovalCard(request: r, agentName: agentName, canRespond: canRespond, onAllow: onAllow, onDeny: onDeny, onOpen: onOpenTerminal)
+        ApprovalCard(request: r, agentName: agentName, canRespond: canRespond, onAllow: { onAllow(r) }, onDeny: { onDeny(r) }, onOpen: onOpenTerminal)
     }
 
     private func markdown(_ s: String) -> AttributedString {
