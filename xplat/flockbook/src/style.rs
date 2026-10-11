@@ -13,9 +13,10 @@ pub fn content(t: Tokens) -> impl Fn(&Theme) -> container::Style {
     move |_| solid(t.bg)
 }
 
-pub fn sidebar(t: Tokens) -> impl Fn(&Theme) -> container::Style {
+/// The sidebar: opaque `sidebar`, or the `glass_side` tint under window glass.
+pub fn sidebar(t: Tokens, glass: bool) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(t.sidebar)),
+        background: Some(Background::Color(if glass { t.glass_side } else { t.sidebar })),
         border: Border { color: t.sep, width: 0.0, radius: 0.0.into() },
         ..Default::default()
     }
@@ -49,10 +50,10 @@ pub fn float_e2(t: Tokens, radius: f32) -> impl Fn(&Theme) -> container::Style {
 /// Height of the soft fade under the top row.
 pub const FADE_H: f32 = 24.0;
 
-/// A vertical gradient from the content color to the same color with no alpha (top to bottom).
-pub fn fade_down(t: Tokens) -> impl Fn(&Theme) -> container::Style {
+/// A vertical gradient from the content color `c` to the same color with no alpha (top to bottom).
+pub fn fade_down(c: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| {
-        let g = iced::gradient::Linear::new(Radians(std::f32::consts::PI)).add_stop(0.0, t.bg).add_stop(1.0, Color { a: 0.0, ..t.bg });
+        let g = iced::gradient::Linear::new(Radians(std::f32::consts::PI)).add_stop(0.0, c).add_stop(1.0, Color { a: 0.0, ..c });
         container::Style { background: Some(Background::Gradient(iced::Gradient::Linear(g))), ..Default::default() }
     }
 }
@@ -60,8 +61,9 @@ pub fn fade_down(t: Tokens) -> impl Fn(&Theme) -> container::Style {
 /// Puts a `FADE_H` soft fade over the top of `content`, so rows that scroll under the top row fade out instead of
 /// being cut. The content keeps its own top inset (24 pt in the conversation, 36 pt in the overview), so the first
 /// row at rest sits below the fade. The fade ignores the pointer.
-pub fn with_top_fade<'a, M: 'a>(t: Tokens, content: Element<'a, M>) -> Element<'a, M> {
-    let fade = container(Space::new()).width(Length::Fill).height(Length::Fixed(FADE_H)).style(fade_down(t));
+/// `ground` is the color under the content (`bg`, or `content` under window glass).
+pub fn with_top_fade<'a, M: 'a>(ground: Color, content: Element<'a, M>) -> Element<'a, M> {
+    let fade = container(Space::new()).width(Length::Fill).height(Length::Fixed(FADE_H)).style(fade_down(ground));
     stack![content, column![fade, Space::new().height(Length::Fill)]].into()
 }
 
@@ -72,7 +74,7 @@ mod tests {
     #[test]
     fn fade_runs_from_the_content_color_to_transparent() {
         let t = Tokens::LIGHT;
-        let st = fade_down(t)(&Theme::Light);
+        let st = fade_down(t.bg)(&Theme::Light);
         let Some(Background::Gradient(iced::Gradient::Linear(g))) = st.background else { panic!("gradient") };
         let stops: Vec<_> = g.stops.iter().flatten().collect();
         assert_eq!(stops.len(), 2);

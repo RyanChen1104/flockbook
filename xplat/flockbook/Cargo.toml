@@ -23,3 +23,8 @@ png.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json.workspace = true
 pulldown-cmark = { version = "0.12", default-features = false }
+window-vibrancy = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSAppearance", "NSColor", "NSGraphics", "NSResponder", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace"] }

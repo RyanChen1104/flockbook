@@ -495,7 +495,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn view_sized(app: &App, width: f32) -> Element<'_, Message> {
-    let t = app.tokens();
+    let t = app.bar_tokens();
     let s = &app.state;
     let ts = &s.toprow;
     let tabs: &[Tab] = s.selected_workspace().map(|w| w.tabs.as_slice()).unwrap_or(&[]);

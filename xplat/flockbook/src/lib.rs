@@ -42,6 +42,7 @@ pub mod cards;
 pub mod composer;
 pub mod conversation;
 pub mod demo;
+pub mod glass;
 pub mod links;
 pub mod needs_you;
 pub mod overview;
@@ -84,6 +85,7 @@ pub enum Message {
     Cards(cards::CardsMsg),
     Search(search::SearchMsg),
     Terminal(terminal::TerminalMsg),
+    Glass(glass::GlassMsg),
 }
 
 pub struct App {
@@ -119,6 +121,25 @@ impl App {
 
     pub fn tokens(&self) -> Tokens {
         Tokens::of(self.state.mode)
+    }
+
+    /// Tokens for text on the glass bars (sidebar, top row, Needs you list): the stronger labels under window glass.
+    pub fn bar_tokens(&self) -> Tokens {
+        if self.state.glass.on {
+            self.tokens().on_glass()
+        } else {
+            self.tokens()
+        }
+    }
+
+    /// The color under the main area: `bg`, or the almost opaque `content` tint under window glass.
+    pub fn ground(&self) -> iced::Color {
+        let t = self.tokens();
+        if self.state.glass.on {
+            t.content
+        } else {
+            t.bg
+        }
     }
 
     pub fn theme(&self) -> Theme {
@@ -159,7 +180,10 @@ impl App {
         }
         // The terminal sheet follows the screen and the pane: leaving either releases it.
         terminal::after_update(self);
-        task
+        match glass::sync(self) {
+            Some(g) => Task::batch([task, g]),
+            None => task,
+        }
     }
 
     fn route(&mut self, message: Message) -> Task<Message> {
@@ -204,22 +228,30 @@ impl App {
             Message::Cards(m) => cards::update(self, m),
             Message::Search(m) => search::update(self, m),
             Message::Terminal(m) => terminal::update(self, m),
+            Message::Glass(m) => glass::update(self, m),
         }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
         let t = self.tokens();
+        let ground = self.ground();
         let main: Element<Message> = match self.state.screen {
-            Screen::Conversation => column![style::with_top_fade(t, conversation::view(self)), cards::bottom(self)].into(),
-            Screen::Overview => style::with_top_fade(t, overview::view(self)),
+            Screen::Conversation => column![style::with_top_fade(ground, conversation::view(self)), cards::bottom(self)].into(),
+            Screen::Overview => style::with_top_fade(ground, overview::view(self)),
             Screen::NeedsYou => needs_you::view(self),
             Screen::Search => overview::view(self),
         };
+        let sidebar = container(sidebar::view(self)).width(Length::Fixed(SIDEBAR_W)).height(Length::Fill).style(style::sidebar(t, self.state.glass.on));
+        if self.state.glass.on {
+            // Window glass: each surface paints one tint over a clear root, so translucent layers never stack.
+            let main = container(main).width(Length::Fill).height(Length::Fill);
+            let main = if needs_you::paints_own_ground(self) { main } else { main.style(style::fill(ground, 0.0)) };
+            let right = column![container(toprow::view(self)).width(Length::Fill).height(Length::Fixed(fb_ui::theme::TOPROW_H)).style(style::fill(t.glass_bar, 0.0)), main];
+            let body = row![sidebar, container(right).width(Length::Fill).height(Length::Fill)];
+            return container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self)]).width(Length::Fill).height(Length::Fill).into();
+        }
         let right = column![container(toprow::view(self)).height(Length::Fixed(fb_ui::theme::TOPROW_H)), container(main).width(Length::Fill).height(Length::Fill)];
-        let body = row![
-            container(sidebar::view(self)).width(Length::Fixed(SIDEBAR_W)).height(Length::Fill).style(style::sidebar(t)),
-            container(right).width(Length::Fill).height(Length::Fill).style(style::content(t)),
-        ];
+        let body = row![sidebar, container(right).width(Length::Fill).height(Length::Fill).style(style::content(t))];
         container(iced::widget::stack![body, toprow::menu_layer(self), terminal::layer(self)]).width(Length::Fill).height(Length::Fill).style(style::content(t)).into()
     }
 }

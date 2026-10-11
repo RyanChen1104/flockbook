@@ -1,5 +1,7 @@
 //! Headless rendering: one frame, offscreen, through `iced_test::Simulator` on the tiny-skia (CPU) renderer.
 //! No window, no Dock icon, no focus change. Output is RGBA at 2x scale.
+//! Under window glass (`state.glass.on`) the frame is drawn over a stand-in wallpaper (the mocks' `--wall`), so the
+//! translucent surfaces show. There is no blur: the real backdrop is the OS's.
 
 use crate::state::Screen;
 use crate::{App, Message};
@@ -37,7 +39,8 @@ pub fn parse_size(s: &str) -> Option<(u32, u32)> {
 pub fn render_app(app: &App, size: (u32, u32)) -> Image {
     std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
     let settings = Settings { fonts: fb_ui::fonts::bytes(), default_font: fb_ui::fonts::default_font(), ..Settings::default() };
-    let mut sim: Simulator<'_, Message> = Simulator::with_size(settings, Size::new(size.0 as f32, size.1 as f32), app.view());
+    let view = if app.state.glass.on { iced::widget::stack![wall(app.state.mode), app.view()].into() } else { app.view() };
+    let mut sim: Simulator<'_, Message> = Simulator::with_size(settings, Size::new(size.0 as f32, size.1 as f32), view);
     let snap = sim.snapshot(&app.theme()).expect("snapshot");
     // `Snapshot` keeps its pixels private; it can only write a PNG, so go through a temp file.
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -47,6 +50,28 @@ pub fn render_app(app: &App, size: (u32, u32)) -> Image {
     let img = read_png(&png_path);
     let _ = std::fs::remove_dir_all(&dir);
     img
+}
+
+/// The mocks' `--wall` (DESIGN.md section 9): three soft color spots on a plain ground.
+pub fn wall_svg(mode: Mode) -> String {
+    let (a, b, c, ground) = if mode.is_dark() { ("#2b3a58", "#3b2c4c", "#1f3d44", "#12141a") } else { ("#b9cce6", "#dccfe0", "#e9ddd0", "#dde3eb") };
+    let spot = |id: &str, color: &str, cx: f32, cy: f32, rx: f32, ry: f32| {
+        format!(
+            r#"<radialGradient id="{id}" gradientUnits="userSpaceOnUse" cx="{cx}" cy="{cy}" r="{rx}" gradientTransform="translate({cx} {cy}) scale(1 {s}) translate(-{cx} -{cy})"><stop offset="0" stop-color="{color}"/><stop offset="0.7" stop-color="{color}" stop-opacity="0"/></radialGradient>"#,
+            s = ry / rx
+        )
+    };
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><defs>{}{}{}</defs><rect width="100" height="100" fill="{ground}"/><rect width="100" height="100" fill="url(#a)"/><rect width="100" height="100" fill="url(#b)"/><rect width="100" height="100" fill="url(#c)"/></svg>"#,
+        spot("a", a, 12.0, 18.0, 60.0, 70.0),
+        spot("b", b, 88.0, 85.0, 55.0, 65.0),
+        spot("c", c, 70.0, 10.0, 50.0, 60.0),
+    )
+}
+
+fn wall<'a>(mode: Mode) -> iced::Element<'a, Message> {
+    let handle = iced::widget::svg::Handle::from_memory(wall_svg(mode).into_bytes());
+    iced::widget::svg(handle).width(iced::Length::Fill).height(iced::Length::Fill).content_fit(iced::ContentFit::Fill).into()
 }
 
 fn read_png(path: &Path) -> Image {

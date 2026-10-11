@@ -212,6 +212,12 @@ pub fn subscription(app: &App) -> Subscription<Message> {
 // ---------------------------------------------------------------------------------------------------------------
 // Views
 
+/// Under window glass the list column is a glass bar and the detail the content tint, so the screen paints its own
+/// ground instead of the main area's one fill.
+pub fn paints_own_ground(app: &App) -> bool {
+    app.state.screen == Screen::NeedsYou && !items(app).is_empty()
+}
+
 pub fn view(app: &App) -> Element<'_, Message> {
     let list = items(app);
     if list.is_empty() {
@@ -219,12 +225,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
     }
     let cur = selected_index(app).unwrap_or(0);
     let t = app.tokens();
-    row![
-        container(list_column(app, &list, cur)).width(Length::Fixed(LIST_W)).height(Length::Fill),
-        container(Space::new().width(1).height(Length::Fill)).style(style::fill(t.sep, 0.0)),
-        container(detail(app, list[cur])).width(Length::Fill).height(Length::Fill),
-    ]
-    .into()
+    let mut list_box = container(list_column(app, &list, cur)).width(Length::Fixed(LIST_W)).height(Length::Fill);
+    let mut detail_box = container(detail(app, list[cur])).width(Length::Fill).height(Length::Fill);
+    if app.state.glass.on {
+        list_box = list_box.style(style::fill(t.glass_bar, 0.0));
+        detail_box = detail_box.style(style::fill(app.ground(), 0.0));
+    }
+    row![list_box, container(Space::new().width(1).height(Length::Fill)).style(style::fill(t.sep, 0.0)), detail_box].into()
 }
 
 fn empty(app: &App) -> Element<'_, Message> {
@@ -260,7 +267,7 @@ fn avatar<'a>(t: Tokens, ws: &str, size: f32, badge: f32, selected: bool, ring: 
 }
 
 fn list_column<'a>(app: &'a App, list: &[Item<'a>], cur: usize) -> Element<'a, Message> {
-    let t = app.tokens();
+    let t = app.bar_tokens();
     let now = app.state.overview.clock().now;
     let head = row![TITLE_3.text("Needs you").color(t.label), TITLE_3.text(list.len().to_string()).color(t.label_3)].spacing(8).padding(iced::Padding { top: 20.0, right: 16.0, bottom: 8.0, left: 16.0 });
     let mut col = column![head];

@@ -1,8 +1,9 @@
 //! Flockbook binary.
 //!
 //! Normal run: opens a real window (for the owner only).
-//! Headless: `flockbook --snapshot out.png --screen conversation|overview [--theme light|dark] [--tab LABEL] [--query TEXT] [--terminal] [--size 1280x852] [--demo]`
+//! Headless: `flockbook --snapshot out.png --screen conversation|overview [--theme light|dark] [--tab LABEL] [--query TEXT] [--terminal] [--glass on] [--size 1280x852] [--demo]`
 //! renders one demo frame offscreen and exits. It never opens a window.
+//! `--glass on|off` (or env `FLOCKBOOK_GLASS`): window glass, on by default on macOS and Windows 11, always off on Linux.
 //! `--terminal` opens the Show terminal sheet on demo frames (fake backend, no process). `--read-only` (or env `FLOCKBOOK_READ_ONLY=1`): nothing is ever sent to a pane; the composer and the cards only read.
 
 use fb_ui::Mode;
@@ -27,21 +28,25 @@ fn main() -> iced::Result {
         // `--query TEXT` types TEXT into Search (all demo conversations are loaded first).
         // `--terminal` opens the sheet over the conversation, on the demo shell screen. With `--read-only` it is the Observe look.
         let terminal = args.iter().any(|a| a == "--terminal");
+        // `--glass on` draws the window-glass look over a stand-in wallpaper.
+        let glass = arg_value(&args, "--glass").is_some_and(|v| v == "on");
         let read_only = args.iter().any(|a| a == "--read-only");
-        let img = if terminal {
-            snapshot::render_app(&flockbook::terminal::demo_app(mode, screen, !read_only), size)
+        let mut app = if terminal {
+            flockbook::terminal::demo_app(mode, screen, !read_only)
         } else if let Some(q) = arg_value(&args, "--query") {
             let mut app = App::demo(mode, Screen::Search);
             flockbook::search::preload_all(&mut app);
             let _ = app.update(Message::Search(flockbook::search::SearchMsg::Open));
             let _ = app.update(Message::Search(flockbook::search::SearchMsg::Input(q)));
-            snapshot::render_app(&app, size)
+            app
         } else {
             match arg_value(&args, "--tab") {
-                Some(label) => snapshot::render_app(&flockbook::cards::demo_app_on_tab(mode, screen, &label), size),
-                None => snapshot::render(snapshot::Options { screen, mode, size }),
+                Some(label) => flockbook::cards::demo_app_on_tab(mode, screen, &label),
+                None => App::demo(mode, screen),
             }
         };
+        app.state.glass.on = glass;
+        let img = snapshot::render_app(&app, size);
         match snapshot::write_png(&img, std::path::Path::new(&out)) {
             Ok(()) => {
                 println!("wrote {out} ({}x{})", img.width, img.height);
@@ -55,10 +60,13 @@ fn main() -> iced::Result {
     }
 
     let demo = args.iter().any(|a| a == "--demo");
-    iced::application(move || boot(demo, &args), App::update, App::view)
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let backdrop = flockbook::glass::choose(flockbook::glass::Os::current(), &args, &env);
+    iced::application(move || boot(demo, &args, backdrop), App::update, App::view)
         .title(App::title)
         .theme(|app: &App| -> Theme { app.theme() })
-        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app), flockbook::terminal::subscription(app)]) })
+        .style(|app: &App, theme: &Theme| iced::theme::Style { background_color: flockbook::glass::root_color(app), text_color: theme.palette().text })
+        .subscription(|app: &App| -> Subscription<Message> { Subscription::batch([time::every(Duration::from_millis(800)).map(|_| Message::Tick), flockbook::toprow::subscription(app), flockbook::needs_you::subscription(app), flockbook::conversation::subscription(app), flockbook::search::subscription(app), flockbook::terminal::subscription(app), flockbook::glass::subscription(app)]) })
         .font(fb_ui::fonts::BUNDLED[0])
         .font(fb_ui::fonts::BUNDLED[1])
         .font(fb_ui::fonts::BUNDLED[2])
@@ -68,13 +76,13 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             size: Size::new(1280.0, 852.0),
             min_size: Some(Size::new(900.0, 560.0)),
-            transparent: false,
+            transparent: flockbook::glass::launch_transparent(backdrop),
             ..Default::default()
         })
         .run()
 }
 
-fn boot(demo: bool, args: &[String]) -> (App, Task<Message>) {
+fn boot(demo: bool, args: &[String], backdrop: flockbook::glass::Backdrop) -> (App, Task<Message>) {
     let mut app = if demo {
         App::demo(Mode::Light, Screen::Conversation)
     } else {
@@ -86,6 +94,7 @@ fn boot(demo: bool, args: &[String]) -> (App, Task<Message>) {
     if !writes_enabled(args) {
         flockbook::access::make_read_only(&mut app);
     }
+    flockbook::glass::install(&mut app, backdrop);
     (app, Task::none())
 }
 

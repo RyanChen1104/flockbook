@@ -163,6 +163,11 @@ impl Tokens {
         syn_function: hex(0x67B7A4),
     };
 
+    /// The tokens for text on a glass surface (sidebar, bars): the stronger `label_2` and `label_3` (section 9).
+    pub fn on_glass(self) -> Tokens {
+        Tokens { label_2: self.label_2_glass, label_3: self.label_3_glass, ..self }
+    }
+
     pub fn of(mode: Mode) -> Tokens {
         match mode {
             Mode::Light => Tokens::LIGHT,
@@ -306,6 +311,9 @@ mod tests {
         // Glass label tokens are stronger than the plain ones.
         assert!(Tokens::LIGHT.label_2_glass.a > Tokens::LIGHT.label_2.a);
         assert!(Tokens::DARK.label_3_glass.a > Tokens::DARK.label_3.a);
+        let g = Tokens::LIGHT.on_glass();
+        assert_eq!((g.label_2, g.label_3), (Tokens::LIGHT.label_2_glass, Tokens::LIGHT.label_3_glass));
+        assert_eq!((g.label, g.bg, g.sidebar), (Tokens::LIGHT.label, Tokens::LIGHT.bg, Tokens::LIGHT.sidebar), "only the labels change");
     }
 
     #[test]

@@ -63,7 +63,7 @@ fn row_button<'a>(t: Tokens, selected: bool, content: Element<'a, Message>, on_p
 }
 
 fn nav_row<'a>(app: &App, ic: Icon, label: &'a str, screen: Option<Screen>, badge: usize, msg: Message) -> Element<'a, Message> {
-    let t = app.tokens();
+    let t = app.bar_tokens();
     let selected = screen.is_some_and(|s| s == app.state.screen);
     let mut r = row![icon(ic, SIZE_DEFAULT, t.label_2), BODY.text(label).color(t.label), Space::new().width(Length::Fill)].spacing(SP_12).align_y(Alignment::Center);
     if badge > 0 {
@@ -114,7 +114,7 @@ fn summary<'a>(t: Tokens, spin: f32, ws: &herdr_core::Workspace) -> Element<'a, 
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    let t = app.tokens();
+    let t = app.bar_tokens();
     let s = &app.state;
     let blocked = s.blocked_tabs().len();
 

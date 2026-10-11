@@ -79,6 +79,7 @@ pub struct State {
     pub cards: crate::cards::CardsState,
     pub search: crate::search::SearchState,
     pub terminal: crate::terminal::TerminalState,
+    pub glass: crate::glass::GlassState,
 }
 
 impl State {
@@ -103,6 +104,7 @@ impl State {
             cards: Default::default(),
             search: Default::default(),
             terminal: Default::default(),
+            glass: Default::default(),
         }
     }
 
