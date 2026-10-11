@@ -3,15 +3,16 @@ import SwiftUI
 
 /// The Settings window, offscreen, in every look it must survive:
 ///   .build/debug/HerdrDesk --snapshot-settings <dir>
-/// -> <dir>/settings-{light,dark,light-contrast,dark-contrast,light-reduce}.png
+/// -> <dir>/settings-{light,dark,light-reduce,dark-reduce}.png
+/// Increase Contrast is not rendered here: offscreen, the high-contrast appearances draw the same pixels as
+/// the plain ones. The view uses only system colors and controls, so the system handles it.
 /// Own settings store (test isolation), no Dock icon, nothing sent anywhere.
 extension SnapshotRunner {
     @MainActor static func runSettings(dir: String) async {
         var failures = 0
         let looks: [(String, NSAppearance.Name, Bool)] = [
             ("light", .aqua, false), ("dark", .darkAqua, false),
-            ("light-contrast", .accessibilityHighContrastAqua, false), ("dark-contrast", .accessibilityHighContrastDarkAqua, false),
-            ("light-reduce", .aqua, true),
+            ("light-reduce", .aqua, true), ("dark-reduce", .darkAqua, true),
         ]
         for (name, look, reduce) in looks {
             let host = NSHostingView(rootView: SettingsView(reduceTransparency: reduce ? true : nil))

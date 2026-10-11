@@ -150,6 +150,7 @@ struct HerdrDeskApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands { DeskCommands(model: model) }
         Settings { SettingsView() }
+            .windowResizability(.contentSize)
     }
 
     private var appRoot: some View {

@@ -2,6 +2,8 @@ import SwiftUI
 
 enum AppSettings { static let allowInputKey = "allowInput" }
 
+/// One grouped pane, like the Settings of Notes or Reminders: four settings do not fill toolbar tabs.
+/// Each row says what it does in a secondary line under its title; the window is fixed-size.
 struct SettingsView: View {
     @AppStorage(AppSettings.allowInputKey, store: AppDefaults.store) private var allowInput = true
     @AppStorage(WindowGlass.key, store: AppDefaults.store) private var glass = WindowGlass.full.rawValue
@@ -11,44 +13,67 @@ struct SettingsView: View {
     private var reduce: Bool { reduceTransparency ?? systemReduce }
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
+    private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
+
     var body: some View {
         Form {
-            Section {
-                Picker("Window", selection: $glass) {
+            Section("Appearance") {
+                Picker(selection: reduce ? .constant(WindowGlass.off.rawValue) : $glass) {
                     ForEach(WindowGlass.allCases) { Text($0.label).tag($0.rawValue) }
+                } label: {
+                    Text("Window")
+                    Text(reduce ? "Opaque while Reduce Transparency is on in System Settings."
+                                : "Glass lets the desktop show through, blurred.")
                 }
                 .pickerStyle(.segmented)
                 .disabled(reduce)
-            } header: {
-                Text("Appearance")
-            } footer: {
-                Text(reduce ? "Reduce Transparency is on in System Settings, so the window stays opaque."
-                            : "Glass lets the desktop show through the whole window, blurred. Opaque shows none.")
             }
-            Section {
-                Picker("Text size", selection: $readingSize) {
+            Section("Reading") {
+                Picker(selection: $readingSize) {
                     ForEach(ReadingSize.allCases) { Text($0.label).tag($0.rawValue) }
+                } label: {
+                    Text("Text size")
+                    Text("⌘= larger, ⌘− smaller, ⌘0 reset")
                 }
                 .pickerStyle(.segmented)
-                Picker("Width", selection: $readingWidth) {
+                Picker(selection: $readingWidth) {
                     ForEach(ReadingWidth.allCases) { Text($0.label).tag($0.rawValue) }
+                } label: {
+                    Text("Width")
+                    Text(widthNote)
                 }
                 .pickerStyle(.segmented)
-            } header: {
-                Text("Reading")
-            } footer: {
-                Text("Narrow 600 pt, Medium 760 pt, Wide 920 pt; Full fills the window. Text size also: ⌘= larger, ⌘- smaller, ⌘0 reset.")
             }
             Section {
-                Toggle("Allow sending input to agents", isOn: $allowInput)
+                Toggle(isOn: $allowInput) {
+                    Text("Allow sending input to agents")
+                    Text("Typing, Allow and Deny, new tab, close tab and split.")
+                }
             } header: {
                 Text("Input")
             } footer: {
-                Text("When off, the app only reads: typing, Allow/Deny, new tab, close tab and split are disabled. Launching with --read-only forces this off.")
+                Label {
+                    Text(readOnlyLaunch ? "Launched with --read-only: the app only reads, whatever this says."
+                         : allowInput ? "Flockbook types into your agents' terminals. Turn this off to only read."
+                                      : "Read only: typing, Allow and Deny, new tab, close tab and split are disabled.")
+                } icon: {
+                    Image(systemName: allowInput && !readOnlyLaunch ? "exclamationmark.triangle.fill" : "lock.fill")
+                        .foregroundStyle(allowInput && !readOnlyLaunch ? .orange : .secondary)
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 460, idealWidth: 500)
+        .scrollDisabled(true)
+        .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var widthNote: String {
+        switch ReadingWidth(rawValue: readingWidth) ?? .medium {
+        case .full: "The text fills the window."
+        case let w: "Text column up to \(Int(w.points)) pt."
+        }
     }
 }
