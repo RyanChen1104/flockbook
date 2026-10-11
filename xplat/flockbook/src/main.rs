@@ -62,6 +62,8 @@ fn main() -> iced::Result {
     let demo = args.iter().any(|a| a == "--demo");
     let env: std::collections::HashMap<String, String> = std::env::vars().collect();
     let backdrop = flockbook::glass::choose(flockbook::glass::Os::current(), &args, &env);
+    // Before the first frame: CJK text uses a good system face at every weight.
+    fb_ui::cjk::install();
     iced::application(move || boot(demo, &args, backdrop), App::update, App::view)
         .title(App::title)
         .theme(|app: &App| -> Theme { app.theme() })

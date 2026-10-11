@@ -21,8 +21,10 @@ pub const BUNDLED: [&[u8]; 5] = [
     include_bytes!("../fonts/JetBrainsMono-Regular.otf"),
 ];
 
-/// Font bytes for `iced::Settings::fonts` (and `iced_test` settings).
+/// Font bytes for `iced::Settings::fonts` (and `iced_test` settings). Also installs the CJK fallback
+/// ([`crate::cjk::install`]), so every place that sets up the fonts gets the same CJK faces.
 pub fn bytes() -> Vec<Cow<'static, [u8]>> {
+    crate::cjk::install();
     BUNDLED.iter().map(|b| Cow::Borrowed(*b)).collect()
 }
 

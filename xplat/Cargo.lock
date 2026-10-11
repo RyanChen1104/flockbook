@@ -893,6 +893,7 @@ dependencies = [
  "iced",
  "iced_test",
  "png 0.18.1",
+ "unicode-script",
  "unicode-segmentation",
 ]
 
