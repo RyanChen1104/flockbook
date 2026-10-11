@@ -35,11 +35,13 @@ extension SnapshotRunner {
                 win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
                 try? await Task.sleep(for: .milliseconds(900))
                 let path = "\(dir)/settings-\(name)-\(dark ? "dark" : "light").png"
-                compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
+                // The window's own capture must show content: a blank one (no screen-capture permission) is a FAIL,
+                // not a wallpaper-only PASS.
+                let ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
                 let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-                let ok = bytes > 5_000 && size.width >= 480 && size.width <= 600 && size.height > 200 && size.height < 900
+                let ok = ink > 0.02 && bytes > 5_000 && size.width >= 480 && size.width <= 600 && size.height > 200 && size.height < 900
                 if !ok { failures += 1 }
-                print("snapshot-settings: \(name)-\(dark ? "dark" : "light") \(Int(size.width))x\(Int(size.height)) pt, \(bytes / 1024) KB \(ok ? "ok" : "FAIL")")
+                print("snapshot-settings: \(name)-\(dark ? "dark" : "light") \(Int(size.width))x\(Int(size.height)) pt, \(bytes / 1024) KB, window \(String(format: "%.1f", ink * 100))% ink \(ok ? "ok" : "FAIL")")
                 win.orderOut(nil)
             }
         }
@@ -49,11 +51,18 @@ extension SnapshotRunner {
 
     /// The stand-in wallpaper (blurred like the behind-window material when the window is see-through), then the window's
     /// own pixels over it. The capture is of this one window only.
-    @MainActor private static func compose(_ win: NSWindow, over paper: NSImage, blur: Bool, to path: String) {
+    /// Returns the share of the window capture that is not background (0 = blank capture).
+    @discardableResult
+    @MainActor private static func compose(_ win: NSWindow, over paper: NSImage, blur: Bool, to path: String) -> Double {
         typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
         guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
               let top = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue(),
-              var back = paper.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+              var back = paper.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            print("snapshot-settings: no window capture (screen-capture permission: \(CGPreflightScreenCaptureAccess()))")
+            return 0
+        }
+        let ink = Pixels(top).ink
+        if ink <= 0.02 { print("snapshot-settings: the window capture is blank (screen-capture permission: \(CGPreflightScreenCaptureAccess()))") }
         if blur, let f = CIFilter(name: "CIGaussianBlur") {
             f.setValue(CIImage(cgImage: back).clampedToExtent(), forKey: kCIInputImageKey)
             f.setValue(30, forKey: kCIInputRadiusKey)
@@ -61,7 +70,7 @@ extension SnapshotRunner {
         }
         let w = top.width, h = top.height
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return ink }
         let all = CGRect(x: 0, y: 0, width: w, height: h)
         // Rounded like the window, so the corners stay clear.
         ctx.addPath(CGPath(roundedRect: all, cornerWidth: 24 * CGFloat(w) / win.frame.width, cornerHeight: 24 * CGFloat(w) / win.frame.width, transform: nil))
@@ -69,9 +78,10 @@ extension SnapshotRunner {
         ctx.draw(back, in: all)
         ctx.resetClip()
         ctx.draw(top, in: all)
-        guard let img = ctx.makeImage() else { return }
+        guard let img = ctx.makeImage() else { return ink }
         try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        return ink
     }
 
     /// A stand-in desktop: soft colour fields with a few hard shapes, so blur and tint both show.

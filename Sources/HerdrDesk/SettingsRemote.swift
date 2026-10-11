@@ -81,7 +81,8 @@ struct PairSheet: View {
             Text("Pair a Device").font(.title3.weight(.semibold))
             if let offer = hub.offer {
                 if let link = hub.pairLink, let qr = Self.qr(link.absoluteString) {
-                    Image(nsImage: qr).interpolation(.none).resizable().frame(width: 200, height: 200)
+                    // Drawn at its own size (whole points per module, nearest-neighbour pixels): never scaled again.
+                    Image(nsImage: qr).interpolation(.none)
                         .padding(10).background(.white, in: RoundedRectangle(cornerRadius: 10))
                         .accessibilityLabel("Pairing QR code")
                 }
@@ -110,12 +111,18 @@ struct PairSheet: View {
         .onAppear { startCount = hub.deviceList.count }
     }
 
-    static func qr(_ text: String) -> NSImage? {
+    /// The QR code at about `side` points: a whole number of points per module, and pixels made with
+    /// nearest-neighbour sampling at 2 per point (sharp on Retina and on 1x displays). Black on white, nothing grey.
+    static func qr(_ text: String, side: CGFloat = 200) -> NSImage? {
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(text.utf8)
         f.correctionLevel = "M"
-        guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: out.extent.width, height: out.extent.height))
+        guard let out = f.outputImage else { return nil }
+        let modules = out.extent.width
+        let points = max(1, (side / modules).rounded(.down))
+        let scaled = out.samplingNearest().transformed(by: CGAffineTransform(scaleX: points * 2, y: points * 2))
+        guard let cg = CIContext(options: [.workingColorSpace: NSNull()]).createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: modules * points, height: modules * points))
     }
 }
 
