@@ -145,7 +145,7 @@ changes. `HerdrKitChecks --agents-live <kinds>` prints `session=id|path|none` pe
 ## Approval keystrokes
 `ApprovalKeys.allowOnce` = `"1"` (typed, no Enter), `.deny` = `Escape`. **Verified** in `c9-input-test` against Claude Code 2.1.294. `HerdrClient.respond(to:allow:)` sends them.
 
-Notification buttons (`ApprovalNotice`): the blocked notification gets Allow / Deny only where the card would (input on, Claude, pending tool call, prompt on screen, no question picker). `prompt(_:writes:)` binds the buttons to the pending tool call; `outcome(...)` re-checks a fresh `approvalState(paneId:…)` and sends (`respond`) only for that same prompt, else opens the tab.
+Notification buttons (`ApprovalNotice`): a blocked Claude with a permission prompt on screen gets Allow / Deny (input on, no question picker). The buttons are bound to the log's pending tool call, else to `screenPrompt` (a hash of the tool name and the whole prompt box), so a Claude without a transcript works too. `outcome(...)` re-reads the pane (`approvalState`) and sends (`respond`) only when that same id is still current, else opens the tab. `screenRequest` gives the approval card the same prompt when the log has none.
 
 ## Testing
 - `HerdrKitChecks` (executable): `swift run HerdrKitChecks` is the real done check; `swift test` does not run under the Command Line Tools.

@@ -101,10 +101,7 @@ struct InboxView: View {
 
     @ViewBuilder private func detailBody(_ ws: Workspace, _ t: Tab, _ agent: Agent?) -> some View {
         let blockedPane = t.panes.first(where: { $0.agent?.status == .blocked })
-        let request: PermissionRequest? = model.store.conversation(for: agent?.sessionId).reversed().compactMap {
-            if case .permissionRequest(let r) = $0.kind { return r }
-            return nil
-        }.first
+        let request: PermissionRequest? = blockedPane.flatMap { model.approvalRequest($0) }
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
                 ZStack(alignment: .bottomTrailing) {

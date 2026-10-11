@@ -33,6 +33,11 @@ enum HeadlessTest {
         }
         let bound = await model.approvalPrompt(in: tab)
         print("test: buttons = \(bound.map { "pane \($0.pane) prompt \($0.prompt)" } ?? "none")")
+        if let pane = tab.panes.first(where: { $0.id == paneId }) {
+            await model.checkPrompt(for: pane)
+            let card = model.approvalRequest(pane)
+            print("test: card = \(card.map { "\($0.title) | \($0.command) | \($0.toolUseId)" } ?? "none") canRespond = \(model.promptVisible.contains(pane.id)) same id = \(card?.toolUseId == bound?.prompt)")
+        }
         guard let bound else { NSApp.terminate(nil); return }
         let action = (allow ? ApprovalNotice.Action.allow : .deny).rawValue
         let stale = await model.answerNotice(action: action, paneID: bound.pane, prompt: "toolu_stale")

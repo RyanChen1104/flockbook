@@ -6,12 +6,20 @@ import Foundation
 @MainActor func checksApprovalNotice() async throws {
     typealias N = ApprovalNotice
     let prompt = """
+    ────────────────────────────────────────
      Bash command
-       npm run build
+     Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+     Build the web app
+    ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+     npm run build
+    ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
      Do you want to proceed?
      ❯ 1. Yes
-       2. Yes, and don't ask again for npm run build commands in /repo
-       3. No, and tell Claude what to do differently (esc)
+       2. Yes, and always allow access to /repo from this project
+       3. Yes, and switch to auto mode · auto mode handles these prompts for you
+       4. No
+
+     Esc to cancel · Tab to amend
     """
     let picker = """
      ←  ☐ Deploy  ✔ Submit  →
@@ -22,7 +30,7 @@ import Foundation
      ────────────────
        Chat about this
     """
-    let blocked = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1", screen: prompt)
+    let blocked = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_1", screen: "old output\n" + prompt)
 
     // Which notifications get buttons.
     check(N.prompt(blocked, writes: true) == "toolu_1", "notice: Claude permission prompt gets buttons, bound to the pending call")
@@ -33,12 +41,35 @@ import Foundation
     check(N.prompt(s, writes: true) == nil, "notice: question picker with an open call -> no buttons")
     s = blocked; s.screen = "Running tests…"
     check(N.prompt(s, writes: true) == nil, "notice: no prompt on screen (tool running) -> no buttons")
-    s = blocked; s.pendingToolUseId = nil
-    check(N.prompt(s, writes: true) == nil, "notice: no pending tool call in the log -> no buttons")
+    // No transcript (or the log lags the screen): bind to the prompt on screen instead.
+    var nolog = blocked; nolog.pendingToolUseId = nil
+    let fp = N.prompt(nolog, writes: true)
+    check(fp != nil && fp != "toolu_1" && fp == N.screenPrompt(prompt), "notice: no pending call in the log -> buttons bound to the prompt on screen")
+    check(N.screenPrompt(prompt + "\n") == N.screenPrompt(prompt) && N.screenPrompt("Running tests…") == nil, "notice: screen prompt id is stable, nil without a prompt")
+    let other = prompt.replacingOccurrences(of: "npm run build", with: "rm -rf build")
+    check(N.screenPrompt(other) != N.screenPrompt(prompt), "notice: another command -> another screen prompt id")
+    check(N.screenPrompt("old output\n" + prompt) == N.screenPrompt(prompt), "notice: text above the prompt box does not change the id")
+    check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: fp, now: nolog, writes: true) == .send(allow: true), "notice: screen-bound Allow, same prompt -> send")
+    check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: fp, now: blocked, writes: true) == .send(allow: true), "notice: screen-bound, log caught up with the same prompt -> send")
+    var otherNow = nolog; otherNow.screen = other
+    check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: fp, now: otherNow, writes: true) == .open, "notice: screen-bound, another prompt now -> open")
     s = blocked; s.blocked = false
     check(N.prompt(s, writes: true) == nil, "notice: agent not blocked -> no buttons")
     s = blocked; s.agentKind = "codex"
     check(N.prompt(s, writes: true) == nil, "notice: approval keys are verified for Claude only -> no buttons for Codex")
+
+    // The prompt box read from the screen: the card's request when the log has none.
+    let req = N.screenRequest(prompt)
+    check(req?.title == "Bash command" && req?.toolName == "Bash" && req?.command == "npm run build" && req?.state == .pending,
+          "notice: screen request has the tool and the command (\(String(describing: req)))")
+    check(req?.toolUseId == N.screenPrompt(prompt), "notice: screen request id = screen prompt id")
+    check(N.screenRequest("Running tests…") == nil && N.screenRequest(picker) == nil, "notice: no screen request without a permission prompt")
+    let edit = prompt.replacingOccurrences(of: " Bash command", with: " Edit file")
+    check(N.screenPrompt(edit) != N.screenPrompt(prompt), "notice: screen id includes the tool name")
+    let opts = prompt.replacingOccurrences(of: "access to /repo", with: "access to /other")
+    check(N.screenPrompt(opts) != N.screenPrompt(prompt), "notice: screen id includes the whole box (options too)")
+    let moved = prompt.replacingOccurrences(of: " ❯ 1. Yes\n   2.", with: "   1. Yes\n ❯ 2.")
+    check(N.screenPrompt(moved) == N.screenPrompt(prompt), "notice: the option cursor does not change the screen id")
 
     // Action -> outcome, with the stale-prompt guard.
     check(N.Action.allow.allows && !N.Action.deny.allows, "notice: allow allows, deny denies")

@@ -149,6 +149,15 @@ extension PaneView {
                 .id(q.toolUseId)   // fresh answers per question
                 .frame(maxWidth: 780)
                 .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+        } else if !model.hasPending(pane), let r = model.approvalRequest(pane), model.promptVisible.contains(pane.id) {
+            // A prompt the log does not have (no transcript): the card from the screen, where the question card goes.
+            ApprovalCard(request: r, agentName: agent.name, canRespond: true,
+                         onAllow: { model.approve(pane: pane, allow: true) },
+                         onDeny: { model.approve(pane: pane, allow: false) },
+                         onOpen: { model.showTerminal = true })
+                .id(r.toolUseId)
+                .frame(maxWidth: 780)
+                .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
         } else {
             composerField(agent)
         }

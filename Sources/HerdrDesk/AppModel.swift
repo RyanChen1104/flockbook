@@ -1,6 +1,10 @@
 import HerdrKit
 import SwiftUI
 import Observation
+import os
+
+/// Notification button decisions: `log show --predicate 'subsystem == "dev.mclee.flockbook" && category == "notice"' --info`.
+let noticeLog = Logger(subsystem: "dev.mclee.flockbook", category: "notice")
 
 enum Screen: Hashable { case tab, inbox, overview, search }
 
@@ -142,9 +146,27 @@ final class AppModel {
 
     /// Asks the kit whether the visible screen shows Claude's permission prompt.
     /// Runs only for blocked agents or a pending tool call; otherwise clears the flag.
+    /// Also keeps the prompt read from the screen (`screenPrompts`) for a blocked Claude.
     func checkPrompt(for pane: Pane) async {
-        guard pane.agent?.status == .blocked || hasPending(pane) else { promptVisible.remove(pane.id); return }
-        if await store.client.checkPrompt(paneId: pane.id) { promptVisible.insert(pane.id) } else { promptVisible.remove(pane.id) }
+        guard pane.agent?.status == .blocked || hasPending(pane) else { promptVisible.remove(pane.id); screenPrompts[pane.id] = nil; return }
+        let screen = try? await store.client.visibleText(paneId: pane.id)
+        if let screen, PermissionGate.screenShowsPrompt(screen) { promptVisible.insert(pane.id) } else { promptVisible.remove(pane.id) }
+        let a = pane.agent
+        screenPrompts[pane.id] = a?.status == .blocked && a?.kind == "claude" ? screen.flatMap(ApprovalNotice.screenRequest) : nil
+    }
+
+    /// Permission prompts read from the screen, by pane id: the card's request when the log has none (a Claude without a
+    /// transcript, or a log that lags the screen).
+    var screenPrompts: [String: PermissionRequest] = [:]
+
+    /// The request the approval card shows: the log's pending tool call, else the prompt on screen.
+    func approvalRequest(_ pane: Pane) -> PermissionRequest? {
+        let logged = store.conversation(for: pane.agent?.sessionId).reversed().lazy.compactMap { item -> PermissionRequest? in
+            if case .permissionRequest(let r) = item.kind { return r }
+            return nil
+        }.first
+        if let logged, logged.state == .pending { return logged }
+        return pane.agent?.status == .blocked ? screenPrompts[pane.id] : nil
     }
 
     /// Allow once = "1" (no Enter), Deny = Escape (verified in a named test session). Only when the prompt is on screen.
@@ -179,15 +201,18 @@ final class AppModel {
     /// Tries a few times: the log's tool call and the prompt on screen can come a moment after the blocked status.
     func approvalPrompt(in tab: Tab) async -> (pane: String, prompt: String)? {
         for attempt in 0..<3 {
-            guard writesEnabled else { return nil }
+            guard writesEnabled else { noticeLog.info("no buttons: input is off"); return nil }
             if attempt > 0 { try? await Task.sleep(for: .milliseconds(700)) }
             let t = store.workspaces.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
             guard let pane = t.panes.first(where: { $0.agent?.status == .blocked }) else { return nil }
             if let s = await approvalState(pane), let id = ApprovalNotice.prompt(s, writes: writesEnabled) {
                 promptVisible.insert(pane.id)
+                noticeLog.info("buttons: pane \(pane.id, privacy: .public) prompt \(id, privacy: .public)")
                 return (pane.id, id)
             }
+            noticeLog.info("no buttons yet: pane \(pane.id, privacy: .public) try \(attempt) log call \(self.pendingToolUseId(pane) ?? "none", privacy: .public)")
         }
+        noticeLog.info("no buttons: tab \(tab.id, privacy: .public)")
         return nil
     }
 
@@ -198,7 +223,9 @@ final class AppModel {
         await store.refresh()
         let pane = store.workspaces.flatMap(\.tabs).flatMap(\.panes).first { $0.id == paneID }
         let now: ApprovalNotice.PaneState? = if let pane { await approvalState(pane) } else { nil }
-        switch ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: writesEnabled) {
+        let outcome = ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: writesEnabled)
+        noticeLog.info("action \(action, privacy: .public) pane \(paneID, privacy: .public) bound \(prompt ?? "none", privacy: .public) now \(now.flatMap { ApprovalNotice.prompt($0, writes: self.writesEnabled) } ?? "none", privacy: .public) -> \(String(describing: outcome), privacy: .public)")
+        switch outcome {
         case .send(let allow):
             guard let pane else { return false }
             promptVisible.insert(pane.id)   // just read from the screen
