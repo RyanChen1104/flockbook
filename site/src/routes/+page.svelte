@@ -24,11 +24,16 @@
 		</picture>
 		<h1>Flockbook</h1>
 		<p class="pitch">A native macOS reading view for your Herdr agents.</p>
-		{#if links.download}
-			<a class="download" href={links.download}>Download</a>
-		{:else}
-			<span class="download disabled" aria-disabled="true">Download <span class="soon">soon</span></span>
-		{/if}
+		<div class="actions">
+			{#if links.download}
+				<a class="download" href={links.download}>Download</a>
+			{:else}
+				<span class="download disabled" aria-disabled="true">Download <span class="soon">soon</span></span>
+			{/if}
+			{#if links.github}
+				<a class="github" href={links.github}>GitHub</a>
+			{/if}
+		</div>
 		<p class="req">macOS 26 · Herdr</p>
 	</section>
 
@@ -87,9 +92,12 @@
 			<dd>
 				Download the <code>.dmg</code> from
 				{#if links.github}<a href="{links.github}/releases">GitHub Releases</a>{:else}GitHub Releases{/if}
-				and drag Flockbook to Applications. Check it against <code>SHA256SUMS</code>. Release notes say
-				whether a build is signed; for an unsigned one run
-				<code class="cmd">xattr -dr com.apple.quarantine /Applications/Flockbook.app</code>
+				and drag Flockbook to Applications. Signed and notarized by Apple. Check the download against
+				<code>SHA256SUMS</code>.
+				<small class="unsigned">
+					Only if a build's release notes mark it unsigned:
+					<code>xattr -dr com.apple.quarantine /Applications/Flockbook.app</code>
+				</small>
 			</dd>
 		</div>
 		<div>
@@ -222,6 +230,27 @@
 		font-size: 17px;
 		font-weight: 600;
 	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 12px;
+	}
+	.github {
+		display: inline-flex;
+		align-items: center;
+		min-height: 48px;
+		padding: 0 24px;
+		border-radius: 999px;
+		border: 1px solid var(--line);
+		color: var(--fg);
+		font-size: 17px;
+		font-weight: 500;
+	}
+	.github:hover {
+		text-decoration: none;
+		background: var(--soft);
+	}
 	.download:hover {
 		text-decoration: none;
 		opacity: 0.88;
@@ -351,12 +380,10 @@
 			monospace;
 		overflow-wrap: anywhere;
 	}
-	.cmd {
+	.unsigned {
 		display: block;
 		margin-top: 8px;
-		padding: 8px 10px;
-		background: var(--soft);
-		border-radius: 8px;
+		font-size: 12px;
 	}
 	.legal {
 		margin: 0;
