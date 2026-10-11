@@ -212,8 +212,39 @@ fn turning_input_off_removes_the_write_paths_now_and_on_waits_for_a_launch() {
     assert_eq!(app.state.settings.prefs.allow_input, Some(false));
     let _ = app.update(Message::Settings(SettingsMsg::SetAllowInput(true)));
     assert_eq!(app.state.settings.prefs.allow_input, Some(true));
-    assert_eq!(app.state.settings.pending, Some(settings::NEXT_LAUNCH_INPUT));
     assert!(app.state.cards.actions.is_none(), "still read-only until the next launch");
+    let _ = app.update(Message::Settings(SettingsMsg::Open));
+    assert!(sim(&app).find(settings::INPUT_NEXT_LAUNCH).is_ok(), "the sheet says this window is still read-only");
+}
+
+#[test]
+fn the_input_row_never_contradicts_the_composer() {
+    // The demo has no sender: the composer reads "Read-only: input is off".
+    let mut app = App::demo(Mode::Light, Screen::Conversation);
+    assert!(!flockbook::access::writes_live(&app));
+    let _ = app.update(Message::Settings(SettingsMsg::Open));
+    let mut s = sim(&app);
+    assert!(s.find(settings::INPUT_NEXT_LAUNCH).is_ok());
+    assert!(s.find(settings::INPUT_LIVE).is_err(), "never 'types into your agents' while read-only");
+    drop(s);
+    // Saved off: plain read-only note.
+    let _ = app.update(Message::Settings(SettingsMsg::SetAllowInput(false)));
+    assert!(sim(&app).find(settings::INPUT_OFF).is_ok());
+}
+
+#[test]
+fn the_toggle_knob_is_white_in_every_state() {
+    use iced::widget::toggler::Status;
+    for mode in [Mode::Light, Mode::Dark] {
+        let t = fb_ui::theme::Tokens::of(mode);
+        for is_toggled in [true, false] {
+            for st in [Status::Active { is_toggled }, Status::Hovered { is_toggled }, Status::Disabled { is_toggled }] {
+                let style = settings::toggle_style(t, st);
+                assert_eq!(style.foreground, iced::Background::Color(iced::Color::WHITE), "{mode:?} {st:?}");
+            }
+        }
+        assert_eq!(settings::toggle_style(t, Status::Active { is_toggled: true }).background, iced::Background::Color(t.accent));
+    }
 }
 
 #[test]
@@ -314,5 +345,7 @@ fn snapshots_of_the_panel_and_the_sheet() {
         let _ = app.update(Message::Settings(SettingsMsg::Open));
         assert!(!app.state.shortcuts.open, "opening Settings closes the panel");
         shot(&app, &format!("settings-{suffix}"));
+        app.state.settings.read_only_launch = true;
+        shot(&app, &format!("settings-read-only-launch-{suffix}"));
     }
 }

@@ -20,6 +20,12 @@ pub fn writes_enabled(args: &[String], env: &HashMap<String, String>, allow_inpu
     allow_input.unwrap_or(true)
 }
 
+/// Whether this window sends input now: a composer sender is installed. The Settings sheet reads this, so it never
+/// says "on" while the composer says "Read-only".
+pub fn writes_live(app: &App) -> bool {
+    app.state.composer.sender.is_some()
+}
+
 /// Takes every write path away from `app` (the composer's sender, the cards' pane actions) and redraws the cards.
 pub fn make_read_only(app: &mut App) {
     app.state.composer.sender = None;

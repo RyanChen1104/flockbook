@@ -13,7 +13,9 @@
 //!   made opaque, Glass applies at the next launch.
 //! - Width: now.
 //! - Allow input: off applies now (the write paths are removed). On applies at the next launch: the write paths are
-//!   made at launch, and turning them on is the riskier direction.
+//!   made at launch, and turning them on is the riskier direction. The toggle shows the saved value (so a second
+//!   click undoes the first); the line under it tells what this window does now ([`access::writes_live`]), so the
+//!   sheet never says "on" while the composer says "Read-only".
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +25,7 @@ use iced::widget::{button, column, container, mouse_area, row, stack, text, togg
 use iced::{Alignment, Background, Border, Element, Length, Task};
 use serde::{Deserialize, Serialize};
 
+use crate::access;
 use crate::glass::{Backdrop, Os};
 use crate::{style, App, Message};
 
@@ -129,7 +132,11 @@ pub enum SettingsMsg {
 }
 
 pub const NEXT_LAUNCH_GLASS: &str = "Glass applies the next time Flockbook starts.";
-pub const NEXT_LAUNCH_INPUT: &str = "Input turns on the next time Flockbook starts.";
+/// The line under the input toggle.
+pub const INPUT_LIVE: &str = "Flockbook types into your agents' terminals. Turn this off to only read.";
+pub const INPUT_OFF: &str = "Read only: typing, Allow and Deny, new tab, close tab and split are disabled.";
+pub const INPUT_NEXT_LAUNCH: &str = "Read only in this window. Input turns on the next time Flockbook starts.";
+pub const INPUT_LOCKED: &str = "Launched with --read-only: the app only reads, whatever this says.";
 
 pub fn update(app: &mut App, msg: SettingsMsg) -> Task<Message> {
     match msg {
@@ -168,15 +175,9 @@ pub fn update(app: &mut App, msg: SettingsMsg) -> Task<Message> {
             if app.state.settings.read_only_launch {
                 return Task::none();
             }
-            let was = app.state.settings.allow_input();
             app.state.settings.prefs.allow_input = Some(on);
             if !on {
-                crate::access::make_read_only(app);
-                if app.state.settings.pending == Some(NEXT_LAUNCH_INPUT) {
-                    app.state.settings.pending = None;
-                }
-            } else if !was || app.state.composer.sender.is_none() {
-                app.state.settings.pending = Some(NEXT_LAUNCH_INPUT);
+                access::make_read_only(app);
             }
             save(app);
         }
@@ -209,6 +210,30 @@ fn glass_selected(app: &App) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------------------- view
+
+/// A macOS-style switch: accent track when on, a gray track when off, a white knob in every state.
+pub fn toggle_style(t: Tokens, status: toggler::Status) -> toggler::Style {
+    let (on, disabled) = match status {
+        toggler::Status::Active { is_toggled } | toggler::Status::Hovered { is_toggled } => (is_toggled, false),
+        toggler::Status::Disabled { is_toggled } => (is_toggled, true),
+    };
+    let track = match (on, disabled) {
+        (true, false) => t.accent,
+        (true, true) => iced::Color { a: 0.45, ..t.accent },
+        (false, _) => t.fill_3,
+    };
+    toggler::Style {
+        background: Background::Color(track),
+        background_border_width: 0.0,
+        background_border_color: iced::Color::TRANSPARENT,
+        foreground: Background::Color(iced::Color::WHITE),
+        foreground_border_width: 0.5,
+        foreground_border_color: iced::Color { a: 0.12, ..iced::Color::BLACK },
+        text_color: None,
+        border_radius: None,
+        padding_ratio: 0.1,
+    }
+}
 
 pub const SHEET_W: f32 = 520.0;
 
@@ -271,20 +296,23 @@ pub fn layer(app: &App) -> Element<'_, Message> {
     let widths: Vec<(ReadingWidth, &'static str)> = ReadingWidth::ALL.iter().map(|w| (*w, w.label())).collect();
     let width_picker = segmented(t, &widths, Some(width), Some(|w| Message::Settings(SettingsMsg::SetWidth(w))));
 
-    let input_on = s.allow_input() && !s.read_only_launch;
-    let mut input_toggle = toggler(input_on).size(18.0);
+    // The toggle: the saved value (off and locked for --read-only). The line: what this window does now.
+    let live = access::writes_live(app);
+    let mut input_toggle = toggler(s.allow_input() && !s.read_only_launch).size(18.0).style(move |_, st| toggle_style(t, st));
     if !s.read_only_launch {
         input_toggle = input_toggle.on_toggle(|v| Message::Settings(SettingsMsg::SetAllowInput(v)));
     }
     let footer = if s.read_only_launch {
-        "Launched with --read-only: the app only reads, whatever this says."
+        INPUT_LOCKED
+    } else if live {
+        INPUT_LIVE
     } else if s.allow_input() {
-        "Flockbook types into your agents' terminals. Turn this off to only read."
+        INPUT_NEXT_LAUNCH
     } else {
-        "Read only: typing, Allow and Deny, new tab, close tab and split are disabled."
+        INPUT_OFF
     };
-    let footer_color = if input_on { t.blocked } else { t.label_2 };
-    let footer_row = row![icon(if input_on { Icon::Shield } else { Icon::Eye }, SIZE_INLINE, footer_color), CAPTION.text(footer).color(t.label_2)].spacing(6).align_y(Alignment::Center);
+    let footer_color = if live { t.blocked } else { t.label_2 };
+    let footer_row = row![icon(if live { Icon::Shield } else { Icon::Eye }, SIZE_INLINE, footer_color), CAPTION.text(footer).color(t.label_2)].spacing(6).align_y(Alignment::Center);
 
     let mut body = column![
         section(t, "Appearance", vec![setting_row(t, "Window", note.to_string(), glass)]),
