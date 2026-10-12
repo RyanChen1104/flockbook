@@ -190,6 +190,13 @@ public enum QuestionAdapter {
         }
     }
 
+    /// Codex 0.162.1's key lines (spacing aside), notes closed and open, as captured live.
+    static let codexKeyLinesClosed: Set<String> = [
+        "tab to add notes | enter to submit answer | esc to interrupt",
+        "tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt",
+    ]
+    static let codexKeyLinesOpen: Set<String> = ["tab or esc to clear notes | enter to submit answer"]
+
     /// Codex 0.162.1's rendering of the logged question `k` is on screen, exactly. The picker head
     /// ("Question k/n", maybe "(m unanswered)") and the key line (the screen's last line, closed or open notes) are
     /// Codex's own; everything between them is compared with all whitespace dropped (wrapping does not count) to
@@ -207,8 +214,9 @@ public enum QuestionAdapter {
               let foot = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }), foot > head,
               let m = lines[head].trimmingCharacters(in: .whitespaces).wholeMatch(of: /Question (\d+)\/(\d+)(?: \(\d+ unanswered\))?/),
               Int(m.1) == k + 1, Int(m.2) == q.questions.count else { return false }
-        let key = lines[foot].trimmingCharacters(in: .whitespaces)
-        guard key.hasPrefix(notes == nil ? "tab to add notes | enter to submit" : "tab or esc to clear notes | enter to submit") else { return false }
+        // The key line, spacing aside, is one Codex 0.162.1 shows for this notes state (live captures).
+        let key = lines[foot].split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard (notes == nil ? codexKeyLinesClosed : codexKeyLinesOpen).contains(key) else { return false }
         let bare: (String) -> String = { String($0.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }) }
         var body = Substring(bare(lines[(head + 1)..<foot].joined(separator: "\n")))
         func take(_ lit: String) -> Bool {
@@ -315,6 +323,8 @@ public enum QuestionAdapter {
             guard a.picks.allSatisfy({ (0..<n).contains($0) }), n <= 8 else { throw Failure.unsupported("question \(k + 1): option out of range") }
             let other = a.other?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if other.contains(where: \.isNewline) { throw Failure.unsupported("question \(k + 1): line break in the text") }
+            // A control key in the text (Tab closes Codex's notes) would act between two gated keys.
+            if other.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) { throw Failure.unsupported("question \(k + 1): a control character in the text") }
             // The empty field shows these: the gate could not tell the answer from no answer.
             if ["Add notes", "Type something.", "Type something"].contains(flat(other)) { throw Failure.unsupported("question \(k + 1): this text is the field's placeholder") }
             if a.picks.isEmpty && other.isEmpty { throw Failure.unsupported("question \(k + 1): no answer") }

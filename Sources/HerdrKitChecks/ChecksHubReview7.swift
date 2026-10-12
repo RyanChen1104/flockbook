@@ -83,6 +83,12 @@ import Foundation
     check(!QuestionAdapter.shows(q, question: 0, screen: typed.replacingOccurrences(of: "tab or esc to clear notes | enter to submit answer",
                                                                                with: "tab to add notes | enter to submit answer | esc to interrupt"), other: "ham and eggs", row: 2),
           "r14 codex: a notes line with the closed key line -> no match")
+    // Review a2ce1e7: a Tab inside the notes text would close the notes between two gated keys; the key line must
+    // be one of Codex's captured lines exactly, not one that only starts the same way.
+    check((try? QuestionAdapter.steps(for: q, answers: [QuestionAnswer(other: "x\t1")])) == nil, "r15 codex: a Tab in the Other text -> refused before any key")
+    check(!QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: " | esc to interrupt", with: "")), "r15 codex: a shortened key line -> no match")
+    check(!QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: "esc to interrupt", with: "esc to interrupt | q to quit")), "r15 codex: a longer key line -> no match")
+    check(QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: "submit answer | esc", with: "submit answer |  esc")), "r15 codex: key line spacing does not count")
     // A question read from the screen has no log behind it.
     var screenQ = q; screenQ.toolUseId = "screen-1"
     check(!QuestionAdapter.shows(screenQ, question: 0, screen: base), "r14 codex: a screen-read request never matches for keys")

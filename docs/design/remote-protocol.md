@@ -85,15 +85,15 @@ fails, and its images stay held.
 and compares it with the screen, all whitespace dropped (so wrapping at any width does not count): Codex's head
 "Question k/n" (k and n of this request, maybe "(m unanswered)"), then the question text, then per row its number,
 its label (with the log's "(Recommended)") and its description, then Codex's own "None of the above" row, then the
-notes the hub opened or typed (nothing else), and Codex's key line (notes closed or open) as the screen's last
-line. The focus mark "›" counts only right before a row number, exactly one row has it, and Tab (which opens the
+notes the hub opened or typed (nothing else), and Codex's key line as the screen's last line, exactly one of the captured ones for that
+notes state (spacing aside). The focus mark "›" counts only right before a row number, exactly one row has it, and Tab (which opens the
 notes) and every key after it need it on the row the answer chose. Text between those places is compared as the
 log's text, so a number, a mark or picker words in an option's text or in the question are text, never structure.
 A cut ("…"), a picker taller than the screen, or any other difference refuses the key.
 
 **What stays open.** herdr has no compare-and-send: the last read and the keys are two calls. A prompt that opens in the milliseconds between them can still get the keys. The checks make this window small; they cannot close it. (The Mac card and notification buttons have the same window.)
 
-**Text rules (send, and each `other` of answer).** At most 16,000 characters for `send` and 2,000 for `other`. No control characters except line feed and tab: no ESC (so no bracketed-paste markers or key sequences), no CR, no other C0, no DEL, no C1 (U+0080–U+009F). A breach replies `badRequest` and sends nothing.
+**Text rules (send, and each `other` of answer).** At most 16,000 characters for `send` and 2,000 for `other`. No control characters except line feed and tab: no ESC (so no bracketed-paste markers or key sequences), no CR, no other C0, no DEL, no C1 (U+0080–U+009F). A breach replies `badRequest` and sends nothing. An answer's `other` also takes no line feed and no tab (the picker field is one line, and Tab is a picker key that would act between two gated keys): it replies `failed`, nothing sent.
 
 Order of checks for all three: device level and the app-wide "Allow input" (`readOnly`), the pane exists (`notFound`), then the rule above.
 
