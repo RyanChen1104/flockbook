@@ -24,6 +24,10 @@ import Network
     private let devices: HubDeviceStore
     /// Set while the hub may pair devices (`pair` is refused without it).
     public var pairing: HubPairing?
+    /// Behind Tailscale Serve: the only page origin whose socket is taken (`https://<machine>.<tailnet>.ts.net:<port>`).
+    /// Serve passes every request on from 127.0.0.1 and may rewrite Host, so then the Origin alone decides, and a
+    /// request without one is refused. Nil: the Origin, when sent, must name the Host.
+    public var allowedOrigin: String?
     private let tickInterval: Duration
     /// A connection that has not said hello by then is closed.
     public var helloTimeout: Duration = .seconds(10)
@@ -211,7 +215,9 @@ import Network
             guard let wsKey = head.header("sec-websocket-key"), head.header("sec-websocket-version") == "13",
                   head.header("connection")?.lowercased().contains("upgrade") == true else { finish(c, HTTPHead.response("400 Bad Request")); return }
             // A page from another origin must not use a paired browser's socket (the token is still needed, too).
-            if let origin = head.header("origin") {
+            if let allowedOrigin {
+                guard head.header("origin")?.lowercased() == allowedOrigin.lowercased() else { finish(c, HTTPHead.response("403 Forbidden")); return }
+            } else if let origin = head.header("origin") {
                 let authority = origin.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
                 guard authority == head.header("host") else { finish(c, HTTPHead.response("403 Forbidden")); return }
             }

@@ -10,13 +10,10 @@ public struct HubIdentity: @unchecked Sendable {
     /// SHA-256 of the certificate, lowercase hex. The QR link carries it. A browser cannot pin it (the browser owns
     /// TLS), so for the PWA it is for reference only; a native client pins it.
     public let fingerprint: String
-    /// The certificate's `*.ts.net` name (a `tailscale cert` pair). The page address uses it, so the browser accepts
-    /// the certificate without a warning. Nil for the self-signed certificate.
-    public var tailnetName: String? = nil
 }
 
-/// Certificates for the hub. A self-signed one is made with the system `/usr/bin/openssl` (no dependency); a
-/// `tailscale cert` pair is taken as PEM files. Files are mode 600 in a mode 700 folder.
+/// Certificates for the hub's direct (LAN) mode. A self-signed one is made with the system `/usr/bin/openssl` (no
+/// dependency). Files are mode 600 in a mode 700 folder. (The Tailscale mode needs none: Tailscale Serve ends HTTPS.)
 public enum HubTLS {
     public enum Failure: Error, Equatable {
         case openssl(String)
@@ -49,29 +46,18 @@ public enum HubTLS {
         return try fromPEM(cert: cert, key: key, into: dir)
     }
 
-    /// Bundles a PEM certificate and key (for example from `tailscale cert`) into `dir` and loads it.
+    /// Bundles a PEM certificate and key into `dir` and loads it.
     public static func fromPEM(cert: URL, key: URL, into dir: URL) throws -> HubIdentity {
         try prepare(dir)
         let p12 = dir.appendingPathComponent(p12Name)
         // The in-memory import raises an Objective-C exception (a crash, Swift cannot catch it) on EC keys with
-        // explicit curve parameters. Refuse those before the import. (`tailscale cert` and our own use named curves.)
+        // explicit curve parameters. Refuse those before the import. (Our own certificates use named curves.)
         let text = try openssl(["x509", "-in", cert.path, "-noout", "-text"])
         if text.contains("Field Type:") { throw Failure.explicitCurve }
         try openssl(["pkcs12", "-export", "-inkey", key.path, "-in", cert.path, "-out", p12.path, "-passout", "pass:\(p12Password)",
                      "-certpbe", "PBE-SHA1-3DES", "-keypbe", "PBE-SHA1-3DES", "-macalg", "sha1"])
         try lock([p12])
-        var id = try importP12(Data(contentsOf: p12))
-        id.tailnetName = tailnetName(certText: text)
-        return id
-    }
-
-    /// The first `DNS:<name>.ts.net` in `openssl x509 -text` output.
-    static func tailnetName(certText: String) -> String? {
-        for part in certText.split(whereSeparator: { $0 == "," || $0.isWhitespace }) where part.hasPrefix("DNS:") {
-            let name = part.dropFirst(4).lowercased()
-            if name.hasSuffix(".ts.net"), !name.contains("*"), name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }) { return name }
-        }
-        return nil
+        return try importP12(Data(contentsOf: p12))
     }
 
     /// A DNS name a browser accepts in a certificate: ASCII labels of letters, digits and hyphens.

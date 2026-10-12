@@ -64,9 +64,7 @@ final class PinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     check(try HubTLS.load(from: dir.appendingPathComponent("none")) == nil, "tls: no files -> nil")
     let fromPEM = try HubTLS.fromPEM(cert: dir.appendingPathComponent("cert.pem"), key: dir.appendingPathComponent("key.pem"),
                                      into: dir.appendingPathComponent("ts"))
-    check(fromPEM.fingerprint == id.fingerprint, "tls: an outside PEM pair (tailscale cert) gives the same certificate")
-    // The page address must use the certificate's tailnet name, else the browser warns even with a real certificate.
-    check(fromPEM.tailnetName == "mac.example.ts.net", "tls: a PEM pair names its tailnet host (\(fromPEM.tailnetName ?? "nil"))")
+    check(fromPEM.fingerprint == id.fingerprint, "tls: a PEM pair loads as the same certificate")
     // Chrome refuses, with no way past, a certificate whose DNS name is not ASCII (a Mac named "李's MacBook" gave
     // one). Such names are left out; a stored certificate that has one is not loaded, so a new one is made.
     let bad = dir.appendingPathComponent("badname")

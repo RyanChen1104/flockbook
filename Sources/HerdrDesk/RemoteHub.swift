@@ -6,11 +6,19 @@ import os
 let remoteLog = Logger(subsystem: "dev.mclee.flockbook", category: "remote")
 
 /// Remote access (docs/design/remote-access.md): the hub server, the paired devices, the TLS identity and the
-/// pairing offer. Off by default. It listens on one address the owner picks (Tailscale or LAN, TLS), never on all.
+/// pairing offer. Off by default. Two modes:
+/// - Tailscale (recommended): the hub listens on 127.0.0.1 only; Tailscale Serve ends HTTPS for the tailnet at
+///   `https://<machine>.<tailnet>.ts.net:7480` with a real certificate (`TailscaleSetup`). The app runs `tailscale
+///   serve` only when the owner clicks, and only for its own port.
+/// - Direct (advanced, less safe): one address the owner picks (Tailscale or LAN) with a self-signed certificate.
+/// Never all addresses.
 @MainActor @Observable
 final class RemoteHub {
-    static let enabledKey = "remote.enabled", hostKey = "remote.host", portKey = "remote.port"
-    static let defaultPort: UInt16 = 7480
+    static let enabledKey = "remote.enabled", hostKey = "remote.host", portKey = "remote.port", modeKey = "remote.mode"
+    /// Direct mode's port. Not 7480: Tailscale Serve may hold that one on the Tailscale address.
+    static let defaultPort: UInt16 = 7482
+
+    enum Mode: String, CaseIterable { case tailscale, direct }
 
     @ObservationIgnored private weak var model: AppModel?
     @ObservationIgnored let devices: HubDeviceStore
@@ -24,8 +32,15 @@ final class RemoteHub {
     /// Why the hub is not running although it is on.
     private(set) var problem: String?
     private(set) var fingerprint: String?
-    /// The `*.ts.net` name of a `tailscale cert` certificate in use; the page address uses it.
-    private(set) var tailnetName: String?
+    /// Tailscale mode: the CLI found, its status and our Serve handler, read when Settings shows (`checkTailscale`).
+    private(set) var tailscaleCLI: String?
+    private(set) var tailscale: TailscaleSetup.Status?
+    private(set) var serve: TailscaleSetup.Serve?
+    private(set) var checking = false
+    /// The last `tailscale serve` run's error output.
+    private(set) var serveError: String?
+    /// The name the running hub takes the page origin from.
+    private var servedName: String?
     private(set) var port: UInt16?
     private(set) var connections = 0
     private(set) var offer: HubPairOffer?
@@ -51,6 +66,7 @@ final class RemoteHub {
 
     /// Snapshots: the on/off state shown, without the setting or a server.
     @ObservationIgnored private var previewEnabled: Bool?
+    @ObservationIgnored private var previewMode: Mode?
     var enabled: Bool {
         get { access(keyPath: \.enabled); return previewEnabled ?? AppDefaults.store.bool(forKey: Self.enabledKey) }
         set {
@@ -59,7 +75,15 @@ final class RemoteHub {
             Task { newValue ? await start() : stop() }
         }
     }
-    /// The chosen address. Default: the first Tailscale address, else none (the owner picks).
+    var mode: Mode {
+        get { access(keyPath: \.mode); return previewMode ?? AppDefaults.store.string(forKey: Self.modeKey).flatMap(Mode.init) ?? .tailscale }
+        set {
+            if previewMode != nil { withMutation(keyPath: \.mode) { previewMode = newValue }; return }
+            withMutation(keyPath: \.mode) { AppDefaults.store.set(newValue.rawValue, forKey: Self.modeKey) }
+            if enabled, previewEnabled == nil { Task { await start() } }
+        }
+    }
+    /// The chosen address (direct mode). Default: the first Tailscale address, else none (the owner picks).
     var host: String? {
         get {
             access(keyPath: \.host)
@@ -76,10 +100,15 @@ final class RemoteHub {
     }
     /// The page address (the PWA; its socket is `/ws` on the same origin), for the status line and the QR link.
     var url: String? {
-        guard running, let host, let port else { return nil }
-        let name = tailnetName ?? (host.contains(":") ? "[\(host)]" : host)
-        return "https://\(name):\(port)"
+        guard running else { return nil }
+        if mode == .tailscale { return servedName.map(TailscaleSetup.origin(dnsName:)) }
+        guard let host, let port else { return nil }
+        return "https://\(host.contains(":") ? "[\(host)]" : host):\(port)"
     }
+
+    /// Tailscale mode is ready for a phone: signed in, HTTPS names on, our Serve handler on, hub running.
+    var tailscaleReady: Bool { running && tailscale?.httpsReady == true && serve == .ours }
+
 
     func refreshAddresses() { if previewEnabled == nil { addresses = HubBind.local() } }
 
@@ -89,14 +118,27 @@ final class RemoteHub {
     func start() async {
         stop()
         guard enabled, let model else { return }
-        refreshAddresses()
-        guard let host else { problem = "Pick an address."; return }
         do {
-            let id = try identity()
             let s = HubServer(backend: AppHubBackend(model: model), devices: devices, pairing: pairing)
-            port = try await s.start(host: host, port: portSetting, tls: id)
-            server = s; running = true; problem = nil; fingerprint = id.fingerprint; tailnetName = id.tailnetName
-            remoteLog.info("hub on \(host, privacy: .public):\(self.port ?? 0)")
+            if mode == .tailscale {
+                if tailscale == nil { await checkTailscale(restart: false) }
+                guard let ts = tailscale, ts.signedIn, ts.httpsReady else {
+                    problem = "Tailscale is not ready. Follow the steps below."; return
+                }
+                // Loopback, plain HTTP: Tailscale Serve brings HTTPS. Every request then comes from 127.0.0.1, so the
+                // socket takes only the ts.net page's Origin, and the device token is needed as always.
+                s.allowedOrigin = TailscaleSetup.origin(dnsName: ts.dnsName)
+                port = try await s.start(host: "127.0.0.1", port: UInt16(TailscaleSetup.localPort))
+                servedName = ts.dnsName; fingerprint = nil
+            } else {
+                refreshAddresses()
+                guard let host else { problem = "Pick an address."; return }
+                let id = try identity()
+                port = try await s.start(host: host, port: portSetting, tls: id)
+                fingerprint = id.fingerprint
+            }
+            server = s; running = true; problem = nil
+            remoteLog.info("hub on \(self.mode.rawValue, privacy: .public) port \(self.port ?? 0)")
             poll = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(2))
@@ -115,7 +157,7 @@ final class RemoteHub {
     func stop() {
         poll?.cancel(); poll = nil
         server?.stop(); server = nil
-        running = false; port = nil; connections = 0; tailnetName = nil
+        running = false; port = nil; connections = 0; servedName = nil; fingerprint = nil
         cancelPairing()
     }
 
@@ -130,23 +172,51 @@ final class RemoteHub {
         }
     }
 
-    /// On a Tailscale address: the `tailscale cert` pair when the owner put one in `<hub>/tailscale/` (cert.pem,
-    /// key.pem; the app never runs `tailscale cert` itself). Else the stored self-signed certificate, else a new one
-    /// for this Mac's addresses. The browser checks the certificate itself; the fingerprint is for reference.
+    /// Direct mode: the stored self-signed certificate, else a new one for this Mac's addresses. The browser checks
+    /// the certificate itself; the fingerprint is for reference.
     private func identity() throws -> HubIdentity {
         guard let dir else { throw HubServer.StartError.failed("no certificate folder") }
-        let ts = dir.appendingPathComponent("tailscale", isDirectory: true)
-        let tsCert = ts.appendingPathComponent("cert.pem"), tsKey = ts.appendingPathComponent("key.pem")
-        if let host, HubBind.kind(host) == .tailscale, FileManager.default.fileExists(atPath: tsCert.path), FileManager.default.fileExists(atPath: tsKey.path) {
-            do { return try HubTLS.fromPEM(cert: tsCert, key: tsKey, into: ts.appendingPathComponent("bundle")) }
-            catch { remoteLog.error("tailscale cert not usable, using the self-signed one: \(String(describing: error), privacy: .public)") }
-        }
         let tls = dir.appendingPathComponent("tls", isDirectory: true)
         if let id = try HubTLS.load(from: tls) { return id }
         // IP addresses only: the page address is always an IP. (The Mac's display name is often not ASCII, which made
         // Chrome refuse the certificate, and it carries the owner's name.)
         let names = ["127.0.0.1"] + addresses.map(\.host)
         return try HubTLS.selfSigned(in: tls, names: Array(Set(names)).sorted())
+    }
+
+    // MARK: Tailscale
+
+    /// Reads Tailscale's state (read-only: `status --json`, `serve status --json`). Restarts the hub when the Mac's
+    /// tailnet name changed or it was waiting for Tailscale.
+    func checkTailscale(restart: Bool = true) async {
+        guard previewEnabled == nil, !checking else { return }
+        checking = true; defer { checking = false }
+        tailscaleCLI = TailscaleSetup.findCLI()
+        guard let cli = tailscaleCLI else { tailscale = nil; serve = nil; return }
+        if let r = await TailscaleSetup.run(cli: cli, ["status", "--json"]) {
+            tailscale = TailscaleSetup.Status.parse(r.out)
+            if tailscale == nil { remoteLog.error("tailscale status not readable: \(r.err, privacy: .public)") }
+        } else { tailscale = nil }
+        if let ts = tailscale, !ts.dnsName.isEmpty, let r = await TailscaleSetup.run(cli: cli, ["serve", "status", "--json"]), r.status == 0 {
+            serve = TailscaleSetup.serve(r.out, dnsName: ts.dnsName)
+        } else { serve = nil }
+        if restart, enabled, mode == .tailscale, tailscale?.httpsReady == true, servedName != tailscale?.dnsName { await start() }
+    }
+
+    /// The commands the owner may run, as shown and copied.
+    var serveOnCommand: String { TailscaleSetup.command(cli: tailscaleCLI ?? "tailscale", TailscaleSetup.onArguments) }
+    var serveOffCommand: String { TailscaleSetup.command(cli: tailscaleCLI ?? "tailscale", TailscaleSetup.offArguments) }
+
+    /// Runs `tailscale serve` for our port only, after the owner clicked. Never when the port is someone else's.
+    func setServe(on: Bool) async {
+        guard previewEnabled == nil, let cli = tailscaleCLI else { return }
+        await checkTailscale(restart: false)
+        guard on ? serve == .off : serve == .ours else { return }
+        let args = on ? TailscaleSetup.onArguments : TailscaleSetup.offArguments
+        remoteLog.info("running tailscale \(args.joined(separator: " "), privacy: .public)")
+        let r = await TailscaleSetup.run(cli: cli, args, timeout: 20)
+        serveError = r == nil ? "Could not run Tailscale." : r!.status == 0 ? nil : r!.err.trimmingCharacters(in: .whitespacesAndNewlines)
+        await checkTailscale()
     }
 
     // MARK: Pairing and devices
@@ -172,7 +242,8 @@ final class RemoteHub {
     // MARK: Snapshots
 
     /// A hub that shows a state without listening (Settings snapshots).
-    static func preview(running: Bool, devices: [(HubDevice, Date)], offer: Bool) -> RemoteHub {
+    static func preview(running: Bool, devices: [(HubDevice, Date)], offer: Bool,
+                        tailscale: TailscaleSetup.Status? = nil, serve: TailscaleSetup.Serve? = nil, mode: Mode = .direct) -> RemoteHub {
         let store = MemoryDeviceStore()
         for (i, d) in devices.enumerated() { store.add(token: "preview-\(i)", device: d.0, paired: d.1) }
         let hub = RemoteHub(model: nil, devices: store, dir: nil)
@@ -180,10 +251,15 @@ final class RemoteHub {
         hub.addresses = [HubAddress(host: "127.0.0.1", kind: .loopback, interface: "lo0"),
                          HubAddress(host: "100.101.102.103", kind: .tailscale, interface: "utun4"),
                          HubAddress(host: "192.168.1.20", kind: .lan, interface: "en0")]
+        hub.previewMode = mode
+        hub.tailscaleCLI = TailscaleSetup.cliCandidates[0]
+        hub.tailscale = tailscale; hub.serve = serve
         hub.running = running
-        hub.port = running ? defaultPort : nil
+        let direct = mode == .direct
+        hub.port = running ? (direct ? defaultPort : UInt16(TailscaleSetup.localPort)) : nil
+        hub.servedName = running && !direct ? tailscale?.dnsName : nil
         hub.connections = running ? 1 : 0
-        hub.fingerprint = running ? String(repeating: "3f9a", count: 16) : nil
+        hub.fingerprint = running && direct ? String(repeating: "3f9a", count: 16) : nil
         if offer { hub.startPairing() }
         return hub
     }

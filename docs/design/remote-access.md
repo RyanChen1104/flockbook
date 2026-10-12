@@ -101,12 +101,18 @@ Risk: two implementations of the same rules. Mitigation: the fixtures, and the h
 ## 5. Transport
 
 - **Tailscale or LAN only.** The hub listens on the Tailscale interface address (100.x / fd7a:…) or on a LAN address the user picks. Never on `0.0.0.0` by default.
-- **TLS:** use it. With Tailscale, `tailscale cert` gives a real certificate for `host.tailnet.ts.net`, and the PWA needs a secure context (HTTPS) for service workers and notifications anyway. On a LAN without Tailscale: a self-signed certificate. The QR code carries its fingerprint, but a browser cannot pin it (the browser owns TLS), so for the PWA it is for reference only; a native client pins it. On a LAN, someone on the same Wi-Fi who can fake the certificate (and gets the user past the browser warning) could take the pairing. So Tailscale is the recommended address: WireGuard authenticates every device.
+- **TLS:** use it. With Tailscale Serve, Tailscale ends HTTPS with a real, auto-renewed certificate for `host.tailnet.ts.net`, and the PWA needs a secure context (HTTPS) for service workers and notifications anyway. On a LAN without Tailscale: a self-signed certificate. The QR code carries its fingerprint, but a browser cannot pin it (the browser owns TLS), so for the PWA it is for reference only; a native client pins it. On a LAN, someone on the same Wi-Fi who can fake the certificate (and gets the user past the browser warning) could take the pairing. So Tailscale is the recommended address: WireGuard authenticates every device.
 - Tailscale already encrypts and authenticates devices. TLS + token still apply: a tailnet can hold other people's devices (shared nodes), and defense in depth is cheap here.
 - **Mac hub, as built (phase 2):**
   - Bind: one address of this Mac, chosen in Settings > Remote access (default: the first Tailscale address, with the note that it is the safe choice; a LAN address is marked "less safe", with the warning above). Never all addresses (`0.0.0.0`, `::` are refused, not only off by default). Public addresses are refused. Every address except loopback needs TLS.
   - Certificate: self-signed P-256, made once with the system `/usr/bin/openssl` and kept in `Application Support/Flockbook/hub/tls` (mode 600 files in a mode 700 folder). It is imported in memory only, never into a keychain. A new certificate changes the fingerprint, so devices pair again.
-  - Tailscale certificate: when the owner runs `tailscale cert --cert-file <hub>/tailscale/cert.pem --key-file <hub>/tailscale/key.pem <name>.ts.net` and the hub uses a Tailscale address, the hub uses that pair, and the page address uses the certificate's `*.ts.net` name (so the browser accepts it without a warning). The app never runs `tailscale cert` itself (it requests a public certificate, and the name goes into public certificate logs). An EC certificate with explicit curve parameters is refused, because the in-memory import crashes on it.
+  - The `tailscale cert` folder (a cert/key pair dropped into `<hub>/tailscale/`) is removed: Tailscale Serve (below) gives the same real certificate, renews it, and needs no files.
+- **Tailscale Serve mode (recommended, the default mode):**
+  - The hub listens on `127.0.0.1:7481` only, plain HTTP. `tailscale serve --bg --https=7480 http://127.0.0.1:7481` makes Tailscale end HTTPS at `https://<machine>.<tailnet>.ts.net:7480` for the tailnet only, with its own certificate. Port 7480 is our own, so the page is its own origin and another app's Serve config (often on 443, path `/`) is not touched. Direct mode moved to port 7482 so the two cannot clash on the Tailscale address.
+  - Settings > Remote access shows a checklist, read again when the page shows and on Check Again (read-only: `tailscale status --json`, `tailscale serve status --json`): Tailscale on this Mac (the CLI inside `/Applications/Tailscale.app`, else on PATH), signed in, MagicDNS + HTTPS certificates (link to the admin DNS page), a phone on the tailnet (peers with their OS), Serve on for our port. Each step: one sentence, a tick, one action.
+  - The app runs `tailscale serve` only when the owner clicks Turn On / Turn Off, and shows the exact command first, with Copy Command. Turn On only when port 7480 is free; Turn Off (`tailscale serve --https=7480 off`) only when port 7480 is exactly our handler. Anything else on that port (another target, an extra path, a TCP forward, Funnel) is shown as taken and left alone. Never Funnel, never `serve reset`.
+  - No trust from loopback: through Serve every request comes from 127.0.0.1, and Serve may rewrite Host. So the socket takes only the Origin `https://<machine>.<tailnet>.ts.net:7480` (exact match, Host ignored; no Origin = refused), and the device token is needed as always. A DNS-rebinding page (Host = Origin = its own name) is refused. Checks: `ChecksHubServe.swift`.
+  - The QR link and the page address use the ts.net name. There is no certificate fingerprint in this mode.
   - State in sight: the Settings row says "Off. Nothing listens." or "On at https://…" (the PWA; its socket is `/ws`), and while on, the sidebar foot shows "Remote access on".
 
 ## 6. Pairing and auth
@@ -161,7 +167,7 @@ Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" s
   prompt is open. In-app alert when another agent starts to need you; the count is in the page title. Reconnects
   (1–15 s) while paired. Not yet: service worker (offline shell), touch icon PNG, Web Push (phase 4).
 - With a self-signed certificate the phone browser warns once; the page cannot check the pin itself (the browser
-  owns TLS). A `tailscale cert` certificate avoids the warning.
+  owns TLS). The Tailscale Serve mode avoids the warning.
 - Tests: `node scripts/web-test.mjs` (headless Chrome shell over DevTools, fake hub with TLS on 127.0.0.1, every
   screen and action) and `--live <session>` (the app's own hub, a read device, no input).
 

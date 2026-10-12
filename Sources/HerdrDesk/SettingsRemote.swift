@@ -2,7 +2,8 @@ import HerdrKit
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 
-/// Settings > Remote access: off by default; one address; the state always in sight; pairing and the device list in sheets.
+/// Settings > Remote access: off by default; the state always in sight; pairing and the device list in sheets.
+/// Tailscale mode (recommended) shows a checklist with live state; the direct address is "Advanced, less safe".
 struct RemoteAccessSection: View {
     @Bindable var hub: RemoteHub
     @State private var pairing = false
@@ -15,20 +16,20 @@ struct RemoteAccessSection: View {
                 Text(status).foregroundStyle(hub.problem != nil && hub.enabled ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
             }
             if hub.enabled {
-                Picker(selection: Binding(get: { hub.host ?? "" }, set: { hub.host = $0 })) {
-                    if hub.host == nil || !hub.addresses.contains(where: { $0.host == hub.host }) {
-                        Text(hub.host.map { "\($0) (not on this Mac now)" } ?? "Choose…").tag(hub.host ?? "")
-                    }
-                    ForEach(hub.addresses, id: \.host) { a in Text(Self.label(a)).tag(a.host) }
+                Picker(selection: $hub.mode) {
+                    Text("Tailscale (recommended)").tag(RemoteHub.Mode.tailscale)
+                    Text("Direct address (advanced, less safe)").tag(RemoteHub.Mode.direct)
                 } label: {
-                    Text("Address")
-                    Text(Self.addressNote(hub.host.flatMap(HubBind.kind)))
-                        .foregroundStyle(HubBind.kind(hub.host ?? "") == .lan ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    Text("Connect with")
+                    Text(hub.mode == .tailscale ? "Tailscale gives your Mac a private HTTPS address only your devices can reach."
+                                                : "The phone's browser cannot check this certificate. Use Tailscale when you can.")
                 }
+                if hub.mode == .tailscale { TailscaleSteps(hub: hub) } else { addressPicker }
                 LabeledContent {
                     HStack {
                         Button("Devices…") { showDevices = true }
-                        Button("Pair a Device…") { hub.startPairing(); pairing = true }.disabled(!hub.running)
+                        Button("Pair a Device…") { hub.startPairing(); pairing = true }
+                            .disabled(!hub.running || (hub.mode == .tailscale && !hub.tailscaleReady))
                     }
                 } label: {
                     Text("Devices")
@@ -40,7 +41,7 @@ struct RemoteAccessSection: View {
         } footer: {
             Label {
                 Text(hub.enabled ? "Paired devices can read your agents' conversations. Input is off for each device until you turn it on."
-                                 : "Use Flockbook from your phone over Tailscale or your local network.")
+                                 : "Use Flockbook from your phone. Tailscale keeps it private to your own devices.")
             } icon: {
                 Image(systemName: hub.running ? "antenna.radiowaves.left.and.right" : "lock.fill")
                     .foregroundStyle(hub.running ? .orange : .secondary)
@@ -50,13 +51,27 @@ struct RemoteAccessSection: View {
         }
         .sheet(isPresented: $pairing, onDismiss: { hub.cancelPairing() }) { PairSheet(hub: hub) }
         .sheet(isPresented: $showDevices) { DevicesSheet(hub: hub) }
-        .onAppear { hub.refreshAddresses() }
+        .onAppear { hub.refreshAddresses(); Task { await hub.checkTailscale() } }
+    }
+
+    private var addressPicker: some View {
+        Picker(selection: Binding(get: { hub.host ?? "" }, set: { hub.host = $0 })) {
+            if hub.host == nil || !hub.addresses.contains(where: { $0.host == hub.host }) {
+                Text(hub.host.map { "\($0) (not on this Mac now)" } ?? "Choose…").tag(hub.host ?? "")
+            }
+            ForEach(hub.addresses, id: \.host) { a in Text(Self.label(a)).tag(a.host) }
+        } label: {
+            Text("Address")
+            Text(Self.addressNote(hub.host.flatMap(HubBind.kind)))
+                .foregroundStyle(HubBind.kind(hub.host ?? "") == .lan ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+        }
     }
 
     private var status: String {
         guard hub.enabled else { return "Off. Nothing listens." }
         if let p = hub.problem { return p }
         guard let url = hub.url else { return "Starting…" }
+        if hub.mode == .tailscale && hub.serve != .ours { return "Ready on this Mac. Turn on Tailscale Serve below." }
         let c = hub.connections
         return "On at \(url)" + (c > 0 ? " · \(c) connected" : "")
     }
@@ -66,8 +81,8 @@ struct RemoteAccessSection: View {
     static func addressNote(_ kind: HubBind.Kind?) -> String {
         switch kind {
         case .lan?: "Less safe: anyone on this Wi-Fi who can fake the certificate could pair. Use Tailscale when you can."
-        case .tailscale?: "Only this address listens. Tailscale checks every device, so this is the safe choice."
-        default: "Only this address listens. Tailscale is recommended."
+        case .tailscale?: "Only this address listens. The browser will warn about the certificate; the Tailscale mode avoids that."
+        default: "Only this address listens. The Tailscale mode is recommended."
         }
     }
 
@@ -77,6 +92,104 @@ struct RemoteAccessSection: View {
         case .lan?: "Local network (\(a.interface)) · \(a.host) (less safe)"
         case .loopback?: "This Mac only · \(a.host)"
         case nil: a.host
+        }
+    }
+}
+
+/// The Tailscale setup, one row per step: one sentence, a tick when done, one action. Read again on Check Again
+/// and each time Settings shows. Nothing runs `tailscale serve` until the owner clicks Turn On or Turn Off.
+struct TailscaleSteps: View {
+    let hub: RemoteHub
+
+    var body: some View {
+        let ts = hub.tailscale
+        let installed = hub.tailscaleCLI != nil
+        let signedIn = ts?.signedIn == true
+        let https = ts?.httpsReady == true
+        let phones = ts?.phones ?? []
+        Step(n: 1, title: "Tailscale on this Mac", done: installed,
+             text: installed ? "Installed." : "Install the Tailscale app, open it, then come back.") {
+            if !installed { Link("Get Tailscale", destination: URL(string: "https://tailscale.com/download/mac")!) }
+        }
+        Step(n: 2, title: "Signed in", done: signedIn,
+             text: signedIn ? "This Mac is on your tailnet." : !installed ? "Sign in after you install Tailscale."
+                 : "Open Tailscale from the menu bar and sign in\(ts.map { $0.backendState.isEmpty ? "" : " (now: \($0.backendState))" } ?? "").") {
+            if installed && !signedIn { Button("Open Tailscale") { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app")) } }
+        }
+        Step(n: 3, title: "HTTPS names", done: https,
+             text: https ? "This Mac is \(ts?.dnsName ?? "")."
+                 : "In the Tailscale admin console, on the DNS page, turn on MagicDNS and HTTPS Certificates.") {
+            if signedIn && !https { Link("Open DNS Settings", destination: URL(string: "https://login.tailscale.com/admin/dns")!) }
+        }
+        Step(n: 4, title: "Phone on the same tailnet", done: !phones.isEmpty,
+             text: phones.isEmpty ? "Install Tailscale on your phone and sign in with the same account."
+                 : phones.map { "\($0.name) (\(Self.os($0.os))\($0.online ? ", online" : ""))" }.joined(separator: ", ")) {
+            if phones.isEmpty { Link("Get the App", destination: URL(string: "https://tailscale.com/download")!) }
+        }
+        serveStep(ready: https)
+        HStack {
+            Spacer()
+            if hub.checking { ProgressView().controlSize(.small) }
+            Button("Check Again") { Task { await hub.checkTailscale() } }.disabled(hub.checking)
+        }
+    }
+
+    @ViewBuilder private func serveStep(ready: Bool) -> some View {
+        switch hub.serve {
+        case .ours?:
+            Step(n: 5, title: "Tailscale Serve", done: true,
+                 text: "On. Your devices open \(hub.url ?? "the page"). Nothing is public.") {
+                Button("Turn Off") { Task { await hub.setServe(on: false) } }.help(hub.serveOffCommand)
+            }
+        case .taken(let why)?:
+            Step(n: 5, title: "Tailscale Serve", done: false, warn: true,
+                 text: "\(why). Flockbook leaves it as it is. Remove that setting with tailscale serve, then check again.") { EmptyView() }
+        default:
+            Step(n: 5, title: "Tailscale Serve", done: false,
+                 text: ready ? "Turn On runs this command. It shares only this port with your tailnet, never the internet:"
+                             : "Finish the steps above first.") {
+                if ready {
+                    Button("Turn On") { Task { await hub.setServe(on: true) } }.disabled(hub.serve == nil || hub.checking)
+                }
+            }
+            if ready {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(hub.serveOnCommand).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Copy Command") {
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(hub.serveOnCommand, forType: .string)
+                    }.controlSize(.small)
+                }
+            }
+        }
+        if let e = hub.serveError { Text(e).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+    }
+
+    static func os(_ s: String) -> String {
+        switch s.lowercased() { case "android": "Android"; case "ios": "iPhone"; case "ipados": "iPad"; default: s }
+    }
+
+    /// One step: tick or number, title, one sentence, one action.
+    struct Step<Action: View>: View {
+        let n: Int, title: String, done: Bool
+        var warn = false
+        let text: String
+        @ViewBuilder let action: () -> Action
+
+        var body: some View {
+            LabeledContent {
+                action()
+            } label: {
+                Label {
+                    Text(title)
+                    Text(text)
+                } icon: {
+                    Image(systemName: done ? "checkmark.circle.fill" : warn ? "exclamationmark.triangle.fill" : "\(n).circle")
+                        .foregroundStyle(done ? .green : warn ? .orange : .secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(done ? "Done" : "Not done")
         }
     }
 }

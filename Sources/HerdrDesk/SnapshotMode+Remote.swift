@@ -15,13 +15,32 @@ extension SnapshotRunner {
         let off = RemoteHub.preview(running: false, devices: [], offer: false)
         let on = RemoteHub.preview(running: true, devices: two, offer: false)
         let pairing = RemoteHub.preview(running: true, devices: [], offer: true)
+        // Tailscale mode (synthetic tailnet): halfway (MagicDNS off, no phone), ready to turn Serve on, on, port taken.
+        let phone = TailscaleSetup.Peer(name: "pixel", os: "android", online: true)
+        func ts(https: Bool, phones: [TailscaleSetup.Peer]) -> TailscaleSetup.Status {
+            .init(signedIn: true, backendState: "Running", dnsName: "mac.example.ts.net", magicDNS: https, certificates: https, peers: phones)
+        }
+        let tsSetup = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: false, phones: []), serve: nil, mode: .tailscale)
+        let tsReady = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: true, phones: [phone]), serve: .off, mode: .tailscale)
+        let tsOn = RemoteHub.preview(running: true, devices: two, offer: false, tailscale: ts(https: true, phones: [phone]), serve: .ours, mode: .tailscale)
+        let tsTaken = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: true, phones: [phone]),
+                                        serve: .taken("Port 7480 serves something else"), mode: .tailscale)
+        let tsPair = RemoteHub.preview(running: true, devices: [], offer: true, tailscale: ts(https: true, phones: [phone]), serve: .ours, mode: .tailscale)
 
         step("off: nothing listens, no url", !off.enabled && !off.running && off.url == nil)
-        step("on: url https://100.101.102.103:7480 (\(on.url ?? "nil"))", on.url == "https://100.101.102.103:7480")
+        step("on: url https://100.101.102.103:7482 (\(on.url ?? "nil"))", on.url == "https://100.101.102.103:7482")
         step("on: the default address is the Tailscale one", on.host == "100.101.102.103")
         let link = pairing.pairLink?.absoluteString ?? ""
         step("pairing: QR link https + secret + fingerprint in the fragment (\(link.prefix(48))…)",
-             link.hasPrefix("https://100.101.102.103:7480/#pair=") && link.contains("&fp=") && PairSheet.qr(link) != nil)
+             link.hasPrefix("https://100.101.102.103:7482/#pair=") && link.contains("&fp=") && PairSheet.qr(link) != nil)
+        step("tailscale: the page is the ts.net name on the Serve port (\(tsOn.url ?? "nil"))", tsOn.url == "https://mac.example.ts.net:7480")
+        step("tailscale: ready only with Serve on (\(tsSetup.tailscaleReady) \(tsReady.tailscaleReady) \(tsOn.tailscaleReady) \(tsTaken.tailscaleReady))",
+             !tsSetup.tailscaleReady && !tsReady.tailscaleReady && tsOn.tailscaleReady && !tsTaken.tailscaleReady)
+        let tsLink = tsPair.pairLink?.absoluteString ?? ""
+        step("tailscale: QR link on the ts.net name, no certificate fingerprint (\(tsLink.prefix(48))…)",
+             tsLink.hasPrefix("https://mac.example.ts.net:7480/#pair=") && !tsLink.contains("fp=") && PairSheet.qr(tsLink) != nil)
+        step("tailscale: the command shown runs serve for our port only (\(tsReady.serveOnCommand))",
+             tsReady.serveOnCommand.hasSuffix("serve --bg --https=7480 http://127.0.0.1:7481") && !tsReady.serveOnCommand.contains("funnel"))
         step("pairing: 6 words", pairing.offer?.words.count == 6)
         on.setLevel(.read, device: "d1")
         step("devices: level change shows", on.deviceList.first { $0.device.id == "d1" }?.device.level == .read)
@@ -68,6 +87,11 @@ extension SnapshotRunner {
         let shots: [(String, AnyView, CGFloat)] = [
             ("settings-off", AnyView(SettingsView(remote: off)), 520),
             ("settings-on", AnyView(SettingsView(remote: on)), 520),
+            ("tailscale-setup", AnyView(SettingsView(remote: tsSetup)), 520),
+            ("tailscale-ready", AnyView(SettingsView(remote: tsReady)), 520),
+            ("tailscale-on", AnyView(SettingsView(remote: tsOn)), 520),
+            ("tailscale-taken", AnyView(SettingsView(remote: tsTaken)), 520),
+            ("tailscale-pair", AnyView(PairSheet(hub: tsPair)), 380),
             ("pair", AnyView(PairSheet(hub: pairing)), 380),
             ("devices", AnyView(DevicesSheet(hub: on)), 460),
         ]
@@ -91,7 +115,7 @@ extension SnapshotRunner {
                 step("\(name)-\(dark ? "dark" : "light") \(Int(size.width))x\(Int(size.height)) pt, \(String(format: "%.1f", ink * 100))% ink",
                      ink > 0.02 && abs(size.width - width) < 60 && size.height > 100 && size.height < 1000)
                 win.orderOut(nil)
-                step("\(name): only preview addresses shown", [off, on, pairing].allSatisfy { $0.addresses.map(\.host) == ["127.0.0.1", "100.101.102.103", "192.168.1.20"] })
+                step("\(name): only preview addresses shown", [off, on, pairing, tsSetup, tsOn].allSatisfy { $0.addresses.map(\.host) == ["127.0.0.1", "100.101.102.103", "192.168.1.20"] })
             }
         }
         print("snapshot-remote: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
