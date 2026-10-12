@@ -335,6 +335,10 @@ async function fakeRun() {
     && await p.eval(noScroll), "markdown: a wide table scrolls in its own box, the page does not");
   check(await p.eval(`!${q("img")} && !window.__xss && [...document.querySelectorAll('#md-test a')].map(a => a.href).join() === 'https://example.com/a'`) === true,
     "markdown: HTML stays text, only http(s) links");
+  // Hostile nesting renders (capped) instead of exhausting the stack.
+  check(await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
+    const f = markdown('>'.repeat(20000) + ' deep\\n\\n' + '- '.repeat(20000) + 'deep');
+    return f.textContent.includes('deep'); })()`) === true, "markdown: deep > and - nesting is capped");
   await p.eval("document.querySelector('#md-test').scrollIntoView()");
   await p.shot("markdown");
   await p.shot("markdown", true);

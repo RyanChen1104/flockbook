@@ -16,6 +16,10 @@ const QUOTE = /^ {0,3}> ?/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])(\s+|$)(.*)$/;
 const DELIM = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
+// Quotes and lists nest by recursion; past this depth the rest is shown as plain text (hostile input cannot
+// exhaust the stack).
+const MAX_DEPTH = 16;
+
 const indentOf = (l: string) => l.length - l.trimStart().length;
 const isTable = (lines: string[], i: number) => lines[i].includes("|") && i + 1 < lines.length && DELIM.test(lines[i + 1]) && lines[i + 1].includes("-");
 const startsBlock = (lines: string[], i: number) =>
@@ -27,7 +31,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, ...kids: (Node | stri
   return e;
 }
 
-function blocks(lines: string[], into: ParentNode): void {
+function blocks(lines: string[], into: ParentNode, depth = 0): void {
+  if (depth > MAX_DEPTH) {
+    into.append(el("p", lines.join("\n").trim()));
+    return;
+  }
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
@@ -52,12 +60,12 @@ function blocks(lines: string[], into: ParentNode): void {
       const inner: string[] = [];
       for (; i < lines.length && lines[i].trim() && (QUOTE.test(lines[i]) || !startsBlock(lines, i)); i++) inner.push(lines[i].replace(QUOTE, ""));
       const q = el("blockquote");
-      blocks(inner, q);
+      blocks(inner, q, depth + 1);
       into.append(q);
     } else if (isTable(lines, i)) {
       i = table(lines, i, into);
     } else if (ITEM.test(line)) {
-      i = list(lines, i, into);
+      i = list(lines, i, into, depth);
     } else {
       const para: string[] = [];
       for (; i < lines.length && lines[i].trim() && (para.length === 0 || !startsBlock(lines, i)); i++) para.push(lines[i].trim());
@@ -68,7 +76,7 @@ function blocks(lines: string[], into: ParentNode): void {
 
 // One list: items of the same kind (bullet or ordered) at this indent. An item owns the lines indented past its
 // marker, blank lines inside it, and lazy continuation text; its content is parsed as blocks again (nesting).
-function list(lines: string[], i: number, into: ParentNode): number {
+function list(lines: string[], i: number, into: ParentNode, depth: number): number {
   const first = lines[i].match(ITEM)!;
   const base = first[1].length, ordered = /\d/.test(first[2]);
   const ul = ordered ? el("ol") : el("ul");
@@ -98,7 +106,7 @@ function list(lines: string[], i: number, into: ParentNode): number {
       li.append(el("span", task[1] === " " ? "☐" : "☑"));
       body[0] = body[0].slice(task[0].length);
     }
-    blocks(body, li);
+    blocks(body, li, depth + 1);
     ul.append(li);
     // A blank line then something that is not an item of this list ends it.
     if (i < lines.length && !lines[i].trim()) {
