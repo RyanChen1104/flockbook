@@ -143,8 +143,9 @@ final class RemoteHub {
         }
         let tls = dir.appendingPathComponent("tls", isDirectory: true)
         if let id = try HubTLS.load(from: tls) { return id }
-        var names = ["127.0.0.1"] + addresses.map(\.host)
-        if let local = Host.current().localizedName { names.append(local.replacingOccurrences(of: " ", with: "-") + ".local") }
+        // IP addresses only: the page address is always an IP. (The Mac's display name is often not ASCII, which made
+        // Chrome refuse the certificate, and it carries the owner's name.)
+        let names = ["127.0.0.1"] + addresses.map(\.host)
         return try HubTLS.selfSigned(in: tls, names: Array(Set(names)).sorted())
     }
 

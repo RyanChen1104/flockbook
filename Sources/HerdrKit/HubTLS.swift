@@ -37,7 +37,10 @@ public enum HubTLS {
     public static func selfSigned(in dir: URL, names: [String]) throws -> HubIdentity {
         try prepare(dir)
         let key = dir.appendingPathComponent("key.pem"), cert = dir.appendingPathComponent("cert.pem")
-        let san = names.map { IPv4Address($0) != nil || IPv6Address($0) != nil ? "IP:\($0)" : "DNS:\($0)" }.joined(separator: ",")
+        // A DNS name that is not plain ASCII (letters, digits, hyphens, dots) makes Chrome refuse the certificate with
+        // no way past; such names are left out.
+        let san = names.compactMap { IPv4Address($0) != nil || IPv6Address($0) != nil ? "IP:\($0)" : isDNSName($0) ? "DNS:\($0)" : nil }
+            .joined(separator: ",")
         try openssl(["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
                      "-pkeyopt", "ec_param_enc:named_curve", "-nodes",
                      "-keyout", key.path, "-out", cert.path, "-days", "825", "-subj", "/CN=Flockbook hub"]
@@ -71,10 +74,30 @@ public enum HubTLS {
         return nil
     }
 
-    /// The identity stored in `dir`, or nil when there is none.
+    /// A DNS name a browser accepts in a certificate: ASCII labels of letters, digits and hyphens.
+    static func isDNSName(_ name: String) -> Bool {
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        return !name.isEmpty && name.count <= 253 && labels.allSatisfy { l in
+            !l.isEmpty && l.count <= 63 && !l.hasPrefix("-") && !l.hasSuffix("-")
+                && l.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
+    }
+
+    /// The identity stored in `dir`, or nil when there is none. Also nil when the stored certificate has a DNS name a
+    /// browser refuses (made by an older version), so the caller makes a new one.
     public static func load(from dir: URL) throws -> HubIdentity? {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent(p12Name)) else { return nil }
+        let cert = dir.appendingPathComponent("cert.pem")
+        if FileManager.default.fileExists(atPath: cert.path), let text = try? openssl(["x509", "-in", cert.path, "-noout", "-text"]),
+           !dnsNames(certText: text).allSatisfy(isDNSName) { return nil }
         return try importP12(data)
+    }
+
+    /// The `DNS:` names in `openssl x509 -text` output (one per comma-separated entry).
+    static func dnsNames(certText: String) -> [String] {
+        certText.split(separator: "\n").flatMap { $0.split(separator: ",") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("DNS:") }.map { String($0.dropFirst(4)) }
     }
 
     static func importP12(_ data: Data) throws -> HubIdentity {

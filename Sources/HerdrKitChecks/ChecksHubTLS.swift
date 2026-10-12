@@ -67,6 +67,24 @@ final class PinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     check(fromPEM.fingerprint == id.fingerprint, "tls: an outside PEM pair (tailscale cert) gives the same certificate")
     // The page address must use the certificate's tailnet name, else the browser warns even with a real certificate.
     check(fromPEM.tailnetName == "mac.example.ts.net", "tls: a PEM pair names its tailnet host (\(fromPEM.tailnetName ?? "nil"))")
+    // Chrome refuses, with no way past, a certificate whose DNS name is not ASCII (a Mac named "李's MacBook" gave
+    // one). Such names are left out; a stored certificate that has one is not loaded, so a new one is made.
+    let bad = dir.appendingPathComponent("badname")
+    let clean = try HubTLS.selfSigned(in: bad, names: ["127.0.0.1", "李的MacBook-Air.local", "a b.local", "mac-1.local"])
+    let cleanText = String(decoding: clean.certificateDER, as: UTF8.self)
+    check(!cleanText.contains("MacBook-Air") && !cleanText.contains("a b") && cleanText.contains("mac-1.local"),
+          "tls: a non-ASCII or spaced DNS name is left out of the certificate")
+    let oldBad = Process()
+    oldBad.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+    oldBad.arguments = ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-pkeyopt", "ec_param_enc:named_curve",
+                        "-nodes", "-keyout", bad.path + "/key.pem", "-out", bad.path + "/cert.pem", "-days", "2", "-subj", "/CN=t",
+                        "-addext", "subjectAltName=IP:127.0.0.1,DNS:李的MacBook-Air.local"]
+    oldBad.standardError = FileHandle.nullDevice; oldBad.standardOutput = FileHandle.nullDevice
+    try oldBad.run(); oldBad.waitUntilExit()
+    _ = try HubTLS.fromPEM(cert: bad.appendingPathComponent("cert.pem"), key: bad.appendingPathComponent("key.pem"), into: bad)
+    check(try HubTLS.load(from: bad) == nil, "tls: a stored certificate with a non-ASCII DNS name is not loaded (made again)")
+    check(try HubTLS.load(from: dir)?.fingerprint == id.fingerprint, "tls: a stored certificate with valid names still loads")
+
     // An EC pair with explicit curve parameters (LibreSSL's default) would crash the in-memory import: refused first.
     let ex = dir.appendingPathComponent("explicit")
     try FileManager.default.createDirectory(at: ex, withIntermediateDirectories: true)
