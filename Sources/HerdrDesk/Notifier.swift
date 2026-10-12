@@ -13,7 +13,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var known: Set<String>?
     var onOpen: ((_ workspaceID: String, _ tabID: String) -> Void)?
     /// The pane and prompt the buttons answer, or nil for a notification without buttons. Read-only.
-    var approvalPrompt: ((_ tab: Tab) async -> (pane: String, prompt: String)?)?
+    var approvalPrompt: ((_ tab: Tab) async -> (pane: String, prompt: String, request: PermissionRequest?)?)?
     /// Allow / Deny chosen. Returns true when the input was sent; false opens the tab.
     var onAnswer: ((_ action: String, _ paneID: String, _ prompt: String?) async -> Bool)?
     private var available: Bool { Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") }
@@ -44,8 +44,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             Task { @MainActor in
                 let bound = await approvalPrompt?(t)
                 let c = UNMutableNotificationContent()
-                c.title = t.primaryAgent?.name ?? t.label
-                c.body = "Needs you · \(ws.label) · \(t.label)"
+                let text = Self.text(ws, t, bound)
+                c.title = text.title
+                c.subtitle = text.subtitle
+                c.body = text.body
                 c.sound = .default
                 c.userInfo = ["ws": ws.id, "tab": t.id]
                 if let bound {
@@ -56,6 +58,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "blocked-\(t.id)", content: c, trigger: nil))
             }
         }
+    }
+
+    /// An approval says what it approves (the owner may answer from the notification); else as before.
+    static func text(_ ws: Workspace?, _ t: Tab, _ bound: (pane: String, prompt: String, request: PermissionRequest?)?) -> ApprovalNotice.Text {
+        ApprovalNotice.text(agent: t.primaryAgent?.name ?? "", workspace: ws?.label ?? "", tab: t.label,
+                            request: bound.flatMap { $0.request ?? PermissionRequest(title: "", command: "") })
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {

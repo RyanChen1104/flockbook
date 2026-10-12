@@ -33,6 +33,9 @@ enum HeadlessTest {
         }
         let bound = await model.approvalPrompt(in: tab)
         print("test: buttons = \(bound.map { "pane \($0.pane) prompt \($0.prompt)" } ?? "none")")
+        let ws = model.store.workspaces.first { $0.tabs.contains { $0.id == tab.id } }
+        let text = Notifier.text(ws, tab, bound)
+        print("test: notification title = \(text.title.debugDescription) subtitle = \(text.subtitle.debugDescription) body = \(text.body.debugDescription)")
         if let pane = tab.panes.first(where: { $0.id == paneId }) {
             await model.checkPrompt(for: pane)
             let card = model.approvalRequest(pane)

@@ -211,7 +211,7 @@ final class AppModel {
 
     /// The pane and prompt a new "needs you" notification may answer with Allow / Deny. Nil: no buttons. Read-only.
     /// Tries a few times: the log's tool call and the prompt on screen can come a moment after the blocked status.
-    func approvalPrompt(in tab: Tab) async -> (pane: String, prompt: String)? {
+    func approvalPrompt(in tab: Tab) async -> (pane: String, prompt: String, request: PermissionRequest?)? {
         for attempt in 0..<3 {
             guard writesEnabled else { noticeLog.info("no buttons: input is off"); return nil }
             if attempt > 0 { try? await Task.sleep(for: .milliseconds(700)) }
@@ -220,7 +220,9 @@ final class AppModel {
             if let s = await approvalState(pane), let id = ApprovalNotice.prompt(s, writes: writesEnabled) {
                 promptVisible.insert(pane.id)
                 noticeLog.info("buttons: pane \(pane.id, privacy: .public) prompt \(id, privacy: .public)")
-                return (pane.id, id)
+                // The request the id names, for the notification's text: the log's call, else the box on screen.
+                let logged = pendingRequest(pane)
+                return (pane.id, id, logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen))
             }
             noticeLog.info("no buttons yet: pane \(pane.id, privacy: .public) try \(attempt) log call \(self.pendingToolUseId(pane) ?? "none", privacy: .public)")
         }

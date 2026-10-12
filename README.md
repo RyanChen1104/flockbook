@@ -51,6 +51,7 @@ When an agent asks a question with options, pick an answer from a card.
 ### Approval card
 
 When an agent asks for permission, choose Allow or Deny without opening the terminal.
+The "needs you" notification shows the command and has the same buttons; on macOS they are under **Options** when you hover over the notification.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/approval-dark.png">

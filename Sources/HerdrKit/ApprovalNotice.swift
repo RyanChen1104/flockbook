@@ -43,10 +43,17 @@ public enum ApprovalNotice {
         return [logged, onScreen]
     }
 
-    /// The log's call is the prompt box: same tool, same non-empty command (spaces aside).
+    /// The log's call is the prompt box: same tool, same non-empty command. The box wraps a long command, mid-word or
+    /// at a space, so each line boundary may stand for one space or none; inside a line, spaces must match (as runs).
     private static func sameCall(tool: String?, command: String?, _ boxTool: String, _ boxCommand: String) -> Bool {
-        guard let tool, let command, !words(command).isEmpty else { return false }
-        return tool == boxTool && words(command) == words(boxCommand)
+        guard let tool, let command, !words(command).isEmpty, tool == boxTool else { return false }
+        var rest = Substring(words(command))
+        for (i, line) in boxCommand.components(separatedBy: "\n").map(words).filter({ !$0.isEmpty }).enumerated() {
+            if i > 0, rest.hasPrefix(" ") { rest = rest.dropFirst() }
+            guard rest.hasPrefix(line) else { return false }
+            rest = rest.dropFirst(line.count)
+        }
+        return rest.isEmpty
     }
 
     /// Whitespace-insensitive: the box wraps and indents a long command.
@@ -93,8 +100,10 @@ public enum ApprovalNotice {
         } else {
             command = body.filter { !isRule($0) }
         }
+        // A wrapped command has a "│" gutter on each line (Claude Code 2.1.296).
+        let ungutter: (String) -> String = { $0.hasPrefix("│") ? $0.dropFirst().trimmingCharacters(in: .whitespaces) : $0 }
         let tool = String(header.split(separator: " ").first ?? "")
-        return ScreenBox(header: header, tool: tool, command: command.joined(separator: "\n"), lines: box)
+        return ScreenBox(header: header, tool: tool, command: command.map(ungutter).joined(separator: "\n"), lines: box)
     }
 
     /// Id of the permission prompt on screen: a hash of the tool name and the whole box (header, command, question and
@@ -121,6 +130,32 @@ public enum ApprovalNotice {
         guard let onScreen else { return logged }
         guard let logged, sameCall(tool: logged.toolName, command: logged.command, onScreen.toolName, onScreen.command) else { return onScreen }
         return logged
+    }
+
+    /// A notification's text.
+    public struct Text: Sendable, Hashable {
+        public var title: String, subtitle: String, body: String
+    }
+
+    /// The "needs you" notification. With the approval it answers: what is approved ("claude wants to run Bash", the
+    /// command's first two lines), the workspace and tab in the subtitle. Without one: as before.
+    public static func text(agent: String, workspace: String, tab: String, request: PermissionRequest?) -> Text {
+        let who = agent.isEmpty ? tab : agent
+        guard let request else { return Text(title: who, subtitle: "", body: "Needs you · \(workspace) · \(tab)") }
+        let tool = request.toolName.isEmpty ? "a tool" : request.toolName
+        // Escape sequences out first (colour codes), then any other control character.
+        let clean: (String) -> String = { s in
+            let plain = s.replacing(/\x{1b}\[[0-9;?]*[ -\/]*[@-~]/, with: "")
+            return String(String.UnicodeScalarView(plain.unicodeScalars.filter { $0.value >= 0x20 && !(0x7f...0x9f).contains($0.value) }))
+                .trimmingCharacters(in: .whitespaces)
+        }
+        let lines = request.command.components(separatedBy: .newlines).map(clean).filter { !$0.isEmpty }
+        let cut: (String) -> String = { $0.count > 120 ? String($0.prefix(119)) + "…" : $0 }
+        var body = lines.prefix(2).map(cut).joined(separator: "\n")
+        if lines.count > 2 { body += " …" }
+        if body.isEmpty { body = cut(clean(request.title)) }
+        if body.isEmpty { body = "Needs you" }
+        return Text(title: "\(who) wants to run \(tool)", subtitle: "\(workspace) · \(tab)", body: body)
     }
 
     public enum Outcome: Sendable, Hashable {

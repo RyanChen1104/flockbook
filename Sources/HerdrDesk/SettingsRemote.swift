@@ -73,7 +73,7 @@ struct RemoteAccessSection: View {
 
     static func label(_ a: HubAddress) -> String {
         switch a.kind {
-        case .tailscale?: "Tailscale · \(a.host) (recommended)"
+        case .tailscale?: "Tailscale · \(a.host)"
         case .lan?: "Local network (\(a.interface)) · \(a.host) (less safe)"
         case .loopback?: "This Mac only · \(a.host)"
         case nil: a.host

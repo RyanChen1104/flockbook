@@ -151,4 +151,50 @@ import Foundation
                                                pending: PermissionRequest(title: "Bash", command: "npm run build", toolName: "Bash", toolUseId: "toolu_1"))
         check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: "toolu_1", now: stale, writes: true) == .open, "notice: screen changed after posting -> open")
     }
+
+    // The notification's text: an approval says what it approves; other notices stay as they were.
+    do {
+        let plain = N.text(agent: "claude", workspace: "web", tab: "build", request: nil)
+        check(plain == N.Text(title: "claude", subtitle: "", body: "Needs you · web · build"), "notice text: no approval -> as before (\(plain))")
+        let bash = N.text(agent: "claude", workspace: "web", tab: "build",
+                          request: PermissionRequest(title: "Bash command", command: "  npm run build  ", toolName: "Bash", toolUseId: "toolu_1"))
+        check(bash.title == "claude wants to run Bash", "notice text: title names the agent and the tool (\(bash.title))")
+        check(bash.subtitle == "web · build", "notice text: workspace and tab in the subtitle (\(bash.subtitle))")
+        check(bash.body == "npm run build", "notice text: body is the command, trimmed (\(bash.body))")
+        let long = N.text(agent: "claude", workspace: "web", tab: "build", request: PermissionRequest(
+            title: "Bash command", command: "\n  cd /work\n\n  rm -rf build\n  npm ci\n", toolName: "Bash"))
+        check(long.body == "cd /work\nrm -rf build …", "notice text: first two lines, then … (\(long.body.debugDescription))")
+        let wide = N.text(agent: "claude", workspace: "w", tab: "t", request: PermissionRequest(title: "x", command: String(repeating: "a", count: 300), toolName: "Bash"))
+        check(wide.body.count <= 121 && wide.body.hasSuffix("…"), "notice text: a long line is cut (\(wide.body.count))")
+        let noCommand = N.text(agent: "", workspace: "web", tab: "build", request: PermissionRequest(title: "Fetch https://example.com", command: "", toolName: "WebFetch"))
+        check(noCommand.title == "build wants to run WebFetch" && noCommand.body == "Fetch https://example.com",
+              "notice text: no agent name -> tab label; no command -> the request title (\(noCommand))")
+        let noTool = N.text(agent: "claude", workspace: "web", tab: "build", request: PermissionRequest(title: "", command: "", toolName: ""))
+        check(noTool.title == "claude wants to run a tool" && noTool.body == "Needs you", "notice text: empty request still reads (\(noTool))")
+        let ctrl = N.text(agent: "claude", workspace: "w", tab: "t", request: PermissionRequest(title: "x", command: "echo \u{1b}[31mred", toolName: "Bash"))
+        check(ctrl.body == "echo red", "notice text: colour codes and control characters removed (\(ctrl.body.debugDescription))")
+    }
+
+    // Claude 2.1.296 draws a "│" gutter on a wrapped command and breaks it mid-word (seen live).
+    do {
+        let rule = String(repeating: "╌", count: 40)
+        func wrapped(_ l1: String, _ l2: String) -> String {
+            "────────────────────────────────────────\n Bash command\n Tip: auto mode handles these prompts for you\n Create the file\n\(rule)\n"
+                + " │ \(l1)\n │ \(l2)\n\(rule)\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend"
+        }
+        let midWord = wrapped("touch /work/project/build/output/scrat", "chpad/notes.txt")
+        let r = N.screenRequest(midWord)
+        check(r?.command == "touch /work/project/build/output/scrat\nchpad/notes.txt", "notice wrap: gutter removed from the command (\(r?.command.debugDescription ?? "nil"))")
+        func st(_ screen: String, _ command: String) -> N.PaneState {
+            N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_9", screen: screen, pendingTool: "Bash", pendingCommand: command)
+        }
+        check(N.prompt(st(midWord, "touch /work/project/build/output/scratchpad/notes.txt"), writes: true) == "toolu_9",
+              "notice wrap: the log's call matches a box wrapped mid-word")
+        let atSpace = wrapped("npm run build --workspace", "web")
+        check(N.prompt(st(atSpace, "npm run build --workspace web"), writes: true) == "toolu_9", "notice wrap: the log's call matches a box wrapped at a space")
+        check(N.prompt(st(midWord, "touch /work/project/build/output/scratchpad/other.txt"), writes: true) == N.screenPrompt(midWord),
+              "notice wrap: another command still binds the screen id")
+        check(N.prompt(st(midWord, "touch /work/project/build/output/scrat"), writes: true) == N.screenPrompt(midWord),
+              "notice wrap: a log command that is only the first line does not match")
+    }
 }
