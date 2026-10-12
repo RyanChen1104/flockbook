@@ -30,6 +30,9 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 }
 
 // --- State.
+/** An image picked for the next message. `uploaded`: the hub holds it under `name` on this connection. */
+interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
+const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
 interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest }
 const state = {
   token: load(TOKEN_KEY),
@@ -46,6 +49,10 @@ const state = {
   busy: false,
   banner: null as { pane: string; text: string } | null,
   toast: null as string | null,
+  /** Images picked per pane, not sent yet. */
+  attachments: new Map<string, Attachment[]>(),
+  /** Upload progress of the message being sent, 0…1; null when none. */
+  progress: null as number | null,
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -85,6 +92,8 @@ function connect(): void {
     ws = null;
     state.connected = false;
     state.welcomed = false;
+    // The hub drops a connection's uploads when it closes: send them again next time.
+    for (const list of state.attachments.values()) for (const a of list) a.uploaded = false;
     for (const done of waiting.values()) done(false, "failed", "Not connected.");
     waiting.clear();
     render();
@@ -249,6 +258,7 @@ function explain(code?: string, message?: string): string {
     case "promptOpen": return "Answer the open prompt first.";
     case "readOnly": return "This device can only read. Turn on input for it on the Mac.";
     case "notFound": return "That agent is gone.";
+    case "rateLimited": return "Too many images from this phone. Try again in a few minutes.";
     default: return message || "It did not work.";
   }
 }
@@ -473,22 +483,101 @@ function questionCard(pane: string, prompt: QuestionRequest, items: Item[]): HTM
   return h("div", { class: "card question glass-float", role: "group", "aria-label": "Question" }, head, ...blocks, h("div", { class: "actions" }, submit));
 }
 
+// --- Images (remote-protocol.md 3.3): picked on the phone, sent in parts with `attach`, named by `send`.
+function readAsDataURL(f: File): Promise<string> {
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(typeof r.result === "string" ? r.result : "");
+    r.onerror = () => resolve("");
+    r.readAsDataURL(f);
+  });
+}
+
+function base64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** Adds picked files: at most 4 per message, each at most 10 MB. The hub checks the type itself. */
+async function pick(pane: string, files: File[]): Promise<void> {
+  const list = state.attachments.get(pane) ?? [];
+  const problems: string[] = [];
+  for (const f of files) {
+    if (list.length >= MAX_IMAGES) { problems.push(`At most ${MAX_IMAGES} images per message.`); break; }
+    if (f.size > MAX_IMAGE_BYTES) { problems.push(`${f.name || "An image"} is over 10 MB.`); continue; }
+    if (f.size === 0) { problems.push(`${f.name || "An image"} is empty.`); continue; }
+    // Only `data:` previews: the page's CSP allows no blob: images.
+    const preview = f.type.startsWith("image/") && f.size <= MAX_IMAGE_BYTES ? await readAsDataURL(f) : "";
+    list.push({ name: `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, file: f, preview, uploaded: false });
+  }
+  state.attachments.set(pane, list);
+  if (problems.length) toast(problems.join(" ")); else render();
+}
+
+/** Uploads the images the hub does not hold yet. Progress over all of them. Null, or the failed reply. */
+async function upload(list: Attachment[]): Promise<{ code?: string; message?: string } | null> {
+  const todo = list.filter((a) => !a.uploaded);
+  const total = todo.reduce((n, a) => n + a.file.size, 0);
+  let done = 0;
+  for (const a of todo) {
+    const bytes = new Uint8Array(await a.file.arrayBuffer());
+    const parts = Math.max(1, Math.ceil(bytes.length / PART_BYTES));
+    for (let part = 0; part < parts; part++) {
+      const chunk = bytes.subarray(part * PART_BYTES, (part + 1) * PART_BYTES);
+      const r = await request({ type: "attach", upload: a.name, part, parts, data: base64(chunk) });
+      if (!r.ok) return { code: r.code, message: `${a.file.name || "An image"}: ${explain(r.code, r.message)}` };
+      done += chunk.length;
+      state.progress = total ? done / total : 1;
+      render();
+    }
+    a.uploaded = true;
+  }
+  return null;
+}
+
 function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElement | null {
   if (!canInput() || !find(pane)?.p.agent) return null;
   const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : agent ? `Reply to ${agent}` : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
+  const images = state.attachments.get(pane) ?? [];
   const send = async (): Promise<void> => {
     const text = box.value.trim();
-    if (!text || state.busy) return;
+    const list = state.attachments.get(pane) ?? [];
+    if ((!text && !list.length) || state.busy) return;
     state.busy = true;
-    const r = await request({ type: "send", pane, text });
+    state.progress = list.some((a) => !a.uploaded) ? 0 : null;
+    render();
+    const failed = list.length ? await upload(list) : null;
+    const r = failed ? { ok: false, ...failed } : await request({ type: "send", pane, text, ...(list.length ? { attachments: list.map((a) => a.name) } : {}) });
     state.busy = false;
-    if (r.ok) box.value = "";
-    else toast(explain(r.code, r.message));
+    state.progress = null;
+    const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+    if (r.ok) {
+      if (field) field.value = "";
+      state.attachments.delete(pane);
+    } else {
+      // The hub no longer knows an image (reconnected, or it dropped one): upload them all again next time.
+      if (r.code === "badRequest") for (const a of list) a.uploaded = false;
+      toast(failed ? failed.message ?? "The image did not go." : explain(r.code, r.message));
+    }
     render();
   };
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+  // A file field with `image/*`: the phone offers the camera and the photo library.
+  const file = h("input", { id: "composer-file", type: "file", accept: "image/*", multiple: true, hidden: true, tabindex: "-1",
+    onchange: () => { const fs = [...(file.files ?? [])]; file.value = ""; pick(pane, fs); } });
+  const attach = h("button", { id: "composer-attach", class: "attach", type: "button", disabled: promptOpen || state.busy || images.length >= MAX_IMAGES,
+    "aria-label": "Add images", title: "Add images", onclick: () => file.click() }, "+");
+  const thumbs = images.length ? h("div", { class: "thumbs", role: "list", "aria-label": "Images to send" }, ...images.map((a, i) =>
+    h("div", { class: "thumb", role: "listitem" },
+      a.preview ? h("img", { src: a.preview, alt: a.file.name || `Image ${i + 1}` }) : h("span", { class: "thumb-none" }, "?"),
+      h("button", { class: "thumb-remove", type: "button", disabled: state.busy, "aria-label": `Remove ${a.file.name || `image ${i + 1}`}`, title: "Remove",
+        onclick: () => { state.attachments.set(pane, images.filter((x) => x !== a)); render(); } }, "×")))) : null;
+  const progress = state.progress !== null ? h("progress", { id: "composer-progress", max: 1, value: state.progress, "aria-label": "Sending images" }) : null;
   return h("form", { class: "composer glass-float", onsubmit: (e: Event) => { e.preventDefault(); send(); } },
-    box, h("button", { id: "composer-send", class: "primary send", type: "submit", disabled: promptOpen, "aria-label": "Send", title: "Send" }, "↑"));
+    thumbs, progress,
+    h("div", { class: "composer-row" }, file, attach, box,
+      h("button", { id: "composer-send", class: "primary send", type: "submit", disabled: promptOpen || state.busy, "aria-label": "Send", title: "Send" }, "↑")));
 }
 
 // --- Start.

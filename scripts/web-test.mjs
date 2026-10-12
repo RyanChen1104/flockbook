@@ -125,6 +125,12 @@ async function page(context) {
       return p.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; e.value = ${JSON.stringify(text)};
         e.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
     },
+    /** Puts files in a file field, as the phone's picker would. */
+    async files(sel, paths) {
+      const { root } = await send("DOM.getDocument", {}, sessionId);
+      const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: sel }, sessionId);
+      await send("DOM.setFileInputFiles", { files: paths, nodeId }, sessionId);
+    },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
     async scale(dpr) { await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: dpr, mobile: true }, sessionId); },
     async shot(name, dark = false) {
@@ -333,6 +339,54 @@ async function fakeRun() {
   await p.click("#composer-send");
   check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
   check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
+
+  // Images from the phone: pick, preview, remove, send in parts with progress; the hub re-encodes them.
+  const imgDir = mkdtempSync(join(tmpdir(), "fb-web-img-"));
+  const big = join(imgDir, "big.png"); writeFileSync(big, Buffer.alloc(11 * 1024 * 1024, 1));
+  const fake = join(imgDir, "fake.png"); writeFileSync(fake, "this is not an image");
+  const icon192 = join(root, "web/icon-192.png"), icon32 = join(root, "web/favicon-32.png"), icon512 = join(root, "web/icon-512.png");
+  const thumbs = "document.querySelectorAll('.thumb').length";
+  check(await p.eval("(() => { const f = document.querySelector('#composer-file'); return f.type === 'file' && f.accept === 'image/*' && f.multiple; })()") === true,
+    "image: the attach field takes images, several at once (camera or photos)");
+  await p.files("#composer-file", [icon192, icon32]);
+  check(await p.until(`${thumbs} === 2`) === true, "image: two picked -> two thumbnails");
+  check(await p.eval("[...document.querySelectorAll('.thumb img')].every(i => i.src.startsWith('data:image/') && i.complete && i.naturalWidth > 0)") === true,
+    "image: thumbnails are data: previews (CSP), drawn");
+  await p.shot("attach");
+  await p.shot("attach", true);
+  await p.click(".thumb-remove");
+  check(await p.until(`${thumbs} === 1`) === true, "image: remove takes one off");
+  await p.files("#composer-file", [big]);
+  check(await p.until("document.querySelector('.toast')?.textContent.includes('over 10 MB')") === true && await p.eval(thumbs) === 1,
+    "image: over 10 MB refused on the phone, with a message");
+  await p.files("#composer-file", [icon512, icon512, icon512, icon512]);
+  check(await p.until(`${thumbs} === 4`) === true && await p.until("document.querySelector('.toast')?.textContent.includes('At most 4')") === true,
+    "image: at most 4 per message, with a message");
+  check(await p.eval("document.querySelector('#composer-attach').disabled") === true, "image: attach button off at 4");
+  // Watch the progress bar while it sends.
+  await p.eval("window.__progress = false; new MutationObserver(() => { if (document.querySelector('#composer-progress')) window.__progress = true; }).observe(document.body, { subtree: true, childList: true })");
+  await p.type("#composer-text", "look at these");
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'look at these [4 images 32x32 512x512 512x512 512x512]')", 8000) === true,
+    "image: text + 4 images sent, re-encoded at their size");
+  check(await p.eval("window.__progress") === true, "image: a progress bar while uploading");
+  check(await p.until(`${thumbs} === 0 && !document.querySelector('#composer-progress')`) === true && await p.eval("document.querySelector('#composer-text').value") === "",
+    "image: composer empty after send");
+  await p.files("#composer-file", [icon192]);
+  await p.until(`${thumbs} === 1`);
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === '[1 image 192x192]')", 8000) === true, "image: an image with no text sends");
+  await p.files("#composer-file", [fake]);
+  await p.until(`${thumbs} === 1`);
+  await p.type("#composer-text", "fake one");
+  await p.click("#composer-send");
+  check(await p.until("document.querySelector('.toast')?.textContent.includes('fake.png: Not a PNG, JPEG, HEIC or WebP image.')") === true,
+    "image: the hub refuses a non-image (magic bytes, not the name); the message says which");
+  check(await p.eval(`${thumbs} === 1 && document.querySelector('#composer-text').value === 'fake one'`) === true, "image: after a refusal the text and image stay");
+  check(![...await p.eval("[...document.querySelectorAll('.msg.user')].map(e => e.textContent)")].includes("fake one"), "image: nothing sent after a refusal");
+  await p.click(".thumb-remove");
+  await p.type("#composer-text", "");
+  rmSync(imgDir, { recursive: true, force: true });
   await p.shot("composer");
   await p.shot("composer", true);
   // Frosted glass like the app's materials: the bar and the composer blur what scrolls under them, over a see-through fill.

@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 @testable import HerdrKit
 
 /// `--serve-web`: a hub with the bundled PWA and a fake backend, for the headless browser test (scripts/web-test.mjs).
@@ -23,6 +24,7 @@ import Foundation
     ]
     let b = FakeHubBackend(workspaces: ws)
     b.sessionName = nil
+    b.imageDirectory = dir.appendingPathComponent("images", isDirectory: true)
     let chip = ToolChip(symbol: "terminal", text: "Ran 2 commands", calls: [
         ToolCall(id: "c1", toolName: "Bash", summary: "npm test", input: "{\"command\":\"npm test\"}", output: "3 passed"),
         ToolCall(id: "c2", toolName: "Bash", summary: "npm run lint", input: "{\"command\":\"npm run lint\"}", output: "ok"),
@@ -82,7 +84,7 @@ import Foundation
     fflush(stdout)
 
     // Input moves the fake agents on, as herdr would: allow -> working; answer/send -> a new user line.
-    var seen = (0, 0, 0)
+    var seen = (0, 0, 0), seenImages = 0
     func setStatus(_ pane: String, _ s: AgentStatus) {
         for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == pane {
             ws[wi].tabs[ti].panes[pi].agent?.status = s; ws[wi].tabs[ti].status = s
@@ -106,7 +108,17 @@ import Foundation
             setStatus("w1:p2", .working)
         }
         if now.2 > seen.2, let last = b.sent.last {
-            let pane = String(last.split(separator: " ")[0]), text = String(last.drop(while: { $0 != " " }).dropFirst())
+            let pane = String(last.split(separator: " ")[0])
+            var text = String(last.drop(while: { $0 != " " }).dropFirst())
+            // Images: the count and their size, as the agent would see them.
+            if b.sentImages.count > seenImages, let imgs = b.sentImages.last {
+                seenImages = b.sentImages.count
+                let sizes = imgs.map { u in
+                    let p = imageProperties(u)
+                    return "\(p[kCGImagePropertyPixelWidth as String] as? Int ?? 0)x\(p[kCGImagePropertyPixelHeight as String] as? Int ?? 0)"
+                }
+                text = ([text] + ["[\(imgs.count) image\(imgs.count == 1 ? "" : "s") \(sizes.joined(separator: " "))]"]).filter { !$0.isEmpty }.joined(separator: " ")
+            }
             let sid = ws.flatMap(\.tabs).flatMap(\.panes).first { $0.id == pane }?.agent?.sessionId ?? ""
             b.items[sid, default: []].append(ConversationItem(id: "u\(now.2)", kind: .userText(text)))
             // "block me": another agent starts to wait (the PWA's in-app alert).
