@@ -10,6 +10,8 @@ V2 "gem arrowhead": one faceted arrowhead (the lead) with two small ones behind 
 | `AppIcon-dark-1024.png` | Dark render (reference). |
 | `AppIcon.icon` | Icon Composer document: gradient fill + arrowhead layer, each with a dark specialization. `scripts/bundle.sh` compiles it into `Assets.car` (`CFBundleIconName`) when `actool` exists (Xcode; the release CI has it). Its layer SVGs in `Assets/` are cut from the two sources above (body 824 px scaled to the full 1024 canvas). |
 
+Phone PWA icons (`web/*.png`: 192, 512, maskable 512, apple-touch 180, favicons light/dark): `swift scripts/pwa-icons.swift`, then `node scripts/web-build.mjs`. They are cut from `AppIcon-1024.png` / `AppIcon-dark-1024.png`; the maskable and touch icons put the body on its own gradient, full bleed.
+
 Render: `rsvg-convert -w 1024 -h 1024 flockbook-light.svg -o AppIcon-1024.png` (same for dark).
 Check the .icon headless: `ictool AppIcon.icon --export-image --output-file x.png --platform macOS --rendition Dark --width 1024 --height 1024 --scale 1` (ictool is inside Icon Composer.app).
 

@@ -193,6 +193,37 @@ async function fakeRun() {
   check(await fresh.until("!!document.querySelector('#pair-words')") === true, "pair: without a token the page asks for the six words");
   check(await fresh.eval("document.title") === "Flockbook", "page: title");
   check(await fresh.eval("fetch('/manifest.webmanifest').then(r => r.json()).then(m => m.name)") === "Flockbook", "page: manifest");
+  // Icons (the Mac app icon, scripts/pwa-icons.swift): each one in the manifest and the page's links is served as a
+  // PNG of its stated size; the maskable and touch icons are opaque; the maskable artwork stays in the 80% circle.
+  const icons = JSON.parse(await fresh.eval(`(async () => {
+    const m = await (await fetch('/manifest.webmanifest')).json();
+    const links = [...document.querySelectorAll('link[rel~=icon], link[rel=apple-touch-icon]')]
+      .map((l) => ({ src: l.getAttribute('href'), sizes: l.getAttribute('sizes') || '180x180', purpose: l.rel }));
+    const out = [];
+    for (const i of [...m.icons.map((i) => ({ ...i, purpose: 'manifest ' + (i.purpose || 'any') })), ...links]) {
+      const r = await fetch('/' + i.src);
+      const blob = await r.blob();
+      const bmp = await createImageBitmap(blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height), g = c.getContext('2d');
+      g.drawImage(bmp, 0, 0);
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+      let opaque = true, reach = 0;
+      for (let y = 0; y < bmp.height; y++) for (let x = 0; x < bmp.width; x++) {
+        const o = (y * bmp.width + x) * 4;
+        if (d[o + 3] < 255) opaque = false;
+        if (d[o] < 150 && d[o + 3] > 200) reach = Math.max(reach, Math.hypot(x + 0.5 - bmp.width / 2, y + 0.5 - bmp.height / 2) / bmp.width);
+      }
+      out.push({ src: i.src, sizes: i.sizes, purpose: i.purpose, status: r.status, type: r.headers.get('content-type'), w: bmp.width, h: bmp.height, opaque, reach });
+    }
+    return JSON.stringify(out);
+  })()`));
+  check(icons.length >= 6 && icons.every((i) => i.status === 200 && i.type === "image/png" && i.sizes === `${i.w}x${i.h}`),
+    `icons: every manifest and page icon is a PNG of its stated size (${icons.map((i) => `${i.src} ${i.type} ${i.w}x${i.h}`).join(", ")})`);
+  check(["192x192", "512x512"].every((z) => icons.some((i) => i.purpose === "manifest any" && i.sizes === z)), "icons: manifest has 192 and 512 (any)");
+  const mask = icons.find((i) => i.purpose === "manifest maskable"), touch = icons.find((i) => i.purpose === "apple-touch-icon");
+  check(mask?.w === 512 && mask.opaque && mask.reach > 0.2 && mask.reach <= 0.4, `icons: maskable 512 is opaque, artwork inside the 80% circle (reach ${mask?.reach.toFixed(3)} of the side)`);
+  check(touch?.w === 180 && touch.opaque, "icons: apple-touch-icon is 180 and opaque");
+  check(icons.filter((i) => i.purpose === "icon").length === 2, "icons: favicon for light and dark");
   await fresh.shot("pair");
   await fresh.shot("pair", true);
 

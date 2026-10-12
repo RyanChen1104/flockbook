@@ -17,7 +17,7 @@ const types = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
-  ".svg": "image/svg+xml",
+  ".png": "image/png",
   ".webmanifest": "application/manifest+json",
 };
 
@@ -25,7 +25,9 @@ const sources = readdirSync(join(web, "src")).filter((f) => f.endsWith(".ts")).s
 execFileSync("deno", ["check", "--quiet", "--config", join(web, "deno.json"), ...sources.map((f) => join(web, "src", f))], { stdio: "inherit" });
 
 const files = {};
-for (const f of ["index.html", "style.css", "manifest.webmanifest", "icon.svg"]) files[f] = readFileSync(join(web, f));
+for (const f of ["index.html", "style.css", "manifest.webmanifest"]) files[f] = readFileSync(join(web, f));
+// The icons, made from the Mac app icon by scripts/pwa-icons.swift.
+for (const f of readdirSync(web).filter((f) => f.endsWith(".png")).sort()) files[f] = readFileSync(join(web, f));
 for (const f of sources) {
   // Module imports name the .ts sources (for deno check); the browser loads the .js files.
   const js = stripTypeScriptTypes(readFileSync(join(web, "src", f), "utf8"), { mode: "strip" })
