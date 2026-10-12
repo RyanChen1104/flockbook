@@ -9,21 +9,47 @@ export function markdown(src: string): DocumentFragment {
   return out;
 }
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})\s*([^`\s]*)[^`]*$/;
-const HEADING = /^ {0,3}(#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$/;
+// Every pattern here runs in linear time on hostile lines (no two unbounded runs that can share characters).
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const HEADING = /^ {0,3}(#{1,6})(?=[ \t]|$)/;
 const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^ {0,3}> ?/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])(\s+|$)(.*)$/;
-const DELIM = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 // Quotes and lists nest by recursion; past this depth the rest is shown as plain text (hostile input cannot
 // exhaust the stack).
 const MAX_DEPTH = 16;
+// Tables pad every row to the header: cap columns and cells, or 4 KB of '|' could build 250,000 cells.
+const MAX_COLS = 64, MAX_CELLS = 10_000;
+// Inline markup nests by recursion too; and a span (bold, link text, ...) is at most this long, so a scan for its
+// closing marker stays short. Text longer than MAX_LINE is not scanned for inline markup at all.
+const MAX_INLINE_DEPTH = 8, MAX_LINE = 20_000;
+
+// A code fence: backticks (whose info string has no backtick) or tildes. Returns [fence, lang].
+function fence(line: string): [string, string] | null {
+  const m = line.match(FENCE);
+  if (!m || (m[1][0] === "`" && m[2].includes("`"))) return null;
+  return [m[1], m[2].trim().split(/[ \t]/)[0]];
+}
+// The heading text without the optional closing #s.
+function heading(line: string): [number, string] | null {
+  const m = line.match(HEADING);
+  if (!m) return null;
+  let t = line.slice(m[0].length).trim();
+  const bare = t.replace(/#+$/, "");
+  if (bare !== t && (bare === "" || bare.endsWith(" ") || bare.endsWith("\t"))) t = bare.trim();
+  return [m[1].length, t];
+}
+// The delimiter row under a table header: cells of dashes with optional colons.
+function delim(line: string): boolean {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return t.includes("-") && t.split("|").every((c) => /^:?-+:?$/.test(c.trim()));
+}
 
 const indentOf = (l: string) => l.length - l.trimStart().length;
-const isTable = (lines: string[], i: number) => lines[i].includes("|") && i + 1 < lines.length && DELIM.test(lines[i + 1]) && lines[i + 1].includes("-");
+const isTable = (lines: string[], i: number) => lines[i].includes("|") && i + 1 < lines.length && delim(lines[i + 1]);
 const startsBlock = (lines: string[], i: number) =>
-  FENCE.test(lines[i]) || HEADING.test(lines[i]) || RULE.test(lines[i]) || QUOTE.test(lines[i]) || ITEM.test(lines[i]) || isTable(lines, i);
+  !!fence(lines[i]) || HEADING.test(lines[i]) || RULE.test(lines[i]) || QUOTE.test(lines[i]) || ITEM.test(lines[i]) || isTable(lines, i);
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -40,18 +66,18 @@ function blocks(lines: string[], into: ParentNode, depth = 0): void {
   while (i < lines.length) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
-    let m: RegExpMatchArray | null;
-    if ((m = line.match(FENCE))) {
+    let f: [string, string] | null, h: [number, string] | null;
+    if ((f = fence(line))) {
       // The closing fence uses the same character, at least as long; the opening indent is taken off each line.
-      const fence = m[1], ind = indentOf(line), code: string[] = [];
-      const close = new RegExp(`^ {0,3}${fence[0] === "`" ? "`" : "~"}{${fence.length},}\\s*$`);
+      const [mark, lang] = f, ind = indentOf(line), code: string[] = [];
+      const close = new RegExp(`^ {0,3}${mark[0] === "`" ? "`" : "~"}{${mark.length},}[ \\t]*$`);
       for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i].slice(Math.min(ind, indentOf(lines[i]))));
       i++;
       const c = el("code", code.join("\n"));
-      if (m[2]) c.dataset.lang = m[2];
+      if (lang) c.dataset.lang = lang;
       into.append(el("pre", c));
-    } else if ((m = line.match(HEADING))) {
-      into.append(el(`h${m[1].length}` as "h1", inline(m[2] ?? "")));
+    } else if ((h = heading(line))) {
+      into.append(el(`h${h[0]}` as "h1", inline(h[1])));
       i++;
     } else if (RULE.test(line)) {
       into.append(el("hr"));
@@ -99,6 +125,7 @@ function list(lines: string[], i: number, into: ParentNode, depth: number): numb
       lastBlank = false;
     }
     while (body.length && !body[body.length - 1].trim()) body.pop();
+    if (!body.length) body.push("");   // an empty item ('-' or '1.' alone)
     const li = el("li");
     const task = body[0].match(/^\[([ xX])\]\s+/);
     if (task) {
@@ -125,10 +152,17 @@ function list(lines: string[], i: number, into: ParentNode, depth: number): numb
 // Wrapped in its own box that scrolls sideways when the table is wider than the screen.
 function table(lines: string[], i: number, into: ParentNode): number {
   const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
-  const head = cells(lines[i]);
+  const start = i, head = cells(lines[i]);
+  let end = i + 2;
+  while (end < lines.length && lines[end].trim() && lines[end].includes("|")) end++;
+  // Too big to be a table anyone reads on a phone: show the lines as they are.
+  if (head.length > MAX_COLS || head.length * (end - start - 1) > MAX_CELLS) {
+    into.append(el("p", lines.slice(start, end).join("\n")));
+    return end;
+  }
   const aligns = cells(lines[i + 1]).map((d) => (d.startsWith(":") && d.endsWith(":") ? "center" : d.endsWith(":") ? "right" : ""));
-  const body: string[][] = [];
-  for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) body.push(cells(lines[i]));
+  const body = lines.slice(i + 2, end).map(cells);
+  i = end;
   // A column whose cells are all short (like "#") keeps its own width; the others get a readable minimum.
   const short = head.map((h, c) => [h, ...body.map((r) => r[c] ?? "")].every((v) => [...v].length <= 6));
   const row = (vals: string[], tag: "th" | "td") => {
@@ -141,23 +175,31 @@ function table(lines: string[], i: number, into: ParentNode): number {
     });
     return tr;
   };
-  const tbody = el("tbody", ...body.map((r) => row(r, "td")));
+  const tbody = el("tbody");
+  for (const r of body) tbody.append(row(r, "td"));   // one by one: spreading many rows overflows the call stack
   const wrap = el("div", el("table", el("thead", row(head, "th")), tbody));
   wrap.className = "table-wrap";
   into.append(wrap);
   return i;
 }
 
-export function inline(text: string): DocumentFragment {
+// Every span is bounded in length, so the scan does at most a few hundred steps per character.
+const INLINE = /`([^`\n]{1,1000})`|\*\*([^\n]{1,300}?)\*\*|__([^\n]{1,300}?)__(?!\w)|~~([^\n]{1,300}?)~~|\*([^*\s](?:[^*\n]{0,300}?[^*\s])?)\*|(?<!\w)_([^_\s](?:[^_\n]{0,300}?[^_\s])?)_(?!\w)|\[([^\]\n]{1,300})\]\((https?:\/\/[^)\s]{1,2000})\)/g;
+
+export function inline(text: string, depth = 0): DocumentFragment {
   const out = document.createDocumentFragment();
-  const re = /`([^`\n]+)`|\*\*(.+?)\*\*|__(.+?)__(?!\w)|~~(.+?)~~|\*([^*\s](?:[^*\n]*[^*\s])?)\*|(?<!\w)_([^_\s](?:[^_\n]*[^_\s])?)_(?!\w)|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  if (depth > MAX_INLINE_DEPTH || text.length > MAX_LINE) {
+    out.append(text);
+    return out;
+  }
+  const re = new RegExp(INLINE);
   let at = 0;
   for (const m of text.matchAll(re)) {
     out.append(text.slice(at, m.index));
     if (m[1] !== undefined) out.append(el("code", m[1]));
-    else if (m[2] !== undefined || m[3] !== undefined) out.append(el("strong", inline(m[2] ?? m[3])));
-    else if (m[4] !== undefined) out.append(el("del", inline(m[4])));
-    else if (m[5] !== undefined || m[6] !== undefined) out.append(el("em", inline(m[5] ?? m[6])));
+    else if (m[2] !== undefined || m[3] !== undefined) out.append(el("strong", inline(m[2] ?? m[3], depth + 1)));
+    else if (m[4] !== undefined) out.append(el("del", inline(m[4], depth + 1)));
+    else if (m[5] !== undefined || m[6] !== undefined) out.append(el("em", inline(m[5] ?? m[6], depth + 1)));
     else {
       const a = el("a", m[7]);
       a.href = m[8];

@@ -352,6 +352,33 @@ async function fakeRun() {
   check(await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
     const f = markdown('>'.repeat(20000) + ' deep\\n\\n' + '- '.repeat(20000) + 'deep');
     return f.textContent.includes('deep'); })()`) === true, "markdown: deep > and - nesting is capped");
+  // Hostile input: every case renders, in bounded time and nodes (a throw would drop the whole message).
+  const hostile = {
+    "table 500 columns x 500 rows": "'|'.repeat(501) + '\\n' + '|-'.repeat(500) + '|\\n' + Array(500).fill('|').join('\\n')",
+    "table 130k rows": "'a|b\\n-|-\\n' + Array(130000).fill('|').join('\\n')",
+    "inline nesting": "'__a'.repeat(10000) + '__'.repeat(10000)",
+    "__ run": "'__'.repeat(9990) + 'x'",
+    "** run": "'**'.repeat(9990) + 'x'",
+    "[ run": "'['.repeat(19990)",
+    "delimiter row spaces": "'a|b\\n' + ' '.repeat(30000) + 'x'",
+    "fence spaces": "'```' + ' '.repeat(30000) + '`'",
+    "heading spaces": "'# a' + ' '.repeat(30000) + 'x'",
+    "empty - item": "'-'",
+    "empty 1. item": "'1.'",
+  };
+  for (const [name, src] of Object.entries(hostile)) {
+    const r = await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
+      const s = ${src}, t = performance.now();
+      try { const f = markdown(s); const d = document.createElement('div'); d.append(f);
+        return { ms: performance.now() - t, nodes: d.querySelectorAll('*').length };
+      } catch (e) { return { error: String(e) }; } })()`);
+    check(!r.error && r.ms < 250 && r.nodes <= 30000,
+      `markdown hostile: ${name} (${r.error ?? `${Math.round(r.ms)} ms, ${r.nodes} nodes`})`);
+  }
+  check(await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
+    const d = document.createElement('div'); d.append(markdown('-\\n- b\\n\\n1.'));
+    return d.querySelectorAll('ul > li').length === 2 && d.querySelectorAll('ol > li').length === 1; })()`) === true,
+    "markdown: an empty - or 1. item is a list item");
   await p.eval("document.querySelector('#md-test').scrollIntoView()");
   await p.shot("markdown");
   await p.shot("markdown", true);
