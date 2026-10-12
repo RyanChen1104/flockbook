@@ -86,6 +86,22 @@ extension SnapshotRunner {
                  bound.map(Pixels.init) == yes.map(Pixels.init) && yes.map(Pixels.init) != no.map(Pixels.init))
         }
 
+        // The Settings window scrolls at a fixed height: the long Tailscale page must not grow past the screen
+        // (the Pair a Device row ran off the bottom). The scroll view's content is taller than what it shows.
+        do {
+            let host = NSHostingView(rootView: SettingsView(remote: tsOn, scrolls: true))
+            let win = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+            win.contentView = host
+            win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(700))
+            func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
+            let sv = scrollViews(host).max { $0.frame.height < $1.frame.height }
+            let shown = sv?.contentView.bounds.height ?? 0, content = sv?.documentView?.frame.height ?? 0
+            step("settings window: \(Int(host.fittingSize.height)) pt high, shows \(Int(shown)) of \(Int(content)) pt, scrolls",
+                 host.fittingSize.height <= 700 && content > shown + 50 && sv?.hasVerticalScroller != false)
+            win.orderOut(nil)
+        }
+
         let shots: [(String, AnyView, CGFloat)] = [
             ("settings-off", AnyView(SettingsView(remote: off)), 520),
             ("settings-on", AnyView(SettingsView(remote: on)), 520),

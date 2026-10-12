@@ -16,6 +16,9 @@ struct SettingsView: View {
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
+    /// The Settings window: a fixed height that scrolls, so a long page (Remote access) never runs off the screen.
+    /// Snapshots keep the full height.
+    var scrolls = false
 
     var body: some View {
         Form {
@@ -85,12 +88,13 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .scrollDisabled(true)
+        .scrollDisabled(!scrolls)
         // The main window's surface (Glass.swift): the same setting, blur and tint; the grouped rows keep their own fill.
         .scrollContentBackground(.hidden)
         .containerBackground(for: .window) { WindowSurface(glass: surface) }
         .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: scrolls ? 360 : nil, idealHeight: scrolls ? 640 : nil)
+        .fixedSize(horizontal: false, vertical: !scrolls)
     }
 
     /// The same rule as GlassReader, with the snapshot stand-in for Reduce Transparency.

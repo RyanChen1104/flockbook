@@ -183,7 +183,7 @@ struct HerdrDeskApp: App {
             DeskCommands(model: model)
             UpdateCommands(updater: AppUpdater.shared)
         }
-        Settings { SettingsView(remote: model.remote) }
+        Settings { SettingsView(remote: model.remote, scrolls: true) }
             .windowResizability(.contentSize)
     }
 
