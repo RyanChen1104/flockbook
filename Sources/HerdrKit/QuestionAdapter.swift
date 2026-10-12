@@ -176,7 +176,8 @@ public enum QuestionAdapter {
                 return flat(label) == flat(o.label) && rec == o.recommended
             }
         }
-        guard let s = claudeParse(screen), q.headers.isEmpty || s.headers == q.headers,
+        // Exactly one focus mark: with none or two, the hub cannot know where a key lands.
+        guard let s = claudeParse(screen), s.focusMarks == 1, q.headers.isEmpty || s.headers == q.headers,
               flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
               s.question.options.map({ flat($0.label) }) == labels else { return false }
         // The "Other" row with focus is a text field: a digit there is typed, not a pick. Its empty look ("Type
@@ -370,7 +371,7 @@ extension QuestionAdapter {
     /// `claudeScreen` plus `typed`: text typed into the "Other" row. 2.1.296 always shows that row as the last
     /// numbered row before the line above "Chat about this": "Type something." (multiSelect "Type something") when
     /// empty, else the typed text. It is never an option. No such line: nil (not a layout this reads).
-    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?, otherFocused: Bool, submitFocused: Bool)? {
+    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?, otherFocused: Bool, submitFocused: Bool, focusMarks: Int)? {
         let lines = screen.components(separatedBy: "\n")
         guard let end = lines.lastIndex(where: { $0.contains("Chat about this") }) else { return nil }
         let isBar: (String) -> Bool = { l in
@@ -382,11 +383,17 @@ extension QuestionAdapter {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
         let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
         var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = "", lastFocused = false, submitFocused = false
+        // The Submit control (multiSelect) is the line right after the last row and right before the separator;
+        // the same text anywhere else is option text. `sinceRow`: lines with text since the last numbered row.
+        var marks = 0, sinceRow = 0
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
-            if t.hasPrefix("❯"), t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; continue }   // multiSelect
+            if t.hasPrefix("❯") { marks += 1 }
+            if !t.isEmpty, submitFocused { submitFocused = false; sinceRow += 1 }
+            if inOptions, sinceRow == 0, t.hasPrefix("❯"), t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; continue }
             if let m = l.wholeMatch(of: optRe) {
+                sinceRow = 0
                 let label = String(m.3).trimmingCharacters(in: .whitespaces)
                 inOptions = true
                 if m.2 != nil { multi = true }
@@ -395,6 +402,7 @@ extension QuestionAdapter {
                 lastRaw = label
                 lastFocused = l.trimmingCharacters(in: .whitespaces).hasPrefix("❯")
             } else if inOptions {
+                if !t.isEmpty { sinceRow += 1 }
                 if !t.isEmpty, !options.isEmpty { options[options.count - 1].detail += (options[options.count - 1].detail.isEmpty ? "" : " ") + t }
             } else if !t.isEmpty {
                 text.append(t)
@@ -406,7 +414,7 @@ extension QuestionAdapter {
         let typed: String? = lastRaw == "Type something." || lastRaw == "Type something" ? nil : lastRaw
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
-        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused, submitFocused)
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused, submitFocused, marks)
     }
 }
 

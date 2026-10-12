@@ -70,7 +70,9 @@ enum HubLiveTest {
             // A question: a stale id is refused, the open one is answered with the first option of each question.
             try? await c.send(#"{"v":1,"type":"answer","id":"q0","pane":"\#(paneId)","question":"toolu_stale","answers":[{"picks":[0]}]}"#)
             step("answer with a stale id -> stale", errorCode(await c.untilReply().last) == .stale)
-            let one = other.map { #"{"picks":[],"other":"\#($0)"}"# } ?? #"{"picks":[0]}"#
+            // JSONSerialization escapes the typed text (quotes, backslashes, controls).
+            let one = other.flatMap { t in (try? JSONSerialization.data(withJSONObject: ["picks": [Int](), "other": t] as [String: Any], options: [.sortedKeys]))
+                .flatMap { String(data: $0, encoding: .utf8) } } ?? #"{"picks":[0]}"#
             let answers = Array(repeating: one, count: max(1, q.headers.count, q.questions.count)).joined(separator: ",")
             try? await c.send(#"{"v":1,"type":"answer","id":"q1","pane":"\#(paneId)","question":"\#(q.id)","answers":[\#(answers)]}"#)
             let r = await c.untilReply(20).last

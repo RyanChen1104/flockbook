@@ -216,6 +216,16 @@ import Foundation
         }
     }
     fake.onInput = nil
+    // Review 11 (dd5776f): focus is read from the real control only: Submit right after the Other row and before the
+    // line, and exactly one focus mark in the picker. An option text "❯ Submit" is not the Submit control.
+    let fakeSubmit = topsHam.replacingOccurrences(of: "❯ 3. [✔] ham", with: "  3. [✔] ham").replacingOccurrences(of: "  1. [ ] Cheese", with: "❯ 1. [ ] Cheese")
+        .replacingOccurrences(of: "Add cheese", with: "❯ Submit")
+    check(QuestionAdapter.claudeParse(fakeSubmit)?.submitFocused == false && !QuestionAdapter.shows(mreq, question: 0, screen: fakeSubmit, other: "ham", focus: .submit),
+          "r11 claude: '❯ Submit' in an option's text is not the Submit control")
+    let twoMarks = topsSubmit.replacingOccurrences(of: "  1. [ ] Cheese", with: "❯ 1. [ ] Cheese")
+    check(!QuestionAdapter.shows(mreq, question: 0, screen: twoMarks, other: "ham", focus: .submit)
+          && !QuestionAdapter.shows(one, question: 0, screen: typed.replacingOccurrences(of: "  2. Blue", with: "❯ 2. Blue"), other: "Green typed"),
+          "r11 claude: two focus marks -> focus unknown, no key")
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 
