@@ -47,6 +47,46 @@ import HerdrKit
     if case .taken = TailscaleSetup.serve(tcp, dnsName: name) { check(true, "serve: a TCP forward on our port -> taken") }
     else { check(false, "serve: a TCP forward on our port -> taken") }
 
+    // Fail closed: a shape we do not know is left alone, never read as "off" (Turn On would then overwrite it).
+    func isTaken(_ json: String) -> Bool { if case .taken = TailscaleSetup.serve(Data(json.utf8), dnsName: name) { return true }; return false }
+    let oursTCP = #""\#(p)":{"HTTPS":true}"#, oursWeb = #""\#(name):\#(p)":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:\#(local)"}}}"#
+    check(isTaken(#"{"NewThing":{"a":1}}"#), "serve: an unknown top-level key -> taken (unknown config, left alone)")
+    check(isTaken(#"{"TCP":{\#(oursTCP)},"Web":{\#(oursWeb)},"NewThing":true}"#), "serve: ours plus an unknown key -> taken")
+    check(isTaken("[]") && isTaken("7") && isTaken(#"{"TCP":[]}"#) && isTaken(#"{"Web":{"x:1":7}}"#), "serve: wrong JSON shapes -> taken")
+    check(isTaken(#"{"TCP":{"\#(p)":{"HTTPS":true,"NewFlag":1}},"Web":{\#(oursWeb)}}"#), "serve: an unknown flag on our port -> taken")
+    check(isTaken(#"{"TCP":{\#(oursTCP)},"Web":{\#(oursWeb)}}"#.replacingOccurrences(of: #""Proxy""#, with: #""Proxy":"http://127.0.0.1:\#(local)","Extra""#)),
+          "serve: an extra field in our handler -> taken")
+    // Another host name on our port (any host counts): never ours, never turned off by us.
+    check(isTaken(#"{"Web":{"other.example.ts.net:\#(p)":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:\#(local)"}}}}}"#), "serve: our port on another host name only -> taken")
+    check(isTaken(#"{"TCP":{\#(oursTCP)},"Web":{\#(oursWeb),"other.example.ts.net:\#(p)":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:\#(local)"}}}}}"#),
+          "serve: ours plus our port on another host name -> taken")
+    check(isTaken(#"{"TCP":{\#(oursTCP)},"Web":{\#(oursWeb)},"AllowFunnel":{"other.example.ts.net:\#(p)":true}}"#), "serve: Funnel on our port for any host -> taken")
+    // Services (Tailscale Services, newer CLIs) and Foreground (serve runs in a terminal): read, not skipped.
+    check(TailscaleSetup.serve(Data(#"{"Services":{"svc:web":{"TCP":{"443":{"HTTPS":true}},"Web":{"web.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}}}"#.utf8), dnsName: name) == .off,
+          "serve: a Service on another port -> off for us")
+    check(isTaken(#"{"Services":{"svc:web":{"TCP":{"\#(p)":{"HTTPS":true}}}}}"#), "serve: a Service on our port -> taken")
+    check(isTaken(#"{"Services":{"svc:web":{"Tun":true,"Odd":1}}}"#) || isTaken(#"{"Services":{"svc:web":7}}"#), "serve: a Service of unknown shape -> taken")
+    check(isTaken(#"{"Foreground":{"s1":{"TCP":{"\#(p)":{"HTTPS":true}}}}}"#), "serve: a foreground serve on our port -> taken")
+    check(TailscaleSetup.serve(Data(#"{"Foreground":{"s1":{"TCP":{"8443":{"HTTPS":true}}}}}"#.utf8), dnsName: name) == .off, "serve: a foreground serve on another port -> off for us")
+    check(TailscaleSetup.serve(Data(#"{"TCP":{\#(oursTCP)},"Web":{\#(oursWeb.replacingOccurrences(of: name, with: name.uppercased()))}}"#.utf8), dnsName: name) == .ours,
+          "serve: the host name matches in any case")
+
+    // Pairing behind Serve: every peer is 127.0.0.1, so per-address counting would let any local process lock out
+    // the phone. Shared source: wrong tries end the offer (after maxTriesPerSource) and say so; a new code is one click.
+    let pp = HubPairing(devices: MemoryDeviceStore())
+    pp.sharedSource = true
+    let po = pp.offer()
+    for _ in 0..<HubPairing.maxTriesPerSource { _ = pp.redeem("wrong words here", name: "x", source: "127.0.0.1") }
+    check(pp.open == nil && pp.endedByWrongTries, "pairing behind serve: \(HubPairing.maxTriesPerSource) wrong codes end the offer, and it says why")
+    check(pp.redeem(po.secret, name: "Phone", source: "127.0.0.1") == nil, "pairing behind serve: the ended offer no longer pairs")
+    _ = pp.offer()
+    check(!pp.endedByWrongTries && pp.open != nil, "pairing behind serve: a new code starts clean")
+    let pd = HubPairing(devices: MemoryDeviceStore())
+    let pdo = pd.offer()
+    for _ in 0..<HubPairing.maxTriesPerSource { _ = pd.redeem("wrong words here", name: "x", source: "100.64.0.9") }
+    check(pd.open != nil && !pd.endedByWrongTries && pd.redeem(pdo.secret, name: "Phone", source: "100.64.0.2") != nil,
+          "pairing direct: one address's wrong codes do not end the offer for another address")
+
     // The commands: shown before they run; no Funnel, no reset; off names only our port.
     let cli = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
     check(TailscaleSetup.onArguments == ["serve", "--bg", "--https=\(p)", "http://127.0.0.1:\(local)"], "serve: the on command (\(TailscaleSetup.onArguments))")

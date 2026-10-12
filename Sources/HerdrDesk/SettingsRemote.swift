@@ -139,7 +139,7 @@ struct TailscaleSteps: View {
         case .ours?:
             Step(n: 5, title: "Tailscale Serve", done: true,
                  text: "On. Your devices open \(hub.url ?? "the page"). Nothing is public.") {
-                Button("Turn Off") { Task { await hub.setServe(on: false) } }.help(hub.serveOffCommand)
+                Button("Turn Off") { Task { await hub.setServe(on: false) } }.help(hub.serveOffCommand).disabled(hub.switchingServe)
             }
         case .taken(let why)?:
             Step(n: 5, title: "Tailscale Serve", done: false, warn: true,
@@ -149,7 +149,7 @@ struct TailscaleSteps: View {
                  text: ready ? "Turn On runs this command. It shares only this port with your tailnet, never the internet:"
                              : "Finish the steps above first.") {
                 if ready {
-                    Button("Turn On") { Task { await hub.setServe(on: true) } }.disabled(hub.serve == nil || hub.checking)
+                    Button("Turn On") { Task { await hub.setServe(on: true) } }.disabled(hub.serve == nil || hub.checking || hub.switchingServe)
                 }
             }
             if ready {
@@ -225,6 +225,11 @@ struct PairSheet: View {
             } else if let start = startCount, hub.deviceList.count > start {
                 Label("Paired \(hub.deviceList.last?.device.name ?? "")", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text("It can read. Turn on input in Devices if you want it to type, allow or answer.").font(.callout).foregroundStyle(.secondary)
+            } else if hub.pairingEndedByWrongTries {
+                Label("Code stopped after wrong tries", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Someone typed wrong codes, so this code no longer works. If it was not you, check who is on your tailnet. Make a new code to pair.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("New Code") { hub.startPairing() }.keyboardShortcut(.defaultAction)
             } else {
                 Text("The code expired or was used.").foregroundStyle(.secondary)
                 Button("New Code") { hub.startPairing() }

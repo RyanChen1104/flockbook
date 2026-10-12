@@ -37,6 +37,10 @@ final class RemoteHub {
     private(set) var tailscale: TailscaleSetup.Status?
     private(set) var serve: TailscaleSetup.Serve?
     private(set) var checking = false
+    /// A Turn On / Turn Off is running.
+    private(set) var switchingServe = false
+    /// The last pairing code was stopped after wrong codes (the pairing sheet says so).
+    private(set) var pairingEndedByWrongTries = false
     /// The last `tailscale serve` run's error output.
     private(set) var serveError: String?
     /// The name the running hub takes the page origin from.
@@ -128,9 +132,12 @@ final class RemoteHub {
                 // Loopback, plain HTTP: Tailscale Serve brings HTTPS. Every request then comes from 127.0.0.1, so the
                 // socket takes only the ts.net page's Origin, and the device token is needed as always.
                 s.allowedOrigin = TailscaleSetup.origin(dnsName: ts.dnsName)
+                // Every peer is 127.0.0.1 here: per-address counting would let a local process lock out the phone.
+                pairing.sharedSource = true
                 port = try await s.start(host: "127.0.0.1", port: UInt16(TailscaleSetup.localPort))
                 servedName = ts.dnsName; fingerprint = nil
             } else {
+                pairing.sharedSource = false
                 refreshAddresses()
                 guard let host else { problem = "Pick an address."; return }
                 let id = try identity()
@@ -144,7 +151,7 @@ final class RemoteHub {
                     try? await Task.sleep(for: .seconds(2))
                     guard let self, let s = self.server else { return }
                     self.connections = s.connectionCount
-                    if let o = self.offer, self.pairing.open != o { self.offer = nil }
+                    if let o = self.offer, self.pairing.open != o { self.offer = nil; self.pairingEndedByWrongTries = self.pairing.endedByWrongTries }
                     if self.deviceList != self.devices.all { self.deviceList = self.devices.all }
                 }
             }
@@ -208,9 +215,18 @@ final class RemoteHub {
     var serveOffCommand: String { TailscaleSetup.command(cli: tailscaleCLI ?? "tailscale", TailscaleSetup.offArguments) }
 
     /// Runs `tailscale serve` for our port only, after the owner clicked. Never when the port is someone else's.
+    /// The Serve config is read again right before the command, and the command runs only for the state it was
+    /// read in (on: port free; off: exactly our handler). Left: the moment between that read and the command;
+    /// the CLI has no compare-and-set. Within it another program would have to change port 7480 itself.
     func setServe(on: Bool) async {
-        guard previewEnabled == nil, let cli = tailscaleCLI else { return }
+        guard previewEnabled == nil, !switchingServe, let cli = tailscaleCLI else { return }
+        switchingServe = true; defer { switchingServe = false }
         await checkTailscale(restart: false)
+        guard let dns = tailscale?.dnsName, !dns.isEmpty else { return }
+        guard let read = await TailscaleSetup.run(cli: cli, ["serve", "status", "--json"]), read.status == 0 else {
+            serveError = "Could not read the Serve settings. Nothing was changed."; return
+        }
+        serve = TailscaleSetup.serve(read.out, dnsName: dns)
         guard on ? serve == .off : serve == .ours else { return }
         let args = on ? TailscaleSetup.onArguments : TailscaleSetup.offArguments
         remoteLog.info("running tailscale \(args.joined(separator: " "), privacy: .public)")
@@ -222,11 +238,11 @@ final class RemoteHub {
     // MARK: Pairing and devices
 
     @discardableResult
-    func startPairing() -> HubPairOffer { let o = pairing.offer(); offer = o; return o }
+    func startPairing() -> HubPairOffer { let o = pairing.offer(); offer = o; pairingEndedByWrongTries = false; return o }
     func cancelPairing() { pairing.cancel(); offer = nil }
     /// Called while the pairing sheet is open: a used or expired offer is gone.
     func checkPairing() {
-        if let o = offer, pairing.open != o { offer = nil }
+        if let o = offer, pairing.open != o { offer = nil; pairingEndedByWrongTries = pairing.endedByWrongTries }
         deviceList = devices.all
     }
     /// The QR code's link for the open offer.
@@ -243,7 +259,8 @@ final class RemoteHub {
 
     /// A hub that shows a state without listening (Settings snapshots).
     static func preview(running: Bool, devices: [(HubDevice, Date)], offer: Bool,
-                        tailscale: TailscaleSetup.Status? = nil, serve: TailscaleSetup.Serve? = nil, mode: Mode = .direct) -> RemoteHub {
+                        tailscale: TailscaleSetup.Status? = nil, serve: TailscaleSetup.Serve? = nil, mode: Mode = .direct,
+                        pairStopped: Bool = false) -> RemoteHub {
         let store = MemoryDeviceStore()
         for (i, d) in devices.enumerated() { store.add(token: "preview-\(i)", device: d.0, paired: d.1) }
         let hub = RemoteHub(model: nil, devices: store, dir: nil)
@@ -261,6 +278,7 @@ final class RemoteHub {
         hub.connections = running ? 1 : 0
         hub.fingerprint = running && direct ? String(repeating: "3f9a", count: 16) : nil
         if offer { hub.startPairing() }
+        hub.pairingEndedByWrongTries = pairStopped
         return hub
     }
 }

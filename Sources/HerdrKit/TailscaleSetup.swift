@@ -85,23 +85,69 @@ public enum TailscaleSetup {
         case taken(String)
     }
 
-    /// `tailscale serve status --json` (empty output: no config) for our port on `dnsName`.
+    /// `tailscale serve status --json` (empty output: no config) for our port on `dnsName`. Fails closed: a key or
+    /// shape not known here is `.taken`, never `.off`, so Turn On cannot overwrite a config this code cannot read.
+    /// Ours: exactly `TCP[7480] = {HTTPS: true}` and one `Web` entry on port 7480, for our host, with one handler
+    /// `/` -> our proxy; nothing else on port 7480 for any host (Funnel, Services, Foreground included).
     public static func serve(_ data: Data, dnsName: String) -> Serve {
         let trimmed = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .off }
-        guard let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return .taken("Serve config not readable") }
+        guard let j = (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) as? [String: Any] else {
+            return .taken("Serve config not readable")
+        }
         let port = String(servePort)
-        let hostPort = "\(dnsName):\(port)"
-        let tcp = (j["TCP"] as? [String: Any])?[port] as? [String: Any]
-        let web = (j["Web"] as? [String: Any] ?? [:]).first { key, _ in key.lowercased() == hostPort.lowercased() || key.hasSuffix(":\(port)") }?.value as? [String: Any]
-        let funnel = (j["AllowFunnel"] as? [String: Any] ?? [:]).contains { key, v in key.hasSuffix(":\(port)") && (v as? Bool ?? false) }
-        if tcp == nil && web == nil { return funnel ? .taken("Funnel is on for port \(port)") : .off }
-        if funnel { return .taken("Funnel (public internet) is on for port \(port)") }
-        guard let tcp, tcp["HTTPS"] as? Bool == true, tcp.count == 1 else { return .taken("Port \(port) is used by another Serve setting") }
-        guard let handlers = web?["Handlers"] as? [String: Any], handlers.count == 1,
+        let unknown = "Serve has settings Flockbook does not know"
+        var tcp: [String: Any] = [:], web: [String: Any] = [:], funnel: [String: Any] = [:]
+        for (key, value) in j where !(value is NSNull) {
+            switch key {
+            case "TCP": guard let v = value as? [String: Any] else { return .taken(unknown) }; tcp = v
+            case "Web": guard let v = value as? [String: Any] else { return .taken(unknown) }; web = v
+            case "AllowFunnel": guard let v = value as? [String: Any] else { return .taken(unknown) }; funnel = v
+            case "Services", "Foreground":
+                // Other configs of the same shape: they may sit next to ours, never on our port.
+                guard let v = value as? [String: Any] else { return .taken(unknown) }
+                for sub in v.values {
+                    guard let c = sub as? [String: Any] else { return .taken(unknown) }
+                    switch usesPort(c, port: port, extraKeys: key == "Services" ? ["Tun"] : []) {
+                    case nil: return .taken(unknown)
+                    case true?: return .taken(key == "Services" ? "A Tailscale Service uses port \(port)" : "A serve running in a terminal uses port \(port)")
+                    case false?: break
+                    }
+                }
+            default: return .taken(unknown)
+            }
+        }
+        guard tcp.values.allSatisfy({ $0 is [String: Any] }), web.values.allSatisfy({ $0 is [String: Any] }) else { return .taken(unknown) }
+        let webOnPort = web.filter { hostPort($0.key, port) }
+        if funnel.contains(where: { hostPort($0.key, port) && !($0.value is NSNull) && ($0.value as? Bool) != false }) {
+            return .taken("Funnel (public internet) is on for port \(port)")
+        }
+        let tcpOurs = tcp[port] as? [String: Any]
+        if tcpOurs == nil && webOnPort.isEmpty { return .off }
+        guard let tcpOurs, tcpOurs.count == 1, tcpOurs["HTTPS"] as? Bool == true else { return .taken("Port \(port) is used by another Serve setting") }
+        guard webOnPort.count == 1, let (host, entry) = webOnPort.first.map({ ($0.key, $0.value) }),
+              host.lowercased() == "\(dnsName):\(port)".lowercased(),
+              let e = entry as? [String: Any], e.count == 1,
+              let handlers = e["Handlers"] as? [String: Any], handlers.count == 1,
               let root = handlers["/"] as? [String: Any], root.count == 1,
               root["Proxy"] as? String == "http://127.0.0.1:\(localPort)" else { return .taken("Port \(port) serves something else") }
         return .ours
+    }
+
+    /// `host:port` names `port`.
+    private static func hostPort(_ key: String, _ port: String) -> Bool { key.hasSuffix(":" + port) }
+
+    /// Whether a nested serve config uses `port`. Nil: a shape not known here.
+    private static func usesPort(_ c: [String: Any], port: String, extraKeys: Set<String>) -> Bool? {
+        var uses = false
+        for (key, value) in c where !(value is NSNull) {
+            switch key {
+            case "TCP": guard let v = value as? [String: Any] else { return nil }; uses = uses || v[port] != nil
+            case "Web", "AllowFunnel": guard let v = value as? [String: Any] else { return nil }; uses = uses || v.keys.contains { hostPort($0, port) }
+            default: if !extraKeys.contains(key) { return nil }
+            }
+        }
+        return uses
     }
 
     /// Runs the CLI with a time limit. Off the main thread.

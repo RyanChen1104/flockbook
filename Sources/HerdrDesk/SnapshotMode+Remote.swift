@@ -25,6 +25,8 @@ extension SnapshotRunner {
         let tsOn = RemoteHub.preview(running: true, devices: two, offer: false, tailscale: ts(https: true, phones: [phone]), serve: .ours, mode: .tailscale)
         let tsTaken = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: true, phones: [phone]),
                                         serve: .taken("Port 7480 serves something else"), mode: .tailscale)
+        let tsStopped = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: true, phones: [phone]), serve: .ours,
+                                          mode: .tailscale, pairStopped: true)
         let tsPair = RemoteHub.preview(running: true, devices: [], offer: true, tailscale: ts(https: true, phones: [phone]), serve: .ours, mode: .tailscale)
 
         step("off: nothing listens, no url", !off.enabled && !off.running && off.url == nil)
@@ -92,6 +94,7 @@ extension SnapshotRunner {
             ("tailscale-on", AnyView(SettingsView(remote: tsOn)), 520),
             ("tailscale-taken", AnyView(SettingsView(remote: tsTaken)), 520),
             ("tailscale-pair", AnyView(PairSheet(hub: tsPair)), 380),
+            ("tailscale-pair-stopped", AnyView(PairSheet(hub: tsStopped)), 380),
             ("pair", AnyView(PairSheet(hub: pairing)), 380),
             ("devices", AnyView(DevicesSheet(hub: on)), 460),
         ]

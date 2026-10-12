@@ -120,6 +120,11 @@ public struct HubPairOffer: Hashable, Sendable {
     private var offerNow: HubPairOffer?
     private var tries = 0
     private var triesBySource: [String: Int] = [:]
+    /// Every peer has the same address (behind Tailscale Serve all come from 127.0.0.1): then wrong tries count for
+    /// all, and `maxTriesPerSource` of them end the offer, so a local process cannot lock out the phone silently.
+    public var sharedSource = false
+    /// The open offer ended because of wrong codes (the pairing sheet says so). Reset by a new offer.
+    public private(set) var endedByWrongTries = false
 
     public init(devices: HubDeviceStore, now: @escaping () -> Date = Date.init) { self.devices = devices; self.now = now }
 
@@ -135,7 +140,7 @@ public struct HubPairOffer: Hashable, Sendable {
         var g = SystemRandomNumberGenerator()
         let o = HubPairOffer(secret: HubToken.random(), words: (0..<6).map { _ in Self.words[Int(g.next() % 256)] },
                              expires: now().addingTimeInterval(Self.lifetime))
-        offerNow = o; tries = 0; triesBySource = [:]
+        offerNow = o; tries = 0; triesBySource = [:]; endedByWrongTries = false
         return o
     }
 
@@ -151,7 +156,7 @@ public struct HubPairOffer: Hashable, Sendable {
         guard hit else {
             tries += 1
             triesBySource[source, default: 0] += 1
-            if tries >= Self.maxTries { cancel() }
+            if tries >= Self.maxTries || (sharedSource && tries >= Self.maxTriesPerSource) { cancel(); endedByWrongTries = true }
             return nil
         }
         cancel()
