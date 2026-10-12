@@ -381,22 +381,27 @@ extension QuestionAdapter {
         guard let bar = lines[..<end].lastIndex(where: isBar) else { return nil }
         let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
-        let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
+        let optRe = /^(\s*(?:❯\s*)?)(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
         var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = "", lastFocused = false, submitFocused = false
         // The Submit control (multiSelect) is the line right after the last row and right before the separator;
         // the same text anywhere else is option text. `sinceRow`: lines with text since the last numbered row.
-        var marks = 0, sinceRow = 0
+        // Rows: after the two-column focus slot ("❯ "), their number in the column of row 1, numbered 1, 2, 3…; a
+        // numbered line in another column is question or option text.
+        var marks = 0, sinceRow = 0, rowColumn: Int?
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
             if t.hasPrefix("❯") { marks += 1 }
             if !t.isEmpty, submitFocused { submitFocused = false; sinceRow += 1 }
             if inOptions, sinceRow == 0, t.hasPrefix("❯"), t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; continue }
-            if let m = l.wholeMatch(of: optRe) {
+            if let m = l.wholeMatch(of: optRe), rowColumn == nil ? m.2 == "1" && m.1.count >= 2 : m.1.count == rowColumn {
+                if rowColumn == nil { rowColumn = m.1.count }
+                // A gap or a repeated number: the rows are not what they seem, so no picker is read.
+                guard Int(m.2) == options.count + 1 else { return nil }
                 sinceRow = 0
-                let label = String(m.3).trimmingCharacters(in: .whitespaces)
+                let label = String(m.4).trimmingCharacters(in: .whitespaces)
                 inOptions = true
-                if m.2 != nil { multi = true }
+                if m.3 != nil { multi = true }
                 let (clean, rec) = stripRecommended(label)
                 options.append(.init(label: clean, recommended: rec))
                 lastRaw = label

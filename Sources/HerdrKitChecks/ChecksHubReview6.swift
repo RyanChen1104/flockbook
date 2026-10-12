@@ -226,6 +226,14 @@ import Foundation
     check(!QuestionAdapter.shows(mreq, question: 0, screen: twoMarks, other: "ham", focus: .submit)
           && !QuestionAdapter.shows(one, question: 0, screen: typed.replacingOccurrences(of: "  2. Blue", with: "❯ 2. Blue"), other: "Green typed"),
           "r11 claude: two focus marks -> focus unknown, no key")
+    // A numbered line in an option's text is not a row: the card must list the picker's rows, so a pick's digit is its row.
+    let violet = claude.replacingOccurrences(of: "     Choose Red", with: "     2. Violet")
+    check(QuestionAdapter.claudeScreen(violet)?.question.options.map(\.label) == ["Red", "Blue"] && QuestionAdapter.shows(one, question: 0, screen: violet),
+          "r12 claude: '2. Violet' in an option's text is text, not a row")
+    let gap = claude.replacingOccurrences(of: "  2. Blue", with: "  5. Blue")
+    check(QuestionAdapter.claudeScreen(gap) == nil && !QuestionAdapter.shows(one, question: 0, screen: gap), "r12 claude: rows not numbered 1, 2, 3 -> no picker read")
+    let listed = claude.replacingOccurrences(of: "Pick a color?", with: "1. Pick a color?")
+    check(QuestionAdapter.claudeScreen(listed)?.question.options.map(\.label) == ["Red", "Blue"], "r12 claude: a numbered question line is not row 1")
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 
