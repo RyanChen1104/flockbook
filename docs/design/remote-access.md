@@ -135,12 +135,15 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 | Token replay from a captured QR | Pairing secret is single use and short-lived |
 | A malicious client sends raw keys | No raw-key API; only `send`, `approve`, `answer` with hub-side checks |
 | Approve the wrong prompt (screen changed) | Hub re-reads the pane; prompt id must match the prompt on screen (a log id only when the log's call is that box); one more read right before the keys; an unreadable prompt counts as open (same rules as the notification) |
+| A crafted image (decoder bug, decompression bomb, polyglot) | Only `input` devices; 10 MB and 16-part caps per image, 4 held per connection, a rate limit per device; type from magic bytes, never from a name or MIME; pixel size checked from the header before decoding; always re-encoded into a new file, so nothing of the upload's bytes reaches the agent |
+| Image metadata leaks (GPS, camera, time) | Re-encoding copies no metadata |
+| The hub writes a file where it should not | Only into its own cache folder, a random name it makes, mode 600, created exclusively; no client path or name is used |
 | Remote text into a shell, or control keys in text | `send` goes to agent panes only; text has no control characters except LF and tab, and a length cap |
 | Remote text lands in a picker | `send` refuses while any prompt or picker is on screen or the agent is blocked, and reads the pane again right before the keys; an unreadable screen refuses every input. Residual: herdr has no compare-and-send, so a prompt that opens between the last read and the keys can still get them (milliseconds) |
 | A fake certificate on the LAN takes the pairing | Tailscale recommended (and default); LAN marked "less safe"; the fingerprint is for reference only in a browser |
 | One peer burns the pairing offer | 3 wrong tries per source, 20 in all |
 | Logs contain secrets (code, keys, tokens) | Read access is sensitive too: pairing is required even for `read`; nothing is cached on the phone beyond the open session (no offline store of conversations in v1) |
-| The hub is a new process with your file access | Hub is read-only on the file system (logs only); it never writes files; it runs as the user, not root |
+| The hub is a new process with your file access | Hub reads logs only; it writes only re-encoded images into its own cache folder (above); it runs as the user, not root |
 | Hub left on by mistake | Off by default; a visible "Remote access on" state in the Mac app and in `flockbook-hub status`; optional auto-off after N days |
 
 Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" setting still applies on top of the device level.
@@ -172,7 +175,39 @@ Defaults: hub off; when on, new devices are `read`; the app-wide "Allow input" s
 - Tests: `node scripts/web-test.mjs` (headless Chrome shell over DevTools, fake hub with TLS on 127.0.0.1, every
   screen and action) and `--live <session>` (the app's own hub, a read device, no input).
 
-## 10. Phased plan
+### 9.1 Image send (phone to agent)
+
+The owner wants to send a photo or screenshot from the phone to an agent, as the Mac composer does with a pasted
+image. The image is the dangerous part: a parser on the hub (image decoders are a classic attack surface), a file
+the hub writes, and metadata (GPS) that the owner may not want in an agent's context.
+
+Path, end to end:
+
+1. PWA: an attach button in the composer (`<input type=file accept="image/*" multiple>`: camera or photo picker).
+   Each pick shows a thumbnail with a remove button; at most 4. Files over 10 MB are refused on the phone with a
+   message. Nothing is uploaded until Send.
+2. Send: each image goes up as `attach` parts (protocol 3.3), with a progress bar; then one `send` names the
+   finished uploads in `attachments` with the text (text may be empty).
+3. Hub, per `attach`: level `input` (and the app-wide "Allow input"), size and count caps, a rate limit per device.
+   The last part completes the upload: the type is read from the **magic bytes** (PNG, JPEG, HEIC, WebP); the
+   file name and MIME type are never sent. The header's pixel size is checked before decoding (a decompression
+   bomb is refused). ImageIO decodes the first frame only.
+4. Hub, **re-encode always** (not only strip): the decoded pixels are drawn into a new image, with the EXIF
+   orientation applied, the long side capped at 4096 px, and written as a new file: PNG when the source was PNG
+   (screenshots stay sharp), else JPEG (quality 0.85). No metadata dictionary is copied, so EXIF, GPS, XMP, maker
+   notes and comments are gone; whatever trailing bytes or polyglot content the upload carried is gone too.
+5. File: the app's own cache folder, the same one the Mac composer uses (`~/Library/Caches/HerdrDesk/paste`, mode
+   700), name `remote-<random UUID>.png|jpg`, created exclusively with mode 600. Never a client-chosen name or path.
+6. `send` with `attachments`: all the `send` rules of protocol 3.1 still apply (agent pane only, no prompt open, a
+   fresh read right before the keys). The message is the text and then the quoted file paths, typed by the same
+   code as the Mac composer (`MessageSender`: types the text, waits for Claude's `[Image` marker, then Enter).
+7. Cleanup: unsent uploads are deleted when their connection closes, and when a fifth one replaces the oldest.
+   Sent files stay for the agent to read and go with the Mac composer's 7-day cache purge.
+
+Agents: Claude Code turns the path into an image attachment. Codex and pi get the path as text and read it with
+their file tools (the same as from the Mac composer).
+
+
 
 Phone for the Mac first. The Linux remote follows as one block.
 

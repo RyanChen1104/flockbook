@@ -33,7 +33,7 @@ Field names are camelCase. Optional fields are left out when empty (never `null`
 
 ## 3. Client to hub
 
-The client sends **intent only**. There is no message that carries raw keys or bytes. The hub turns intent into keys with the same code the Mac app uses (`HerdrClient.respond`, `answerQuestion`, the composer send).
+The client sends **intent only**. There is no message that carries raw keys or terminal bytes (`attach` carries image data, which the hub re-encodes into a file; it never reaches the terminal). The hub turns intent into keys with the same code the Mac app uses (`HerdrClient.respond`, `answerQuestion`, the composer send).
 
 | `type` | Fields | Effect |
 |---|---|---|
@@ -42,7 +42,8 @@ The client sends **intent only**. There is no message that carries raw keys or b
 | `watch` | `pane` | Start pushes for this pane: `conversation` (tail), `screen`, `prompt`. |
 | `unwatch` | `pane` | Stop them. |
 | `loadEarlier` | `session`, `before` (item id) | Push older items as `conversation` with `mode: "prepend"`. |
-| `send` | `pane`, `text` | Type `text` into the agent and submit it, as the composer does. Needs level `input`. |
+| `send` | `pane`, `text`, `attachments?` | Type `text` into the agent and submit it, as the composer does. `attachments`: up to 4 finished `attach` uploads of this connection; their file paths follow the text. `text` may be empty when there are attachments. Needs level `input`. |
+| `attach` | `upload`, `part`, `parts`, `data` | One part of an image for a later `send`. See 3.3. Needs level `input`. |
 | `approve` | `pane`, `prompt`, `allow` | Answer the open permission prompt. `prompt` is the id from the last `prompt` push. Needs level `input`. |
 | `answer` | `pane`, `question`, `answers` | Answer the open question. `answers`: one per question, `{picks: [int], other?: string}` (0-based option indexes). Needs level `input`. |
 | `ping` | – | The hub sends `pong`. |
@@ -91,6 +92,28 @@ The QR code holds a link: `<hub URL>/#pair=<secret>&fp=<certificate SHA-256>`. B
 
 Revoking a device on the hub closes that device's open connections at once (close 1008).
 
+### 3.3 Images: attach
+
+An image goes up in parts, because a message is at most 1 MB:
+
+| Field | Rule |
+|---|---|
+| `upload` | The client's name for this image: 1–32 characters of `A–Z a–z 0–9 _ -`. Unique per connection while held. It is only a handle; it never becomes a file name. |
+| `part` | 0-based. Parts come in order, one upload at a time. A part out of order, or a part of another upload while one is open, replies `badRequest` and drops the open upload. |
+| `parts` | 1–16, the same on every part. |
+| `data` | Standard base64, at most 640 KiB decoded per part. |
+
+At most 10 MiB in all per image. Each part gets a `reply`. The last part completes the upload: the hub reads the
+type from the magic bytes (PNG, JPEG, HEIC, WebP; anything else replies `badRequest`), checks the pixel size from
+the header (at most 12,000 px a side and 50 megapixels) before decoding, decodes the first frame, and writes a
+**new** image (orientation applied, long side at most 4,096 px; PNG stays PNG, the rest become JPEG; no metadata).
+Then it pushes `attached` and replies `ok`. A file that does not decode replies `badRequest`.
+
+Limits: 4 finished uploads held per connection (a fifth drops the oldest unsent one and its file); per device, 20
+images and 100 MiB in 10 minutes, counted over all its connections (`rateLimited`). Unsent uploads are deleted when
+the connection closes. A `send` that names an unknown upload replies `badRequest` and sends nothing; uploads stay
+until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be repeated.
+
 ## 4. Hub to client
 
 | `type` | Fields | When |
@@ -103,9 +126,10 @@ Revoking a device on the hub closes that device's open connections at once (clos
 | `conversation` | `pane`, `session`, `mode` (`replace` / `append` / `prepend`), `items`, `hasEarlier` | `replace` on `watch` (the tail), `append` for new items, `prepend` for `loadEarlier`. An item with a known `id` replaces the old one (tool results fill in later). |
 | `screen` | `pane`, `text` | The visible screen text of a watched pane, when it changes. |
 | `prompt` | `pane`, `approval?`, `question?` | The open prompt of a watched pane. Both absent = no prompt open. |
+| `attached` | `upload`, `width`, `height`, `bytes` | The last `attach` part was taken: the size of the re-encoded image. Before that part's `reply`. |
 | `pong` | – | Answer to `ping`. |
 
-Error codes: `unauthorized`, `readOnly`, `stale`, `promptOpen`, `notFound`, `badRequest`, `unsupportedVersion`, `failed`. A client treats an unknown code as `failed`.
+Error codes: `unauthorized`, `readOnly`, `stale`, `promptOpen`, `notFound`, `badRequest`, `rateLimited`, `unsupportedVersion`, `failed`. A client treats an unknown code as `failed`.
 
 Order: the pushes a message causes come first, then its `reply` (for `hello`: `welcome`, `snapshot`, then `reply`). `ping` gets `pong`, then `reply`. A `reply` with `unauthorized` or `unsupportedVersion` is followed by a close.
 
@@ -132,7 +156,7 @@ Tool inputs and outputs are not sent in v1 (size; the phone shows the summary).
 
 ## 6. Levels
 
-- `read`: everything except `send`, `approve`, `answer` (they reply `readOnly`).
+- `read`: everything except `send`, `attach`, `approve`, `answer` (they reply `readOnly`).
 - `input`: all. Set per device on the hub, never by the client. The app-wide "Allow input" setting applies on top: off means `readOnly` for every device.
 
 ## 7. Versioning
