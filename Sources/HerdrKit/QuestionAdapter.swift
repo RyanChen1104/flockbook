@@ -194,6 +194,7 @@ public enum QuestionAdapter {
     static let codexKeyLinesClosed: Set<String> = [
         "tab to add notes | enter to submit answer | esc to interrupt",
         "tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt",
+        "tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt",
     ]
     static let codexKeyLinesOpen: Set<String> = ["tab or esc to clear notes | enter to submit answer"]
 

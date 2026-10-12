@@ -89,6 +89,18 @@ import Foundation
     check(!QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: " | esc to interrupt", with: "")), "r15 codex: a shortened key line -> no match")
     check(!QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: "esc to interrupt", with: "esc to interrupt | q to quit")), "r15 codex: a longer key line -> no match")
     check(QuestionAdapter.shows(q, question: 0, screen: base.replacingOccurrences(of: "submit answer | esc", with: "submit answer |  esc")), "r15 codex: key line spacing does not count")
+    // The last question of a set, as captured (docs/research/ask-user-question-keys.md): "enter to submit all".
+    let pay = logged(#"{"id":"food","header":"Food","question":"Cat or dog?","options":[{"label":"Cat","description":"Choose Cat."},{"label":"Dog","description":"Choose Dog."}]},{"id":"pay","header":"Pay","question":"How to pay?","options":[{"label":"Card","description":"Pay by Card."},{"label":"Cash","description":"Pay by Cash."}]}"#)
+    let second = """
+      Question 2/2 (1 unanswered)
+      How to pay?
+      › 1. Card               Pay by Card.
+        2. Cash               Pay by Cash.
+        3. None of the above  Optionally, add details in notes (tab)
+      tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt
+    """
+    check(QuestionAdapter.shows(pay, question: 1, screen: second) && !QuestionAdapter.shows(pay, question: 0, screen: second),
+          "r16 codex: the last question of a set ('enter to submit all') matches, as question 2 only")
     // A question read from the screen has no log behind it.
     var screenQ = q; screenQ.toolUseId = "screen-1"
     check(!QuestionAdapter.shows(screenQ, question: 0, screen: base), "r14 codex: a screen-read request never matches for keys")
