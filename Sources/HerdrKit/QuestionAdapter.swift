@@ -196,7 +196,7 @@ public enum QuestionAdapter {
         "tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt",
         "tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt",
     ]
-    static let codexKeyLinesOpen: Set<String> = ["tab or esc to clear notes | enter to submit answer"]
+    static let codexKeyLinesOpen: Set<String> = ["tab or esc to clear notes | enter to submit answer", "tab or esc to clear notes | enter to submit all"]
 
     /// Codex 0.162.1's rendering of the logged question `k` is on screen, exactly. The picker head
     /// ("Question k/n", maybe "(m unanswered)") and the key line (the screen's last line, closed or open notes) are

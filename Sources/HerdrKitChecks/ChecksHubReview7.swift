@@ -101,6 +101,10 @@ import Foundation
     """
     check(QuestionAdapter.shows(pay, question: 1, screen: second) && !QuestionAdapter.shows(pay, question: 0, screen: second),
           "r16 codex: the last question of a set ('enter to submit all') matches, as question 2 only")
+    // Live (c9-input-test, 0.162.1): notes open on question 2 of 2.
+    let secondNotes = second.replacingOccurrences(of: "  › 1. Card", with: "    1. Card").replacingOccurrences(of: "    3. None", with: "  › 3. None")
+        .replacingOccurrences(of: "tab to add notes | enter to submit all | ←/→ to navigate questions | esc to interrupt", with: "› ham\n  tab or esc to clear notes | enter to submit all")
+    check(QuestionAdapter.shows(pay, question: 1, screen: secondNotes, other: "ham", row: 2), "r16 codex: notes open on the last question of a set")
     // A question read from the screen has no log behind it.
     var screenQ = q; screenQ.toolUseId = "screen-1"
     check(!QuestionAdapter.shows(screenQ, question: 0, screen: base), "r14 codex: a screen-read request never matches for keys")
