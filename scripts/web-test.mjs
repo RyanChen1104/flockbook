@@ -305,6 +305,43 @@ async function fakeRun() {
   check(await p.eval("document.querySelector('.msg.assistant strong')?.textContent") === "src/app.ts", "conversation: markdown bold");
   check(await p.eval("document.querySelector('.msg.assistant pre code')?.textContent") === "npm run build", "conversation: code block");
   check(await p.eval("document.querySelector('.chip summary')?.textContent") === "Ran 2 commands", "conversation: tool chip");
+  // Full agent markdown, as the Mac reading view shows it: rendered into a test message in the open conversation.
+  const md = [
+    "## Plan", "", "Some *italic*, **bold** and ~~old~~ text.", "",
+    "- one", "  - nested", "- two", "", "1. first", "2. second", "",
+    "| Step | Result |", "|---|:---:|", "| build | `ok` |", "| test | **2 failed** |", "",
+    "1. Run it:", "   ```sh", "   npm test", "   ```", "2. Read the output.", "",
+    "> quoted *line*", "", "---", "",
+    "| " + Array.from({ length: 8 }, (_, i) => `column_${i}_with_a_long_unbroken_name`).join(" | ") + " |",
+    "|" + "---|".repeat(8), "| " + Array.from({ length: 8 }, (_, i) => `value_${i}_that_does_not_wrap_at_all`).join(" | ") + " |", "",
+    "<img src=x onerror=\"window.__xss=1\"> [bad](javascript:window.__xss=2) [ok](https://example.com/a)",
+  ].join("\n");
+  await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
+    const d = document.createElement('div'); d.className = 'msg assistant'; d.id = 'md-test'; d.append(markdown(${JSON.stringify(md)}));
+    document.querySelector('.msg.assistant').parentElement.append(d); })()`);
+  const q = (s) => `document.querySelector('#md-test ${s}')`;
+  check(await p.eval(`${q("h2")}?.textContent`) === "Plan", "markdown: ## heading");
+  check(await p.eval(`${q("em")}?.textContent`) === "italic" && await p.eval(`${q("del")}?.textContent`) === "old", "markdown: *italic* and ~~strike~~");
+  check(await p.eval(`${q("ul > li > ul > li")}?.textContent`) === "nested" && await p.eval(`document.querySelectorAll('#md-test > ul > li').length`) === 2,
+    "markdown: - list with a nested item");
+  check(await p.eval(`document.querySelectorAll('#md-test > ol')[0]?.children.length`) === 2, "markdown: 1. ordered list");
+  check(await p.eval(`${q("table thead th")}?.textContent`) === "Step" && await p.eval(`${q("table tbody tr:last-child td:last-child strong")}?.textContent`) === "2 failed"
+    && await p.eval(`getComputedStyle(${q("table tbody td:last-child")}).textAlign`) === "center", "markdown: GFM table (header, inline, alignment)");
+  check(await p.eval(`document.querySelectorAll('#md-test > ol')[1]?.querySelector('li pre code')?.textContent`) === "npm test",
+    "markdown: fence indented inside a list item");
+  check(await p.eval(`${q("blockquote em")}?.textContent`) === "line" && await p.eval(`!!${q("hr")}`) === true, "markdown: > quote and --- rule");
+  check(await p.eval(`!/^#|\\n\\||^\\|/m.test(document.querySelector('#md-test').innerText)`) === true, "markdown: no raw # or | lines left");
+  check(await p.eval(`(() => { const w = document.querySelectorAll('#md-test .table-wrap')[1]; return !!w && w.scrollWidth > w.clientWidth; })()`) === true
+    && await p.eval(noScroll), "markdown: a wide table scrolls in its own box, the page does not");
+  check(await p.eval(`!${q("img")} && !window.__xss && [...document.querySelectorAll('#md-test a')].map(a => a.href).join() === 'https://example.com/a'`) === true,
+    "markdown: HTML stays text, only http(s) links");
+  await p.eval("document.querySelector('#md-test').scrollIntoView()");
+  await p.shot("markdown");
+  await p.shot("markdown", true);
+  await p.eval("document.querySelectorAll('#md-test .table-wrap')[1].scrollIntoView({ block: 'center' })");
+  await p.shot("markdown-end");
+  await p.shot("markdown-end", true);
+  await p.eval("document.querySelector('#md-test').remove()");
   check(await p.eval("document.querySelector('.card.approval .command')?.textContent") === "npm run build", "approval: command shown");
   check(await p.eval("document.querySelector('#composer-text')?.disabled") === true, "composer: off while a prompt is open");
   check(await p.eval(noScroll), "conversation: no sideways scroll");
