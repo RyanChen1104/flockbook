@@ -5,16 +5,18 @@
 
 export function markdown(src: string): DocumentFragment {
   const out = document.createDocumentFragment();
+  budget = MAX_NODES;
   blocks(src.replace(/\r\n?/g, "\n").split("\n"), out);
   return out;
 }
 
 // Every pattern here runs in linear time on hostile lines (no two unbounded runs that can share characters).
-const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// ([\s\S]*, not .*: a line may hold U+2028, which . does not match.)
+const FENCE = /^ {0,3}(`{3,}|~{3,})([\s\S]*)$/;
 const HEADING = /^ {0,3}(#{1,6})(?=[ \t]|$)/;
 const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^ {0,3}> ?/;
-const ITEM = /^( *)([-*+]|\d{1,9}[.)])(\s+|$)(.*)$/;
+const ITEM = /^( *)([-*+]|\d{1,9}[.)])(\s+|$)([\s\S]*)$/;
 
 // Quotes and lists nest by recursion; past this depth the rest is shown as plain text (hostile input cannot
 // exhaust the stack).
@@ -24,6 +26,10 @@ const MAX_COLS = 64, MAX_CELLS = 10_000;
 // Inline markup nests by recursion too; and a span (bold, link text, ...) is at most this long, so a scan for its
 // closing marker stays short. Text longer than MAX_LINE is not scanned for inline markup at all.
 const MAX_INLINE_DEPTH = 8, MAX_LINE = 20_000;
+// Elements one message may build; past it the rest is plain text (many short paragraphs or table cells full of
+// *a* would otherwise build hundreds of thousands of nodes).
+const MAX_NODES = 20_000;
+let budget = MAX_NODES;
 
 // A code fence: backticks (whose info string has no backtick) or tildes. Returns [fence, lang].
 function fence(line: string): [string, string] | null {
@@ -35,9 +41,10 @@ function fence(line: string): [string, string] | null {
 function heading(line: string): [number, string] | null {
   const m = line.match(HEADING);
   if (!m) return null;
-  let t = line.slice(m[0].length).trim();
-  const bare = t.replace(/#+$/, "");
-  if (bare !== t && (bare === "" || bare.endsWith(" ") || bare.endsWith("\t"))) t = bare.trim();
+  const t = line.slice(m[0].length).trim();
+  let end = t.length;
+  while (end > 0 && t[end - 1] === "#") end--;   // a loop, not /#+$/ (quadratic on a long run of #)
+  if (end < t.length && (end === 0 || t[end - 1] === " " || t[end - 1] === "\t")) return [m[1].length, t.slice(0, end).trim()];
   return [m[1].length, t];
 }
 // The delimiter row under a table header: cells of dashes with optional colons.
@@ -52,6 +59,7 @@ const startsBlock = (lines: string[], i: number) =>
   !!fence(lines[i]) || HEADING.test(lines[i]) || RULE.test(lines[i]) || QUOTE.test(lines[i]) || ITEM.test(lines[i]) || isTable(lines, i);
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
+  budget--;
   const e = document.createElement(tag);
   e.append(...kids);
   return e;
@@ -64,6 +72,10 @@ function blocks(lines: string[], into: ParentNode, depth = 0): void {
   }
   let i = 0;
   while (i < lines.length) {
+    if (budget <= 0) {
+      into.append(lines.slice(i).join("\n"));
+      return;
+    }
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
     let f: [string, string] | null, h: [number, string] | null;
@@ -77,7 +89,7 @@ function blocks(lines: string[], into: ParentNode, depth = 0): void {
       if (lang) c.dataset.lang = lang;
       into.append(el("pre", c));
     } else if ((h = heading(line))) {
-      into.append(el(`h${h[0]}` as "h1", inline(h[1])));
+      into.append(el(`h${h[0]}` as "h1", spans(h[1])));
       i++;
     } else if (RULE.test(line)) {
       into.append(el("hr"));
@@ -95,7 +107,7 @@ function blocks(lines: string[], into: ParentNode, depth = 0): void {
     } else {
       const para: string[] = [];
       for (; i < lines.length && lines[i].trim() && (para.length === 0 || !startsBlock(lines, i)); i++) para.push(lines[i].trim());
-      into.append(el("p", inline(para.join("\n"))));
+      into.append(el("p", spans(para.join("\n"))));
     }
   }
 }
@@ -107,7 +119,7 @@ function list(lines: string[], i: number, into: ParentNode, depth: number): numb
   const base = first[1].length, ordered = /\d/.test(first[2]);
   const ul = ordered ? el("ol") : el("ul");
   if (ordered && parseInt(first[2]) !== 1) ul.setAttribute("start", String(parseInt(first[2])));
-  while (i < lines.length) {
+  while (i < lines.length && budget > 0) {   // out of budget: blocks() shows the rest as text
     const m = lines[i].match(ITEM);
     if (!m || m[1].length < base || m[1].length > base + 3 || /\d/.test(m[2]) !== ordered) break;
     const content = m[3] ? base + m[2].length + Math.min(m[3].length, 4) : base + m[2].length + 1;
@@ -156,19 +168,23 @@ function table(lines: string[], i: number, into: ParentNode): number {
   let end = i + 2;
   while (end < lines.length && lines[end].trim() && lines[end].includes("|")) end++;
   // Too big to be a table anyone reads on a phone: show the lines as they are.
-  if (head.length > MAX_COLS || head.length * (end - start - 1) > MAX_CELLS) {
+  // The table's own elements (cells, rows, wrappers) are held back from the budget while it is built, so the
+  // inline markup in early cells cannot use up what the later cells need.
+  const n = head.length * (end - start - 1), own = n + (end - start - 1) + 4;
+  if (head.length > MAX_COLS || n > MAX_CELLS || own > budget) {
     into.append(el("p", lines.slice(start, end).join("\n")));
     return end;
   }
   const aligns = cells(lines[i + 1]).map((d) => (d.startsWith(":") && d.endsWith(":") ? "center" : d.endsWith(":") ? "right" : ""));
   const body = lines.slice(i + 2, end).map(cells);
   i = end;
+  budget -= own;
   // A column whose cells are all short (like "#") keeps its own width; the others get a readable minimum.
   const short = head.map((h, c) => [h, ...body.map((r) => r[c] ?? "")].every((v) => [...v].length <= 6));
   const row = (vals: string[], tag: "th" | "td") => {
     const tr = el("tr");
     head.forEach((_, c) => {
-      const cell = el(tag, inline(vals[c] ?? ""));
+      const cell = el(tag, spans(vals[c] ?? ""));
       if (aligns[c]) cell.style.textAlign = aligns[c];
       if (short[c]) cell.className = "short";
       tr.append(cell);
@@ -180,26 +196,32 @@ function table(lines: string[], i: number, into: ParentNode): number {
   const wrap = el("div", el("table", el("thead", row(head, "th")), tbody));
   wrap.className = "table-wrap";
   into.append(wrap);
+  budget += own;
   return i;
 }
 
 // Every span is bounded in length, so the scan does at most a few hundred steps per character.
 const INLINE = /`([^`\n]{1,1000})`|\*\*([^\n]{1,300}?)\*\*|__([^\n]{1,300}?)__(?!\w)|~~([^\n]{1,300}?)~~|\*([^*\s](?:[^*\n]{0,300}?[^*\s])?)\*|(?<!\w)_([^_\s](?:[^_\n]{0,300}?[^_\s])?)_(?!\w)|\[([^\]\n]{1,300})\]\((https?:\/\/[^)\s]{1,2000})\)/g;
 
-export function inline(text: string, depth = 0): DocumentFragment {
+export function inline(text: string): DocumentFragment {
+  budget = MAX_NODES;
+  return spans(text);
+}
+function spans(text: string, depth = 0): DocumentFragment {
   const out = document.createDocumentFragment();
-  if (depth > MAX_INLINE_DEPTH || text.length > MAX_LINE) {
+  if (depth > MAX_INLINE_DEPTH || text.length > MAX_LINE || budget <= 0) {
     out.append(text);
     return out;
   }
   const re = new RegExp(INLINE);
   let at = 0;
   for (const m of text.matchAll(re)) {
+    if (budget <= 0) break;
     out.append(text.slice(at, m.index));
     if (m[1] !== undefined) out.append(el("code", m[1]));
-    else if (m[2] !== undefined || m[3] !== undefined) out.append(el("strong", inline(m[2] ?? m[3], depth + 1)));
-    else if (m[4] !== undefined) out.append(el("del", inline(m[4], depth + 1)));
-    else if (m[5] !== undefined || m[6] !== undefined) out.append(el("em", inline(m[5] ?? m[6], depth + 1)));
+    else if (m[2] !== undefined || m[3] !== undefined) out.append(el("strong", spans(m[2] ?? m[3], depth + 1)));
+    else if (m[4] !== undefined) out.append(el("del", spans(m[4], depth + 1)));
+    else if (m[5] !== undefined || m[6] !== undefined) out.append(el("em", spans(m[5] ?? m[6], depth + 1)));
     else {
       const a = el("a", m[7]);
       a.href = m[8];
