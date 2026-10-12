@@ -20,33 +20,75 @@ func checksLaunchGuard() async throws {
     check(!ok(["--test-sidebr"]) && !ok(["--snapshot-setings", "/tmp/x"]), "launch guard: misspelt check flags")
     check(!ok(["--test"]) && !ok(["--snapshot-"]), "launch guard: bare prefixes are not flags")
     check(!ok(["--test-sidebar", "--test-nope"]), "launch guard: one bad flag among good ones")
+    // Every -- argument, not only checks: a misspelt --stress, --fuzz, --hittest or --preview launches a real window too.
+    check(!ok(["--stres"]) && !ok(["--hitest"]) && !ok(["--fuz", "5"]) && !ok(["--previw"]) && !ok(["--readonly"]),
+          "launch guard: misspelt options")
+    check(!ok(["--"]) && !ok(["--session=c9-input-test"]), "launch guard: a bare -- and the = form are not options")
+    check(ok(["--stress"]) && ok(["--hittest"]) && ok(["--fuzz", "5", "--seed", "7"]) && ok(["--preview"]) && ok(["--preview-dense"]),
+          "launch guard: known options")
+    check(ok(["--session", "flockbook-demo", "--snapshot-demo", "docs/media", "--dark"]) && ok(["--snapshot", "x", "--light", "--save-window"]),
+          "launch guard: look and window options")
+    check(ok(["--session", "s", "--test-hub", "p1", "--deny", "--image", "--warm"]), "launch guard: live-check options")
     let why = LaunchGuard.problem([app, "--snapshot-settings /tmp/dir"]) ?? ""
     check(why.contains("--snapshot-settings /tmp/dir") && why.lowercased().contains("usage"), "launch guard: the usage line names the argument (\(why))")
     check(LaunchGuard.problem([app, "--test-local-only"], known: ["--test-local-only"]) == nil, "launch guard: extra known flags from the caller")
 
-    // Every check flag in the app's sources and scripts is known: a new flag fails here until it is listed.
+    // Every flag the app reads, and every check flag the scripts pass, is known: a new flag fails here until it is listed.
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    let regex = try NSRegularExpression(pattern: #"--(?:test|snapshot)[A-Za-z0-9-]*"#)
-    var used = Set<String>(), files = 0
-    for dir in ["Sources/HerdrDesk", "scripts"] {
+    let dirs = ["Sources/HerdrDesk", "Sources/HerdrKit", "scripts"]
+    let scan = try launchFlagScan(root: root, dirs: dirs)
+    let used = scan.used
+    check(scan.problems.isEmpty, "launch guard: every source directory and file was read (\(scan.problems))")
+    check((scan.files["Sources/HerdrDesk"] ?? 0) > 20 && (scan.files["Sources/HerdrKit"] ?? 0) > 10 && (scan.files["scripts"] ?? 0) > 3,
+          "launch guard: each directory was scanned (\(scan.files))")
+    check(["--snapshot-demo", "--test-update"].allSatisfy { scan.flags["scripts"]?.contains($0) == true },
+          "launch guard: the scripts' check flags were found (\(scan.flags["scripts"]?.sorted() ?? []))")
+    // A directory or a file the scan cannot read is a problem, not a skip.
+    let missing = try launchFlagScan(root: root, dirs: ["scripts", "no-such-dir"])
+    check(missing.problems.contains { $0.contains("no-such-dir") }, "launch guard: a missing directory is a problem (\(missing.problems))")
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("launchguard-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp.appendingPathComponent("src"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    try Data([0xFF, 0xFE, 0x22]).write(to: tmp.appendingPathComponent("src/bad.swift"))
+    let unreadable = try launchFlagScan(root: tmp, dirs: ["src"])
+    check(unreadable.problems.contains { $0.contains("bad.swift") }, "launch guard: an unreadable file is a problem (\(unreadable.problems))")
+    let prefixes: Set<String> = ["--test", "--snapshot"]   // hasPrefix tests, not flags
+    // Arguments the app passes to other tools (herdr, tailscale, git, log), not its own.
+    let otherTools: Set<String> = ["--abbrev-ref", "--bg", "--cols", "--json", "--last", "--predicate", "--rows", "--style", "--takeover"]
+    let unknown = used.subtracting(prefixes).subtracting(otherTools).subtracting(LaunchGuard.known).sorted()
+    check(used.count > 40, "launch guard: scanned the app's flags (\(used.count) flags)")
+    check(unknown.isEmpty, "launch guard: every flag the app uses is known (unknown: \(unknown))")
+}
+
+/// The flags in `dirs` under `root`. Swift: every "--x" string literal (the app reads its arguments in HerdrDesk and
+/// HerdrKit). Scripts (.sh, .mjs): check flags as words. A directory or file that cannot be read is a problem.
+func launchFlagScan(root: URL, dirs: [String]) throws -> (used: Set<String>, files: [String: Int], flags: [String: Set<String>], problems: [String]) {
+    let swiftFlag = try NSRegularExpression(pattern: #"--[A-Za-z][A-Za-z0-9-]*"#)
+    let scriptFlag = try NSRegularExpression(pattern: #"--(?:test|snapshot)[A-Za-z0-9-]*"#)
+    var used = Set<String>(), files: [String: Int] = [:], flags: [String: Set<String>] = [:], problems: [String] = []
+    for dir in dirs {
         let url = root.appendingPathComponent(dir)
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? [] where name.hasSuffix(".swift") || name.hasSuffix(".sh") {
-            guard let text = try? String(contentsOf: url.appendingPathComponent(name), encoding: .utf8) else { continue }
-            files += 1
-            // Flags in Swift are string literals ("--test-x"); in scripts, words.
-            for m in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                let flag = String(text[Range(m.range, in: text)!])
-                if name.hasSuffix(".swift") {
-                    let r = Range(m.range, in: text)!
+        let names: [String]
+        do { names = try FileManager.default.contentsOfDirectory(atPath: url.path) } catch {
+            problems.append("\(dir): \(error.localizedDescription)"); continue
+        }
+        for name in names.sorted() where name.hasSuffix(".swift") || name.hasSuffix(".sh") || name.hasSuffix(".mjs") {
+            let text: String
+            do { text = try String(contentsOf: url.appendingPathComponent(name), encoding: .utf8) } catch {
+                problems.append("\(dir)/\(name): \(error.localizedDescription)"); continue
+            }
+            files[dir, default: 0] += 1
+            let swift = name.hasSuffix(".swift")
+            for m in (swift ? swiftFlag : scriptFlag).matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                let r = Range(m.range, in: text)!
+                if swift {
                     guard r.lowerBound > text.startIndex, text[text.index(before: r.lowerBound)] == "\"",
                           r.upperBound < text.endIndex, text[r.upperBound] == "\"" else { continue }
                 }
-                used.insert(flag)
+                used.insert(String(text[r]))
+                flags[dir, default: []].insert(String(text[r]))
             }
         }
     }
-    let prefixes: Set<String> = ["--test", "--snapshot"]   // hasPrefix tests, not flags
-    let unknown = used.subtracting(prefixes).subtracting(LaunchGuard.known).sorted()
-    check(files > 40 && used.count > 40, "launch guard: scanned the app's sources and scripts (\(files) files, \(used.count) flags)")
-    check(unknown.isEmpty, "launch guard: every check flag the app uses is known (unknown: \(unknown))")
+    return (used, files, flags, problems)
 }

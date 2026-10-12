@@ -1,8 +1,8 @@
 import Foundation
 
-/// The app's check flags, and the launch guard that refuses a check flag it does not know. A check flag the app does not
-/// match starts a normal launch: a real window, a Dock icon, a focus change. A misspelt flag, or a flag and its value
-/// passed as one argument (zsh does not split an unquoted variable), must stop before any of that.
+/// The app's flags, and the launch guard that refuses a -- argument it does not know. A flag the app does not match
+/// starts a normal launch: a real window, a Dock icon, a focus change. A misspelt flag, or a flag and its value passed as
+/// one argument (zsh does not split an unquoted variable), must stop before any of that.
 public enum LaunchGuard {
     /// Checks that never show a window, a Dock icon, or take focus (HerdrDeskApp).
     public static let headless: Set<String> = [
@@ -22,7 +22,12 @@ public enum LaunchGuard {
     ]
     /// The checks with a real window, run only with the owner's leave.
     public static let realWindow: Set<String> = ["--test-fullscreen-real", "--test-scroll-real"]
-    public static let known: Set<String> = headless.union(content).union(realWindow)
+    /// Options that change a launch or a check: the session, the look, the preview stores, the fuzz seed, live-check modes.
+    public static let options: Set<String> = [
+        "--session", "--read-only", "--light", "--dark", "--save-window", "--preview", "--preview-dense", "--seed",
+        "--deny", "--image", "--warm",
+    ]
+    public static let known: Set<String> = headless.union(content).union(realWindow).union(options)
 
     /// Nil: launch. Otherwise the usage line to print before exit(2). `known` adds flags to the app's own.
     public static func problem(_ arguments: [String], known extra: Set<String> = []) -> String? {
@@ -31,14 +36,14 @@ public enum LaunchGuard {
             if flag, arg.contains(where: \.isWhitespace) {
                 return usage("“\(arg)” has whitespace in it: pass a flag and its value as separate arguments")
             }
-            if arg.hasPrefix("--test") || arg.hasPrefix("--snapshot"), !known.contains(arg), !extra.contains(arg) {
-                return usage("unknown check flag “\(arg)”")
+            if flag, !known.contains(arg), !extra.contains(arg) {
+                return usage("unknown flag “\(arg)”")
             }
         }
         return nil
     }
 
     private static func usage(_ what: String) -> String {
-        "usage: HerdrDesk [--session <name>] [<check flag> [<value>]]: \(what). Nothing was opened."
+        "usage: HerdrDesk [--session <name>] [<flag> [<value>]]: \(what). Nothing was opened."
     }
 }
