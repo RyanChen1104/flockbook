@@ -8,6 +8,8 @@ import AppKit
 /// short message. Refuses to run on the default session (checked at launch).
 @MainActor
 enum HubLiveTest {
+    // Swift 6.2.1 crashes optimizing this function in release builds (CopyPropagation ownership error); test-only code.
+    @_optimize(none)
     static func run(model: AppModel, paneId: String, allow: Bool) async {
         try? await Task.sleep(for: .seconds(3))
         await model.store.refresh()
