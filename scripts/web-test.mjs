@@ -125,6 +125,8 @@ async function page(context) {
       return p.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; e.value = ${JSON.stringify(text)};
         e.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
     },
+    /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
+    async scale(dpr) { await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: dpr, mobile: true }, sessionId); },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -272,6 +274,7 @@ async function fakeRun() {
   check((await p.eval("document.querySelector('.option').textContent")).includes("Recommended"), "question: recommended marked");
   check(await p.eval("document.querySelector('#submit-answer').disabled") === true, "question: no answer, no send");
   await p.shot("question");
+  await p.shot("question", true);
   await p.click(".option");
   check(await p.eval("document.querySelector('.option').getAttribute('aria-pressed')") === "true", "question: option picked");
   await p.click("#submit-answer");
@@ -285,10 +288,27 @@ async function fakeRun() {
   check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
   check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
   await p.shot("composer");
+  await p.shot("composer", true);
+  // Frosted glass like the app's materials: the bar and the composer blur what scrolls under them, over a see-through fill.
+  const glass = (sel) => `(() => { const c = getComputedStyle(document.querySelector(${JSON.stringify(sel)}));
+    const f = c.backdropFilter || c.webkitBackdropFilter || ""; const a = /rgba\\([^)]*,\\s*([0-9.]+)\\)/.exec(c.backgroundColor);
+    return f.includes("blur") && !!a && Number(a[1]) < 1; })()`;
+  check(await p.eval(glass(".top")) === true && await p.eval(glass(".composer")) === true, "look: bar and composer are frosted glass");
+  // Stills with text under the glass (page-only filler, gone on the next render), at pixel ratio 1: see `scale`.
+  if (shots) {
+    await p.scale(1);
+    await p.eval(`(() => { const items = document.querySelector(".items");
+      for (let i = 0; i < 14; i++) { const d = document.createElement("div"); d.className = "msg assistant"; d.textContent = "Filler line " + (i + 1) + " scrolls under the frosted bar and the composer."; items.prepend(d); }
+      window.scrollTo(0, 240); })()`);
+    await p.shot("glass");
+    await p.shot("glass", true);
+    await p.scale(3);
+  }
   await p.type("#composer-text", "block me");
   await p.click("#composer-send");
   check(await p.until("!!document.querySelector('.banner')") === true, "alert: banner when another agent needs you");
   await p.shot("banner");
+  await p.shot("banner", true);
   await p.click(".banner");
   check(await p.until("location.hash === '#pane=w2%3Ap1'") === true, "alert: banner opens that agent");
 

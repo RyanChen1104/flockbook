@@ -216,7 +216,27 @@ function find(pane: string): { w: Workspace; t: Tab; p: Pane } | undefined {
   for (const w of state.workspaces) for (const t of w.tabs) for (const p of t.panes) if (p.id === pane) return { w, t, p };
   return undefined;
 }
-function dot(s: Status): HTMLElement { return h("span", { class: `dot ${s}`, role: "img", "aria-label": statusText[s] }); }
+// The app's StatusGlyph shapes: needs you = orange disc with "!", done = green disc with a check, working = faint ring
+// with a blue arc (turns), idle = hollow ring.
+const glyphs: Record<Status, string> = {
+  blocked: '<circle cx="8" cy="8" r="8" class="g-needs"/><path d="M8 4.2v4.6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="11.6" r="1.15" fill="#fff"/>',
+  done: '<circle cx="8" cy="8" r="8" class="g-done"/><path d="M4.6 8.3l2.2 2.2 4.6-4.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  working: '<circle cx="8" cy="8" r="6" fill="none" class="g-ring" stroke-width="2"/><circle cx="8" cy="8" r="6" fill="none" class="g-arc" stroke-width="2" stroke-linecap="round" stroke-dasharray="11.3 100" transform="rotate(-90 8 8)"/>',
+  idle: '<circle cx="8" cy="8" r="6.6" fill="none" class="g-idle" stroke-width="1.3"/>',
+  unknown: '<circle cx="8" cy="8" r="6.6" fill="none" class="g-idle" stroke-width="1.3" stroke-dasharray="2 2"/>',
+};
+function dot(s: Status): HTMLElement {
+  const el = h("span", { class: `dot ${s}`, role: "img", "aria-label": statusText[s] });
+  el.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${glyphs[s]}</svg>`;   // fixed markup, no data
+  return el;
+}
+/** "[ME] Meadow · Migration" -> "MM", "OpenAtlas" -> "OA" (the app's Monogram). */
+function monogram(raw: string): string {
+  let s = raw.replace(/^\[[^\]]*\]\s*/, "") || raw;
+  let words = s.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length === 1) words = words[0].split(/(?=\p{Lu})/u);
+  return (words.length >= 2 ? words[0][0] + words[1][0] : s.slice(0, 2)).toUpperCase();
+}
 const canInput = (): boolean => state.level === "input";
 function toast(text: string): void {
   state.toast = text;
@@ -244,9 +264,9 @@ function render(): void {
   else body.push(listScreen());
   if (state.banner && state.token) {
     const b = state.banner;
-    body.push(h("button", { class: "banner", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
+    body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
-  if (state.toast) body.push(h("div", { class: "toast", role: "status" }, state.toast));
+  if (state.toast) body.push(h("div", { class: "toast glass-float", role: "status" }, state.toast));
   // Keep the composer's text and focus across renders.
   const draft = (document.getElementById("composer-text") as HTMLTextAreaElement | null)?.value;
   const focused = document.activeElement?.id;
@@ -298,7 +318,7 @@ function listScreen(): HTMLElement {
   const all = agentPanes(state.workspaces);
   const needs = all.filter((x) => x.p.agent?.status === "blocked");
   const row = (x: { w: Workspace; t: Tab; p: Pane }, showWs: boolean): HTMLElement =>
-    h("li", {}, h("button", { class: "row", "data-pane": x.p.id, onclick: () => open(x.p.id) },
+    h("li", {}, h("button", { class: "row glass-float", "data-pane": x.p.id, onclick: () => open(x.p.id) },
       dot(x.p.agent!.status),
       h("span", { class: "row-text" },
         h("span", { class: "row-title" }, x.p.agent!.title || x.t.label),
@@ -312,11 +332,13 @@ function listScreen(): HTMLElement {
     const rows = all.filter((x) => x.w.id === w.id && x.p.agent?.status !== "blocked")
       .sort((a, b) => order[a.p.agent!.status] - order[b.p.agent!.status] || a.t.number - b.t.number);
     if (!rows.length) continue;
-    sections.push(h("h2", {}, h("span", { class: "mono" }, w.label.slice(0, 2).toUpperCase()), w.label), h("ul", { class: "group" }, ...rows.map((x) => row(x, false))));
+    const counts = [[rows.filter((x) => x.p.agent!.status === "working").length, "working"], [rows.filter((x) => x.p.agent!.status !== "working").length, "resting"]]
+      .filter(([n]) => n).map(([n, what]) => `${n} ${what}`).join(" · ");
+    sections.push(h("h2", {}, h("span", { class: "mono" }, monogram(w.label)), w.label, h("span", { class: "parts" }, counts)), h("ul", { class: "group" }, ...rows.map((x) => row(x, false))));
   }
   if (!all.length) sections.push(h("p", { class: "center muted" }, "No agents running."));
   return h("section", { class: "list" },
-    h("header", { class: "top" }, h("h1", {}, "Agents"),
+    h("header", { class: "top glass-bar" }, h("h1", {}, "Agents"),
       h("span", { class: `level ${state.level}` }, state.level === "input" ? "Input on" : "Read only")),
     ...sections);
 }
@@ -326,7 +348,7 @@ function conversationScreen(pane: string): HTMLElement {
   const v = view(pane);
   const title = where ? (where.p.agent?.title || where.t.label) : pane;
   const status = where?.p.agent?.status ?? "unknown";
-  const head = h("header", { class: "top bar" },
+  const head = h("header", { class: "top bar glass-bar" },
     h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
   const items: Child[] = [];
@@ -343,7 +365,7 @@ function conversationScreen(pane: string): HTMLElement {
   else if (v.screen) items.push(screenView(v.screen, false));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
-  return h("section", { class: "conversation" }, head, h("div", { class: "items" }, ...items), card, composer(pane, !!card));
+  return h("section", { class: "conversation" }, head, h("div", { class: "items" }, ...items), card, composer(pane, !!card, where?.p.agent?.name));
 }
 
 function itemView(it: Item): HTMLElement {
@@ -382,8 +404,8 @@ function approvalCard(pane: string, a: Approval): HTMLElement {
     if (!r.ok) toast(explain(r.code, r.message));
     render();
   };
-  return h("div", { class: "card approval", role: "group", "aria-label": "Permission request" },
-    h("div", { class: "card-head" }, dot("blocked"), h("strong", {}, a.title || `${a.tool} wants to run`)),
+  return h("div", { class: "card approval glass-float", role: "group", "aria-label": "Permission request" },
+    h("div", { class: "card-head" }, h("span", { class: "ask", "aria-hidden": "true" }, "!"), h("strong", {}, a.title || `${a.tool} wants to run`)),
     a.command && h("pre", { class: "command" }, a.command),
     canInput()
       ? h("div", { class: "actions" },
@@ -406,11 +428,11 @@ function fullQuestion(q: QuestionRequest, items: Item[]): QuestionRequest | null
 
 function questionCard(pane: string, prompt: QuestionRequest, items: Item[]): HTMLElement {
   const q = fullQuestion(prompt, items);
-  const head = h("div", { class: "card-head" }, dot("blocked"), h("strong", {}, "Question"));
+  const head = h("div", { class: "card-head" }, h("span", { class: "ask", "aria-hidden": "true" }, "?"), h("strong", {}, "Question"));
   if (!q || q.delivery !== "picker" || !canInput()) {
     const why = !canInput() ? "Read only: answer on the Mac, or turn on input for this device."
       : !q ? `${prompt.headers.length} questions: answer them on the Mac.` : "Answer this one in the terminal.";
-    return h("div", { class: "card question" }, head,
+    return h("div", { class: "card question glass-float" }, head,
       ...prompt.questions.map((x) => h("p", {}, x.text)), h("p", { class: "fine" }, why));
   }
   const picks: Set<number>[] = q.questions.map(() => new Set<number>());
@@ -447,12 +469,12 @@ function questionCard(pane: string, prompt: QuestionRequest, items: Item[]): HTM
     if (!r.ok) toast(explain(r.code, r.message));
     render();
   });
-  return h("div", { class: "card question", role: "group", "aria-label": "Question" }, head, ...blocks, h("div", { class: "actions" }, submit));
+  return h("div", { class: "card question glass-float", role: "group", "aria-label": "Question" }, head, ...blocks, h("div", { class: "actions" }, submit));
 }
 
-function composer(pane: string, promptOpen: boolean): HTMLElement | null {
+function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElement | null {
   if (!canInput() || !find(pane)?.p.agent) return null;
-  const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
+  const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : agent ? `Reply to ${agent}` : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
   const send = async (): Promise<void> => {
     const text = box.value.trim();
     if (!text || state.busy) return;
@@ -464,8 +486,8 @@ function composer(pane: string, promptOpen: boolean): HTMLElement | null {
     render();
   };
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
-  return h("form", { class: "composer", onsubmit: (e: Event) => { e.preventDefault(); send(); } },
-    box, h("button", { id: "composer-send", class: "primary", type: "submit", disabled: promptOpen }, "Send"));
+  return h("form", { class: "composer glass-float", onsubmit: (e: Event) => { e.preventDefault(); send(); } },
+    box, h("button", { id: "composer-send", class: "primary send", type: "submit", disabled: promptOpen, "aria-label": "Send", title: "Send" }, "↑"));
 }
 
 // --- Start.
