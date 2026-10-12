@@ -14,6 +14,14 @@ import HerdrKit
              "k2":{"DNSName":"pad.example.ts.net.","HostName":"pad","OS":"iOS","Online":false},
              "k3":{"DNSName":"box.example.ts.net.","HostName":"box","OS":"linux","Online":true}}}
     """.utf8)
+    // An app opened from Finder has no terminal variables (no TERM). The Mac app's binary then starts its GUI and
+    // prints no JSON, unless TAILSCALE_BE_CLI=1 is set. Run it the way a Finder-opened app does (read-only status).
+    check(TailscaleSetup.cliEnvironment([:])["TAILSCALE_BE_CLI"] == "1", "tailscale: the CLI is always run as a CLI")
+    if let cli = TailscaleSetup.findCLI() {
+        let r = await TailscaleSetup.run(cli: cli, ["status", "--json"], base: ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"])
+        check(r.flatMap { TailscaleSetup.Status.parse($0.out) } != nil,
+              "tailscale: status reads with a Finder-like environment (\(r.map { String(decoding: $0.out.prefix(60), as: UTF8.self) } ?? "no run"))")
+    }
     let s = TailscaleSetup.Status.parse(statusJSON)
     check(s?.signedIn == true && s?.dnsName == "mac.example.ts.net" && s?.httpsReady == true,
           "tailscale: status read (signed in, name without the last dot, MagicDNS + HTTPS on)")

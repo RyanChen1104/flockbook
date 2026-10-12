@@ -150,13 +150,23 @@ public enum TailscaleSetup {
         return uses
     }
 
+    /// The CLI's environment: `base` plus TAILSCALE_BE_CLI=1. Without a terminal (an app opened from Finder has no
+    /// TERM), the Mac app's binary otherwise starts its GUI and fails ("The Tailscale GUI failed to start").
+    public static func cliEnvironment(_ base: [String: String]) -> [String: String] {
+        var env = base
+        env["TAILSCALE_BE_CLI"] = "1"
+        return env
+    }
+
     /// Runs the CLI with a time limit. Off the main thread.
-    public static func run(cli: String, _ args: [String], timeout: Double = 8) async -> (status: Int32, out: Data, err: String)? {
+    public static func run(cli: String, _ args: [String], timeout: Double = 8,
+                           base: [String: String] = ProcessInfo.processInfo.environment) async -> (status: Int32, out: Data, err: String)? {
         await withCheckedContinuation { (k: CheckedContinuation<(status: Int32, out: Data, err: String)?, Never>) in
             DispatchQueue.global().async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: cli)
                 p.arguments = args
+                p.environment = cliEnvironment(base)
                 let out = Pipe(), err = Pipe()
                 p.standardOutput = out; p.standardError = err; p.standardInput = FileHandle.nullDevice
                 do { try p.run() } catch { k.resume(returning: nil); return }
