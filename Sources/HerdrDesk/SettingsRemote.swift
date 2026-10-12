@@ -114,7 +114,7 @@ struct TailscaleSteps: View {
         }
         Step(n: 2, title: "Signed in", done: signedIn,
              text: signedIn ? "This Mac is on your tailnet." : !installed ? "Sign in after you install Tailscale."
-                 : "Open Tailscale from the menu bar and sign in\(ts.map { $0.backendState.isEmpty ? "" : " (now: \($0.backendState))" } ?? "").") {
+                 : hub.statusProblem.map { "Could not read Tailscale's state (\($0)). Open Tailscale, then Check Again." } ?? "Open Tailscale from the menu bar and sign in\(ts.map { $0.backendState.isEmpty ? "" : " (now: \($0.backendState))" } ?? "").") {
             if installed && !signedIn { Button("Open Tailscale") { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app")) } }
         }
         Step(n: 3, title: "HTTPS names", done: https,

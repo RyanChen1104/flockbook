@@ -37,6 +37,9 @@ final class RemoteHub {
     private(set) var tailscale: TailscaleSetup.Status?
     private(set) var serve: TailscaleSetup.Serve?
     private(set) var checking = false
+    /// `tailscale status` gave no readable answer (Tailscale not running, or the CLI misbehaved): its first error
+    /// line. Shown as is, so a read failure never looks like "not signed in".
+    private(set) var statusProblem: String?
     /// A Turn On / Turn Off is running.
     private(set) var switchingServe = false
     /// The last pairing code was stopped after wrong codes (the pairing sheet says so).
@@ -199,11 +202,13 @@ final class RemoteHub {
         guard previewEnabled == nil, !checking else { return }
         checking = true; defer { checking = false }
         tailscaleCLI = TailscaleSetup.findCLI()
-        guard let cli = tailscaleCLI else { tailscale = nil; serve = nil; return }
+        guard let cli = tailscaleCLI else { tailscale = nil; serve = nil; statusProblem = nil; return }
         if let r = await TailscaleSetup.run(cli: cli, ["status", "--json"]) {
             tailscale = TailscaleSetup.Status.parse(r.out)
+            let first = r.err.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            statusProblem = tailscale == nil ? (first.isEmpty ? "no answer" : String(first.prefix(160))) : nil
             if tailscale == nil { remoteLog.error("tailscale status not readable: \(r.err, privacy: .public)") }
-        } else { tailscale = nil }
+        } else { tailscale = nil; statusProblem = "could not run the Tailscale command" }
         if let ts = tailscale, !ts.dnsName.isEmpty, let r = await TailscaleSetup.run(cli: cli, ["serve", "status", "--json"]), r.status == 0 {
             serve = TailscaleSetup.serve(r.out, dnsName: ts.dnsName)
         } else { serve = nil }
