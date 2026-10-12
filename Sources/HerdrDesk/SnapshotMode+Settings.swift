@@ -1,13 +1,14 @@
 import AppKit
 import CoreImage
+import HerdrKit
 import SwiftUI
 
-/// The Settings window, offscreen, in every look it must survive:
+/// The settings form (the Settings page's content) in a window of its own, offscreen, in every look it must survive:
 ///   .build/debug/HerdrDesk --snapshot-settings <dir>
 /// -> <dir>/settings-<glass>-<light|dark>.png for Glass, Subtle and Opaque, and settings-reduce-<light|dark>.png
 /// (Reduce Transparency, through a stand-in flag). Offscreen there is no desktop and a behind-window blur samples
 /// nothing, so each still is composed: a stand-in wallpaper, blurred as the material would, under a capture of the
-/// Settings window alone. Only this app's own windows are captured, never the screen.
+/// settings form alone. Only this app's own windows are captured, never the screen.
 /// Increase Contrast is not rendered here: offscreen, the high-contrast appearances draw the same pixels as
 /// the plain ones. The view uses only system colors and controls, so the system handles it.
 /// Own settings store (test isolation), no Dock icon, nothing sent anywhere.
@@ -18,8 +19,8 @@ extension SnapshotRunner {
         for (name, glass, reduce) in looks {
             for dark in [false, true] {
                 AppDefaults.store.set(glass.rawValue, forKey: WindowGlass.key)
-                // A Settings scene draws WindowSurface through containerBackground(for: .window); a plain NSWindow does not.
-                // Its blur is the blurred wallpaper below (offscreen the material view paints solid), so only its tint goes here.
+                // In the app the page sits on the main window's surface (WindowSurface); here its blur is the blurred wallpaper
+                // below (offscreen the material view paints solid), so only its tint goes here.
                 let surface = reduce ? WindowGlass.off : glass
                 let host = NSHostingView(rootView: ZStack {
                     Color(nsColor: .textBackgroundColor).opacity(surface.tint).ignoresSafeArea()
@@ -95,5 +96,94 @@ extension SnapshotRunner {
             NSBezierPath(roundedRect: NSRect(x: 40, y: 60, width: 220, height: 90), xRadius: 20, yRadius: 20).fill()
             return true
         }
+    }
+}
+
+/// Where the Settings page lies (global frame); zero while it is not shown.
+enum SettingsProbe { nonisolated(unsafe) static var page: CGRect = .zero }
+
+extension ChromeTests {
+    /// `--test-settings-page`: Settings is a page of the main window, not a window of its own. A Settings row at the foot of
+    /// the sidebar opens it in the detail column (a real click), the page fills that column and scrolls (a long Remote
+    /// access section), ⌘,'s action opens it from any screen, and another sidebar row leaves it. Offscreen window only;
+    /// stills of the page in light and dark, top and scrolled, go to build/snapshots-settings-page/.
+    static func runSettingsPageTest() async {
+        let dir = "build/snapshots-settings-page"
+        let model = AppModel(store: .preview)
+        model.remote = RemoteHub.preview(running: true, devices: [(HubDevice(id: "d1", name: "Phone", level: .input), Date(timeIntervalSince1970: 1_790_000_000))], offer: false)
+        let size = NSSize(width: 1200, height: 680)
+        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        WindowChrome.apply(win)
+        win.contentView = host
+        win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        try? await Task.sleep(for: .seconds(2))
+        var failures = 0
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("settings-page-test: \(n) \(ok ? "ok" : "FAIL")") }
+        // Selects the sidebar list row under the middle of a probed frame, as a click does. A synthetic mouse click selects a
+        // List row only in a key window, which a headless run never has: the table row at that point is selected instead.
+        func click(_ r: CGRect) async {
+            guard let frame = win.contentView?.superview else { return }
+            let p = NSPoint(x: r.midX, y: frame.bounds.height - r.midY)
+            var v = frame.hitTest(p)
+            while let cur = v, !(cur is NSTableView) { v = cur.superview }
+            if let table = v as? NSTableView {
+                let row = table.row(at: table.convert(p, from: nil))
+                if row >= 0 { table.selectRowIndexes([row], byExtendingSelection: false) }
+            }
+            try? await Task.sleep(for: .milliseconds(600))
+        }
+
+        // The row: below every workspace row, at the foot of the sidebar panel.
+        let row = ChromeProbe.rows["Settings"] ?? .zero
+        let lastRow = model.store.workspaces.compactMap { ChromeProbe.rows["title:\($0.id)"]?.maxY }.max() ?? 0
+        let panel = ChromeProbe.panel
+        step("Settings row at the foot of the sidebar (row y \(Int(row.minY))..\(Int(row.maxY)), last workspace \(Int(lastRow)), panel bottom \(Int(panel.maxY)))",
+             row.width > 0 && row.minY > lastRow && panel.maxY - row.maxY < 24)
+        step("no page before it is chosen (\(SettingsProbe.page))", SettingsProbe.page == .zero)
+        await click(row)
+        step("a click opens the Settings page (\(model.screen))", model.screen == .settings)
+        try? await Task.sleep(for: .milliseconds(600))
+        let page = SettingsProbe.page, detail = ChromeProbe.detail
+        step("the page fills the detail column (page \(page.integral), detail \(detail.integral))",
+             page.width > 0 && abs(page.minX - detail.minX) < 2 && abs(page.maxX - detail.maxX) < 2 && page.height > detail.height - 40)
+
+        // It scrolls: the page is taller than the column (with the remote section, even here); a wheel over it moves it.
+        func scrollViews(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrollViews) }
+        let p = NSPoint(x: page.midX, y: page.midY)
+        let hit = host.hitTest(host.convert(NSPoint(x: p.x, y: host.isFlipped ? p.y : host.bounds.height - p.y), to: host.superview))
+        if let sv = hit?.enclosingScrollView {
+            let shown = sv.contentView.bounds.height, content = sv.documentView?.frame.height ?? 0
+            ContentTests.capture(win, to: "\(dir)/settings-page-light.png")
+            let y0 = sv.contentView.bounds.origin.y
+            if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -400, wheel2: 0, wheel3: 0),
+               let e = NSEvent(cgEvent: cg) { hit?.scrollWheel(with: e) }
+            try? await Task.sleep(for: .milliseconds(600))
+            let y1 = sv.contentView.bounds.origin.y
+            step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))", sv.verticalScrollElasticity != .none && y1 > y0 + 30)
+            ContentTests.capture(win, to: "\(dir)/settings-page-light-scrolled.png")
+            win.appearance = NSAppearance(named: .darkAqua)
+            try? await Task.sleep(for: .milliseconds(600))
+            ContentTests.capture(win, to: "\(dir)/settings-page-dark-scrolled.png")
+            sv.contentView.scroll(to: .zero); sv.reflectScrolledClipView(sv.contentView)
+            try? await Task.sleep(for: .milliseconds(600))
+            ContentTests.capture(win, to: "\(dir)/settings-page-dark.png")
+            win.appearance = nil
+        } else { step("a scroll view under the page (\(hit.map { "\(type(of: $0))" } ?? "no view"))", false) }
+
+        // Another row leaves the page.
+        await click(ChromeProbe.rows["Overview"] ?? .zero)
+        step("Overview row leaves the page (\(model.screen), page \(SettingsProbe.page))", model.screen == .overview && SettingsProbe.page == .zero)
+        // ⌘, (the app menu's Settings… calls this) from the tab screen, then a workspace row returns to the agent view.
+        model.screen = .tab
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(600))
+        step("⌘, opens the page from the tab screen (\(model.screen))", model.screen == .settings && SettingsProbe.page.width > 0)
+        if let ws = model.workspace, let title = ChromeProbe.rows["title:\(ws.id)"] {
+            await click(title)
+            step("the current workspace's row returns to its tab (\(model.screen))", model.screen == .tab)
+        } else { step("a workspace row to click", false) }
+        print("settings-page-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
+        NSApp.terminate(nil)
     }
 }

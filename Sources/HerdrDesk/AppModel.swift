@@ -6,7 +6,7 @@ import os
 /// Notification button decisions: `log show --predicate 'subsystem == "dev.mclee.flockbook" && category == "notice"' --info`.
 let noticeLog = Logger(subsystem: "dev.mclee.flockbook", category: "notice")
 
-enum Screen: Hashable { case tab, inbox, overview, search }
+enum Screen: Hashable { case tab, inbox, overview, search, settings }
 
 @MainActor @Observable
 final class AppModel {
@@ -17,6 +17,8 @@ final class AppModel {
     var workspaceID: String? { didSet { updateVisibleSessions() } }
     var tabID: String? { didSet { updateVisibleSessions() } }
     var showTerminal = false
+    /// Settings is a page of the main window (sidebar foot, ⌘,).
+    func showSettings() { screen = .settings }
     var splitDirection: String = "down"
     var searchText = ""
     /// Width of the tab row toolbar item. Follows the detail column, never the tab count (see `setDetailWidth`).

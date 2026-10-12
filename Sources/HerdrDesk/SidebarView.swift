@@ -2,7 +2,7 @@ import HerdrKit
 import SwiftUI
 
 /// One selectable sidebar row (the New tab row is an action, not a selection).
-enum SidebarItem: Hashable { case inbox, overview, search, workspace(String) }
+enum SidebarItem: Hashable { case inbox, overview, search, settings, workspace(String) }
 
 /// The sidebar is a system sidebar `List`: the system gives row height, selection look (accent, inactive-window dimming),
 /// arrow-key navigation, type-select and VoiceOver's list semantics.
@@ -18,12 +18,14 @@ struct SidebarView: View {
             case .overview: .overview
             case .search: .search
             case .tab: model.workspace.map { .workspace($0.id) }
+            case .settings: .settings
             }
         } set: { item in
             switch item {
             case .inbox: model.screen = .inbox
             case .overview: model.screen = .overview
             case .search: model.screen = .search
+            case .settings: model.showSettings()
             case .workspace(let id):
                 if id == model.workspace?.id { model.screen = .tab } else { model.select(workspace: id) }
             case nil: break
@@ -74,6 +76,15 @@ struct SidebarView: View {
                 .probe { ChromeProbe.connectionFooter = $0 }
                 .onDisappear { ChromeProbe.connectionFooter = .zero }
             }
+            // Settings, pinned at the foot: a list of its own, so it keeps the system row look and selection and stays in place
+            // while the workspaces above scroll.
+            List(selection: selection) {
+                navRow("Settings", "gearshape", .settings)
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .scrollDisabled(true)
+            .frame(height: 44)
         }
         // Full screen: the band the hidden toolbar leaves (rows start where they start windowed).
         .modifier(FullScreenBand(top: panel.minY))
@@ -300,12 +311,12 @@ private struct PeekGlass: ViewModifier {
     }
 }
 
-/// "Remote access on" with the connection count, at the foot of the sidebar; a click opens Settings.
+/// "Remote access on" with the connection count, at the foot of the sidebar; a click opens the Settings page.
 struct RemoteFooter: View {
     let hub: RemoteHub
-    @Environment(\.openSettings) private var openSettings
+    @Environment(AppModel.self) private var model
     var body: some View {
-        Button { openSettings() } label: {
+        Button { model.showSettings() } label: {
             HStack(spacing: 6) {
                 Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(.orange).imageScale(.small)
                 Text(hub.connections > 0 ? "Remote access on · \(hub.connections) connected" : "Remote access on")

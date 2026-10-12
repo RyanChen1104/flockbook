@@ -3,7 +3,7 @@ import SwiftUI
 enum AppSettings { static let allowInputKey = "allowInput" }
 
 /// One grouped pane, like the Settings of Notes or Reminders: four settings do not fill toolbar tabs.
-/// Each row says what it does in a secondary line under its title; the window is fixed-size.
+/// Each row says what it does in a secondary line under its title. Shown as a page of the main window (SettingsPage).
 struct SettingsView: View {
     @AppStorage(AppSettings.allowInputKey, store: AppDefaults.store) private var allowInput = true
     @AppStorage(WindowGlass.key, store: AppDefaults.store) private var glass = WindowGlass.full.rawValue
@@ -16,8 +16,8 @@ struct SettingsView: View {
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
-    /// The Settings window: a fixed height that scrolls, so a long page (Remote access) never runs off the screen.
-    /// Snapshots keep the full height.
+    /// The Settings page: fills the detail column and scrolls, so a long page (Remote access) never runs off the screen.
+    /// Snapshots keep the full height at a fixed width.
     var scrolls = false
 
     var body: some View {
@@ -89,21 +89,35 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .scrollDisabled(!scrolls)
-        // The main window's surface (Glass.swift): the same setting, blur and tint; the grouped rows keep their own fill.
+        // The window's surface shows through (Glass.swift); the grouped rows keep their own fill.
         .scrollContentBackground(.hidden)
-        .containerBackground(for: .window) { WindowSurface(glass: surface) }
-        .frame(width: 520)
-        .frame(minHeight: scrolls ? 360 : nil, idealHeight: scrolls ? 640 : nil)
+        .frame(width: scrolls ? nil : 520)
+        .frame(minHeight: scrolls ? 360 : nil, idealHeight: scrolls ? 640 : nil, maxHeight: scrolls ? .infinity : nil)
         .fixedSize(horizontal: false, vertical: !scrolls)
     }
-
-    /// The same rule as GlassReader, with the snapshot stand-in for Reduce Transparency.
-    private var surface: WindowGlass { reduce ? .off : (WindowGlass(rawValue: glass) ?? .full) }
 
     private var widthNote: String {
         switch ReadingWidth(rawValue: readingWidth) ?? .medium {
         case .full: "The text fills the window."
         case let w: "Text column up to \(Int(w.points)) pt."
         }
+    }
+}
+
+/// Settings as a page of the main window (the sidebar's foot row, ⌘,): the whole detail column scrolls, so the wheel works
+/// over the side margins too, and the rows keep a readable column in its middle.
+struct SettingsPage: View {
+    @Environment(AppModel.self) private var model
+    @State private var width: CGFloat = 0
+    /// Widest the grouped rows get.
+    static let column: CGFloat = 640
+
+    var body: some View {
+        SettingsView(remote: model.remote, scrolls: true)
+            .contentMargins(.horizontal, max(0, (width - Self.column) / 2), for: .scrollContent)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .probe { SettingsProbe.page = $0 }
+            .onDisappear { SettingsProbe.page = .zero }
     }
 }

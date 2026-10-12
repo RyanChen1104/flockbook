@@ -13,7 +13,7 @@ struct HerdrDeskApp: App {
         let args = CommandLine.arguments
         if !args.contains("--test-composer") { DispatchQueue.global(qos: .utility).async { PasteImages.purgeOld() } }
         // Checks must never show a window, a Dock icon, or take focus.
-        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote", "--serve-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update"]).union(ContentTests.flags)
+        let headlessFlags = Set<String>(["--headless", "--snapshot", "--snapshot-reading", "--snapshot-live", "--snapshot-demo", "--snapshot-settings", "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote", "--serve-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab", "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel", "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width", "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update", "--test-settings-page"]).union(ContentTests.flags)
         if !headlessFlags.isDisjoint(with: args) || args.contains(where: { $0.hasPrefix("--test") }) {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
@@ -72,6 +72,7 @@ struct HerdrDeskApp: App {
         if args.contains("--test-settings-migration") { ChromeTests.runSettingsMigrationTest() }
         if args.contains("--test-island-height") { Task { @MainActor in await ChromeTests.runIslandHeightTest() } }
         if args.contains("--test-root-width") { Task { @MainActor in await ChromeTests.runRootWidthTest() } }
+        if args.contains("--test-settings-page") { Task { @MainActor in await ChromeTests.runSettingsPageTest() } }
         if args.contains("--test-sidebar") { Task { @MainActor in await ChromeTests.runSidebarTest() } }
         if args.contains("--test-composer") { Task { @MainActor in await SnapshotRunner.runComposerTest() } }
         if args.contains("--hittest") { Task { @MainActor in await SnapshotRunner.runHitTest() } }
@@ -174,7 +175,7 @@ struct HerdrDeskApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Flockbook") {
+        WindowGroup("Flockbook", id: "main") {
             if headless { Color.clear.frame(width: 1, height: 1) } else { appRoot }
         }
         .windowToolbarStyle(.unified)
@@ -183,8 +184,6 @@ struct HerdrDeskApp: App {
             DeskCommands(model: model)
             UpdateCommands(updater: AppUpdater.shared)
         }
-        Settings { SettingsView(remote: model.remote, scrolls: true) }
-            .windowResizability(.contentSize)
     }
 
     private var appRoot: some View {
@@ -198,8 +197,17 @@ struct HerdrDeskApp: App {
 
 struct DeskCommands: Commands {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
     var body: some Commands {
+        // Settings is a page of the main window (no Settings window): ⌘, shows it there, opening the window if it was closed.
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") {
+                model.showSettings()
+                if let w = model.mainWindow, w.isVisible { w.makeKeyAndOrderFront(nil) } else { openWindow(id: "main") }
+            }
+            .keyboardShortcut(",")
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { model.newTab() }.keyboardShortcut("t")
             Button("New Workspace…") { model.beginNewWorkspace() }.keyboardShortcut("n", modifiers: [.command, .shift]).disabled(!model.writesEnabled)
@@ -471,6 +479,7 @@ struct DetailView: View {
             case .inbox: InboxView()
             case .overview: OverviewView()
             case .search: SearchView()
+            case .settings: SettingsPage()
             }
         }
         // The window's surface again: the split view's detail column paints its own system background over the window's.
