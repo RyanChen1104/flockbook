@@ -125,6 +125,30 @@ import Foundation
     var cr = cq; cr.questions[0].options[0].recommended = true
     check(QuestionAdapter.shows(cr, question: 0, screen: recommended) && !QuestionAdapter.shows(cr, question: 0, screen: recommended.replacingOccurrences(of: "Red (Recommended)", with: "Rose (Recommended)")),
           "r7 codex: a recommended option matches with its mark")
+    // Review 8 (9aa6a8c): the key line is the last line, not any text holding its words; the Other row keeps its
+    // raw text; an Other answer equal to its own digit still moves the field state on.
+    let footerNote = notes.replacingOccurrences(of: "› fish note", with: "› enter to submit")
+    check(!QuestionAdapter.shows(cq, question: 0, screen: footerNote) && QuestionAdapter.shows(cq, question: 0, screen: footerNote, other: "enter to submit"),
+          "r8 codex: notes holding 'enter to submit' are notes, not the key line")
+    let recTyped = claude.replacingOccurrences(of: "3. Type something.", with: "3. Type something. (Recommended)")
+    check(QuestionAdapter.claudeParse(recTyped)?.typed == "Type something. (Recommended)" && !QuestionAdapter.shows(one, question: 0, screen: recTyped),
+          "r8 claude: Other text with a (Recommended) mark is text, not the empty row")
+    check(!QuestionAdapter.shows(one, question: 0, screen: claude.replacingOccurrences(of: "3. Type something.", with: "3. fish (Recommended)"), other: "fish"),
+          "r8 claude: Other text 'fish (Recommended)' is not our 'fish'")
+    fake.agents = #"[{"pane_id":"w1:p1","agent":"claude","name":"claude","agent_status":"blocked","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"s1"}}]"#
+    fake.screen = claude
+    final class Typed: @unchecked Sendable { var n = 0 }
+    let typedCount = Typed()
+    fake.onInput = { method, _ in
+        if method == "pane.send_text" { typedCount.n += 1; if typedCount.n == 2 { fake.screen = claude.replacingOccurrences(of: "3. Type something.", with: "3. 3") } }
+        if method == "pane.send_keys" { fake.screen = "❯ \n" }
+    }
+    nn = fake.requests.count
+    do { try await client.answerQuestion(paneId: "w1:p1", request: one, answers: [QuestionAnswer(other: "3")],
+                                         gate: KeyGate(agent: Agent(name: "claude", kind: "claude", status: .blocked, sessionId: "s1", title: ""), allowed: { true })) } catch {}
+    let digitOther = fake.requests.dropFirst(nn).filter { keyMethods.contains($0.method) }.map { ($0.params["keys"] as? [String])?.joined() ?? "text" }
+    check(digitOther == ["text", "text", "Enter"], "r8 claude: Other text equal to its digit -> digit, text, Enter (\(digitOther))")
+    fake.onInput = nil
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 

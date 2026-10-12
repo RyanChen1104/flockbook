@@ -188,13 +188,17 @@ public enum QuestionAdapter {
         guard let start = lines.lastIndex(where: { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }),
               pickerRegion(agent: "codex", screen: screen) != nil else { return nil }
         let rowRe = /^\s*(?:›\s*)?(\d+)\.\s+(.*)$/
+        // The key line is the last line of the picker, one of Codex's own two; text above it (notes too) may hold
+        // the same words and never ends the parse.
+        guard let foot = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }), foot > start else { return nil }
+        let keyLine = lines[foot].trimmingCharacters(in: .whitespaces)
+        let notesOpen: Bool
+        if keyLine.hasPrefix("tab or esc to clear notes | enter to submit") { notesOpen = true }
+        else if keyLine.hasPrefix("tab to add notes | enter to submit") { notesOpen = false }
+        else { return nil }
         var text: [String] = [], rows: [String] = [], notes: [String] = [], inNotes = false, after = false
-        for l in lines[(start + 1)...] {
+        for l in lines[(start + 1)..<foot] {
             let t = l.trimmingCharacters(in: .whitespaces)
-            if t.contains("enter to submit") {
-                if t.contains("clear notes") != inNotes { return nil }   // the key line and the field disagree
-                break
-            }
             if inNotes {
                 if !t.isEmpty { notes.append(t) }
             } else if !after, let m = l.wholeMatch(of: rowRe) {
@@ -211,7 +215,7 @@ public enum QuestionAdapter {
                 return nil   // a wrapped row or something unknown: cannot be compared exactly
             }
         }
-        guard !rows.isEmpty, !text.isEmpty else { return nil }
+        guard !rows.isEmpty, !text.isEmpty, inNotes == notesOpen else { return nil }   // the key line and the field agree
         let typed = flat(notes.joined(separator: "\n"))
         return (flat(text.joined(separator: " ")), rows, inNotes ? (typed == "Add notes" ? "" : typed) : nil)
     }
@@ -357,7 +361,7 @@ extension QuestionAdapter {
         let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
         let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
-        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false
+        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = ""
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
@@ -367,6 +371,7 @@ extension QuestionAdapter {
                 if m.2 != nil { multi = true }
                 let (clean, rec) = stripRecommended(label)
                 options.append(.init(label: clean, recommended: rec))
+                lastRaw = label
             } else if inOptions {
                 if !t.isEmpty, !options.isEmpty { options[options.count - 1].detail += (options[options.count - 1].detail.isEmpty ? "" : " ") + t }
             } else if !t.isEmpty {
@@ -374,8 +379,9 @@ extension QuestionAdapter {
             }
         }
         // The last row is the "Other" row.
-        guard closed, let last = options.popLast() else { return nil }
-        let typed: String? = last.label == "Type something." || last.label == "Type something" ? nil : last.label
+        guard closed, options.popLast() != nil else { return nil }
+        // The Other row keeps its raw text: "(Recommended)" there is typed text, not a mark.
+        let typed: String? = lastRaw == "Type something." || lastRaw == "Type something" ? nil : lastRaw
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
         return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed)
@@ -422,7 +428,7 @@ extension HerdrClient {
             }
         }
         // `shown`: what the "Other" row of question `at` should hold now: empty until the hub typed its text there.
-        var at = 0, review = false, otherOpen = false, shown: String?
+        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?
         for step in steps {
             let k = at, r = review, inRow = shown
             let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow) }
@@ -430,16 +436,18 @@ extension HerdrClient {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
                 try await sendKeys(Array(s.utf8), to: paneId)   // typed as is: no Enter, not as a paste
+                // By step purpose, not by text (the typed text may equal a digit): Claude's first text step for
+                // "Other" is its digit, which opens the row; the next text step is the typed text.
                 let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
-                if typed != nil, q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true }
-                else if otherOpen, s == typed { shown = typed }
+                if typed != nil, !otherOpen, q.agent == "claude", q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true }
+                else if typed != nil, otherOpen, !typedIn { shown = typed; typedIn = true }
             case .keys(let k):
                 try await gatedKeys(k, gate: gate, paneId: paneId, screen: same)
                 // Codex: Tab on "None of the above" opens its notes, empty.
                 if q.agent == "codex", k.last == "Tab", answers.indices.contains(at), QuestionAdapter.otherText(answers[at]) != nil { otherOpen = true; shown = "" }
             case .waitFor(let s):
                 if s == "Review your answers" { review = true } else { at += 1 }
-                otherOpen = false; shown = nil
+                otherOpen = false; typedIn = false; shown = nil
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }
