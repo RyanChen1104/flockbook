@@ -80,6 +80,7 @@ try await checksHubFuzz()
 try await checksHubSecurity()
 try await checksHubSecurityReview2()
 try await checksHubReview3()
+try await checksHubReview4()
 try await checksUpdater()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")

@@ -26,11 +26,11 @@ import CryptoKit
     /// Types the text, then the image files' paths, and submits, as the composer does.
     /// `agent`: the agent the checks saw (refuse when another one is in the pane now). `allowed`: asked again right
     /// before each key goes out (the device's level and Allow input now); false -> nothing more is sent.
-    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor () -> Bool) async -> HubSendResult
+    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> HubSendResult
     /// The approval card's input (`HerdrClient.respond`). Called only after the prompt was checked.
-    func approve(pane: String, prompt: String, allow: Bool, allowed: @escaping @MainActor () -> Bool) async -> Bool
+    func approve(pane: String, prompt: String, allow: Bool, agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
-    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], allowed: @escaping @MainActor () -> Bool) async throws
+    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -169,7 +169,7 @@ extension Hub {
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
         let canInput = inputAllowed
-        let allowed: @MainActor () -> Bool = { [weak self] in self?.inputAllowed ?? false }
+        let allowed: @MainActor @Sendable () -> Bool = { [weak self] in self?.inputAllowed ?? false }
         switch m.body {
         case .hello, .pair:
             return []   // handled above
@@ -206,7 +206,7 @@ extension Hub {
                 return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")]
             }
             // The backend reads the pane once more right before the keys (`HerdrClient.readyForText`).
-            let result = await backend.send(pane: id, text: text, images: images, agent: p.agent!, allowed: allowed)
+            let result = await backend.send(pane: id, text: text, images: images, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: allowed)
             if result == .sent {
                 // Sent: the files stay for the agent (the folder's purge removes them later).
                 let gone = held.filter { attachments.contains($0.name) }.count
@@ -229,7 +229,7 @@ extension Hub {
             guard case .send(let a) = ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: st.pane, writes: true) else {
                 return [fail(m.id, .stale, "The prompt changed. Nothing was sent.")]
             }
-            guard await backend.approve(pane: id, prompt: prompt, allow: a, allowed: allowed) else {
+            guard await backend.approve(pane: id, prompt: prompt, allow: a, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: allowed) else {
                 if !inputAllowed { return [readOnly(m.id)] }
                 return [fail(m.id, .stale, "The prompt changed before the keys went out. Nothing was sent.")]
             }
@@ -244,7 +244,7 @@ extension Hub {
             guard let q = st.question, q.toolUseId == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
             do {
-                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, allowed: allowed)
+                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: allowed)
                 return [ok(m.id)]
             } catch {
                 if !inputAllowed { return [readOnly(m.id)] }

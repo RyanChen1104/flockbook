@@ -139,7 +139,7 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 | Image metadata leaks (GPS, camera, time) | Re-encoding copies no metadata |
 | The hub writes a file where it should not | Only into its own cache folder, a random name it makes, mode 600, created exclusively; no client path or name is used |
 | Remote text into a shell, or control keys in text | `send` goes to agent panes only; text has no control characters except LF and tab, and a length cap |
-| Remote text lands in a picker | `send` refuses while any prompt or picker is on screen or the agent is blocked, and reads the pane again right before the keys; an unreadable screen refuses every input. Residual: herdr has no compare-and-send, so a prompt that opens between the last read and the keys can still get them (milliseconds) |
+| Remote text lands in a picker | `send` refuses while any prompt or picker is on screen or the agent is blocked, and reads the pane again right before the keys; every key of `send`, `approve` and `answer` is gated (same agent, same prompt on screen read last, `input` level now); an unreadable screen refuses every input. Residual: herdr has no compare-and-send, so a prompt that opens between the last read and the keys can still get them (milliseconds) |
 | A fake certificate on the LAN takes the pairing | Tailscale recommended (and default); LAN marked "less safe"; the fingerprint is for reference only in a browser |
 | One peer burns the pairing offer | 3 wrong tries per source, 20 in all |
 | Logs contain secrets (code, keys, tokens) | Read access is sensitive too: pairing is required even for `read`; nothing is cached on the phone beyond the open session (no offline store of conversations in v1) |

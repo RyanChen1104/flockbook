@@ -69,6 +69,13 @@ Multi-line text is one message: the hub types it as the Mac composer does (`pane
 
 **Unreadable screen.** When the hub cannot read the pane's screen, `send`, `approve` and `answer` reply `failed` and send nothing. Without the screen the hub cannot tell what the keys would answer.
 
+**Every key is gated.** For `send`, `approve` and `answer` the hub asks a gate (`KeyGate`) right before every key
+it sends, not only once: the pane still shows the agent the checks saw (same kind and session, fresh snapshot); the
+screen still shows what the key is for (the same approval box, this question's picker, the new image markers before
+Enter), read last; and the device still has `input` and Allow input is on. Any no stops the input there; the keys
+after it are not sent (`failed`, or `readOnly` when the level changed). A multi-key answer can stop half way; the
+picker then shows where it stopped.
+
 **What stays open.** herdr has no compare-and-send: the last read and the keys are two calls. A prompt that opens in the milliseconds between them can still get the keys. The checks make this window small; they cannot close it. (The Mac card and notification buttons have the same window.)
 
 **Text rules (send, and each `other` of answer).** At most 16,000 characters for `send` and 2,000 for `other`. No control characters except line feed and tab: no ESC (so no bracketed-paste markers or key sequences), no CR, no other C0, no DEL, no C1 (U+0080–U+009F). A breach replies `badRequest` and sends nothing.

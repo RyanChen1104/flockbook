@@ -978,7 +978,6 @@ enum SnapshotRunner {
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         """
         try? py.write(to: script, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: script) }
         let client = store.client
         func screen() async -> String { (try? await client.readScrollback(paneId: paneId, lines: 60, ansi: false).text) ?? "" }
         var failures = 0
@@ -987,7 +986,6 @@ enum SnapshotRunner {
         try? FileManager.default.createDirectory(at: PasteImages.directory, withIntermediateDirectories: true)
         let image = PasteImages.directory.appendingPathComponent(UUID().uuidString + ".png")
         FileManager.default.createFile(atPath: image.path, contents: Data([0x89]))
-        defer { PasteImages.remove(image) }
         let msg = "look at \(image.path)"
         // Control: the old single call (text + Enter) is swallowed by the fake agent.
         try? await client.send(text: "python3 \(script.path)", to: paneId)
@@ -1007,6 +1005,8 @@ enum SnapshotRunner {
         let s = await screen()
         step("MessageSender submits after the attachment appears, the path pasted", s.contains("[Image #1]") && s.contains("SUBMITTED:(pasted) " + msg))
         try? await client.sendNamedKeys(["C-c"], to: paneId)
+        PasteImages.remove(image)   // here, not in a defer: terminate below ends the process before a defer runs
+        try? FileManager.default.removeItem(at: script)
         print("send-image-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }

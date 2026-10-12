@@ -38,7 +38,7 @@ import Foundation
     /// What `allowed()` said right before the keys, per call.
     private(set) var allowedAtKeys: [Bool] = []
     private(set) var sentAgents: [String?] = []
-    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor () -> Bool) async -> HubSendResult {
+    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> HubSendResult {
         beforeKeys?()
         allowedAtKeys.append(allowed())
         guard allowed() else { return .failed }
@@ -48,13 +48,13 @@ import Foundation
         return sendOK ? sendResult : .failed
     }
     var approveOK = true
-    func approve(pane: String, prompt: String, allow: Bool, allowed: @escaping @MainActor () -> Bool) async -> Bool {
+    func approve(pane: String, prompt: String, allow: Bool, agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> Bool {
         beforeKeys?()
         allowedAtKeys.append(allowed())
         guard allowed() else { return false }
         approved.append("\(pane) \(prompt) \(allow)"); return approveOK
     }
-    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], allowed: @escaping @MainActor () -> Bool) async throws {
+    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws {
         beforeKeys?()
         allowedAtKeys.append(allowed())
         guard allowed() else { throw QuestionAdapter.Failure.unsupported("input is off") }

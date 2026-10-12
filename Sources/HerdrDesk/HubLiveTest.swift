@@ -58,6 +58,20 @@ enum HubLiveTest {
                 if case .prompt(let p) = m, p.approval == nil { cleared = true; break }
             }
             step("prompt push without the approval", cleared)
+        } else if let q = prompt?.question {
+            // A question: a stale id is refused, the open one is answered with the first option of each question.
+            try? await c.send(#"{"v":1,"type":"answer","id":"q0","pane":"\#(paneId)","question":"toolu_stale","answers":[{"picks":[0]}]}"#)
+            step("answer with a stale id -> stale", errorCode(await c.untilReply().last) == .stale)
+            let answers = Array(repeating: #"{"picks":[0]}"#, count: max(1, q.headers.count)).joined(separator: ",")
+            try? await c.send(#"{"v":1,"type":"answer","id":"q1","pane":"\#(paneId)","question":"\#(q.id)","answers":[\#(answers)]}"#)
+            let r = await c.untilReply(20).last
+            step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)
+            var cleared = false
+            for _ in 0..<20 {
+                guard let m = await c.next(1) else { continue }
+                if case .prompt(let p) = m, p.question == nil { cleared = true; break }
+            }
+            step("prompt push without the question", cleared)
         } else if prompt?.question == nil {
             let word = "hub-ok-\(Int.random(in: 1000...9999))"
             var attachments = ""
@@ -75,7 +89,7 @@ enum HubLiveTest {
                      newest != nil && props[kCGImagePropertyGPSDictionary as String] == nil && mode == 0o600)
                 attachments = #","attachments":["live-1"]"#
             }
-            try? await c.send(#"{"v":1,"type":"send","id":"s","pane":"\#(paneId)","text":"Reply with just: \#(word)"\#(attachments)}"#)
+            try? await c.send(#"{"v":1,"type":"send","id":"s","pane":"\#(paneId)","text":"Reply with just: \#(word)\#(image ? "\\nline two" : "")"\#(attachments)}"#)
             step("send -> ok", await c.untilReply(8).last.map(isOK) == true)
             // A pane without a transcript (CLAUDE_CODE_CHILD_SESSION) has no conversation to push; its screen still changes.
             var pushed: String?

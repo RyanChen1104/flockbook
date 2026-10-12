@@ -27,9 +27,9 @@ import Foundation
 
     /// The composer's send: the text, then the image paths (quoted as the composer does).
     /// `allowed` (the device's level and Allow input now) is asked before the read and before every key step.
-    func send(pane id: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor () -> Bool) async -> HubSendResult {
+    func send(pane id: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> HubSendResult {
         let model = model
-        let may = { model.writesEnabled && allowed() }
+        let may: @MainActor @Sendable () -> Bool = { model.writesEnabled && allowed() }
         guard may() else { return .failed }
         // herdr has no compare-and-send: this read and the keys are two calls, so a small window stays.
         guard await store.client.readyForText(paneId: id, agent: agent) else { return .changed }
@@ -38,15 +38,19 @@ import Foundation
         guard images.allSatisfy({ ImagePaste.ownFile($0.path) }) else { return .failed }
         model.noteSent(id)
         let message = ([text] + images.map(ComposerHandle.quoted)).filter { !$0.isEmpty }.joined(separator: " ")
-        return await MessageSender.send(message, to: id, client: store.client, kind: agent.kind, allowed: may) ? .sent : .failed
+        return await MessageSender.send(message, to: id, client: store.client, kind: agent.kind,
+                                        gate: KeyGate(agent: agent, allowed: may)) ? .sent : .failed
     }
 
     /// The approval card's keys, without its UI follow-up (the Mac window does not change for a phone action).
-    /// Re-reads the pane right before the keys (`respondIfOpen`): false, and nothing sent, when the prompt changed.
-    func approve(pane id: String, prompt: String, allow: Bool, allowed: @escaping @MainActor () -> Bool) async -> Bool {
+    /// Re-reads the pane right before the keys (`respondIfOpen`): false, and nothing sent, when the prompt, the agent
+    /// (kind and session from the hub's check) or the device's level changed.
+    func approve(pane id: String, prompt: String, allow: Bool, agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> Bool {
+        let model = model
+        let gate = KeyGate(agent: agent, allowed: { model.writesEnabled && allowed() })
         guard model.writesEnabled, allowed(), let p = pane(id), let a = p.agent else { return false }
         guard (try? await store.client.respondIfOpen(paneId: id, prompt: prompt, allow: allow, agentKind: a.kind,
-                                                    blocked: a.status == .blocked, pending: model.pendingRequest(p))) == true else { return false }
+                                                    blocked: a.status == .blocked, pending: model.pendingRequest(p), gate: gate)) == true else { return false }
         try? await Task.sleep(for: .seconds(1))
         await store.refresh()
         if let p = pane(id) { await model.checkPrompt(for: p) }
@@ -54,18 +58,21 @@ import Foundation
     }
 
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);
-    /// the answers must then cover every question, else nothing is sent.
-    func answer(pane id: String, question: QuestionRequest, answers: [QuestionAnswer], allowed: @escaping @MainActor () -> Bool) async throws {
+    /// the answers must then cover every question, else nothing is sent. Every key is gated: the agent from the
+    /// hub's check, this question's picker on screen, the device's level now (`KeyGate`).
+    func answer(pane id: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws {
+        let model = model
+        let gate = KeyGate(agent: agent, allowed: { model.writesEnabled && allowed() })
         guard model.writesEnabled, allowed() else { throw QuestionAdapter.Failure.unsupported("input is off") }
         var q = question
         if q.unread > 0 {
-            guard let full = try await store.client.loadAllQuestions(paneId: id) else { throw QuestionAdapter.Failure.notOnScreen }
+            guard let full = try await store.client.loadAllQuestions(paneId: id, gate: gate) else { throw QuestionAdapter.Failure.notOnScreen }
             q = full
         }
         guard answers.count == q.questions.count else {
             throw QuestionAdapter.Failure.unsupported("\(q.questions.count) questions, \(answers.count) answers")
         }
         guard model.writesEnabled, allowed() else { throw QuestionAdapter.Failure.unsupported("input is off") }
-        try await store.client.answerQuestion(paneId: id, request: q, answers: answers)
+        try await store.client.answerQuestion(paneId: id, request: q, answers: answers, gate: gate)
     }
 }
