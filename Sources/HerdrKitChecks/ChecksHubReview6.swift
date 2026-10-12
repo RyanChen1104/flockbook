@@ -46,7 +46,27 @@ import Foundation
     let swapped = codex.replacingOccurrences(of: "1. Red                r", with: "1. Blue               b")
         .replacingOccurrences(of: "2. Blue               b", with: "2. Red                r")
     let added = codex.replacingOccurrences(of: "3. None of the above", with: "3. Green              g\n    4. None of the above")
-    check(QuestionAdapter.shows(cq, question: 0, screen: codex) && QuestionAdapter.shows(cq, question: 0, screen: notes), "r6 codex: the captured picker and its notes view match")
+    let emptyNotes = notes.replacingOccurrences(of: "› fish note", with: "› Add notes")
+    check(QuestionAdapter.shows(cq, question: 0, screen: codex), "r6 codex: the captured picker matches")
+    // Notes open: a digit would be typed into them. Only the notes state the hub made matches (live captures).
+    check(!QuestionAdapter.shows(cq, question: 0, screen: notes) && !QuestionAdapter.shows(cq, question: 0, screen: emptyNotes),
+          "r6 codex: notes open (typed or empty) -> not a pick screen")
+    check(QuestionAdapter.shows(cq, question: 0, screen: emptyNotes, other: "") && QuestionAdapter.shows(cq, question: 0, screen: notes, other: "fish note")
+          && !QuestionAdapter.shows(cq, question: 0, screen: notes, other: "cat"), "r6 codex: the notes the hub opened or typed match")
+    fake.screen = notes
+    var nn = fake.requests.count
+    do { try await client.answerQuestion(paneId: "w1:p1", request: cq, answers: [QuestionAnswer(picks: [0]), QuestionAnswer(picks: [0])], gate: open) } catch {}
+    check(keys(after: nn) == 0, "r6 codex: notes open -> a pick gets no key (\(keys(after: nn)))")
+    fake.screen = codex
+    fake.onInput = { method, params in
+        if method == "pane.send_keys", (params["keys"] as? [String]) == ["Tab"] { fake.screen = emptyNotes }
+        if method == "pane.send_text" || method == "pane.send_input", fake.screen == emptyNotes { fake.screen = notes.replacingOccurrences(of: "fish note", with: "cat") }
+    }
+    nn = fake.requests.count
+    do { try await client.answerQuestion(paneId: "w1:p1", request: cq, answers: [QuestionAnswer(other: "cat"), QuestionAnswer(picks: [0])], gate: open) } catch {}
+    let sentKeys = fake.requests.dropFirst(nn).filter { keyMethods.contains($0.method) }.map { ($0.params["keys"] as? [String])?.joined() ?? "text" }
+    check(sentKeys.suffix(3) == ["Tab", "text", "Enter"], "r6 codex: notes answer goes Tab, text, Enter through the gate (\(sentKeys))")
+    fake.onInput = nil
     check(!QuestionAdapter.shows(cq, question: 0, screen: swapped), "r6 codex: options in another order -> not this question")
     check(!QuestionAdapter.shows(cq, question: 0, screen: added), "r6 codex: a new option -> not this question")
     var cm = cq; cm.questions[0].multiSelect = true
@@ -76,6 +96,35 @@ import Foundation
     check(!QuestionAdapter.shows(one, question: 0, screen: extra), "r6 claude: a new trailing option -> not this question")
     check(!QuestionAdapter.shows(one, question: 0, screen: typed) && QuestionAdapter.shows(one, question: 0, screen: typed, other: "Green typed"),
           "r6 claude: the typed row only with our own text")
+    // Live 2.1.296: text typed into the "Other" row replaces "Type something." The row is not an option, and a
+    // digit pick there would be typed into it: a request read from such a screen gets no key.
+    check(QuestionAdapter.claudeScreen(typed)?.question.options.map(\.label) == ["Red", "Blue"], "r6 claude: the typed row is not read as an option")
+    let multiTyped = "←  ☐ Tops  ✔ Submit  →\nWhich toppings?\n  1. [ ] Cheese\n  2. [ ] Olive\n❯ 3. [ ] ham please\n     Submit\n────\n  4. Chat about this"
+    check(QuestionAdapter.claudeScreen(multiTyped)?.question.options.map(\.label) == ["Cheese", "Olive"], "r6 claude: the typed row (multi) is not an option")
+    fake.agents = #"[{"pane_id":"w1:p1","agent":"claude","name":"claude","agent_status":"blocked","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"s1"}}]"#
+    fake.screen = typed
+    if let shown = QuestionAdapter.claudeScreen(typed) {
+        let fromScreen = QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question])
+        n = fake.requests.count
+        do { try await client.answerQuestion(paneId: "w1:p1", request: fromScreen, answers: [QuestionAnswer(picks: [0])],
+                                             gate: KeyGate(agent: Agent(name: "claude", kind: "claude", status: .blocked, sessionId: "s1", title: ""), allowed: { true })) } catch {}
+        check(keys(after: n) == 0, "r6 claude: text in the Other row -> a pick gets no key (\(keys(after: n)))")
+    } else { check(false, "r6 claude: the typed screen parses") }
+    // Review 7 (0463fe2): the hub's question id covers what the card showed; "Type something" prefixes are options;
+    // Codex marks a recommended option on screen.
+    let rb = QuestionAdapter.screenRequest(headers: ["Color"], questions: [.init(header: "Color", text: "Pick a color?", options: [opt("Red"), opt("Blue")], multiSelect: false)])
+    let rg = QuestionAdapter.screenRequest(headers: ["Color"], questions: [.init(header: "Color", text: "Pick a color?", options: [opt("Red"), opt("Green")], multiSelect: false)])
+    var rbm = rb; rbm.questions[0].multiSelect = true
+    check(rb.toolUseId == rg.toolUseId && Hub.questionID(rb) != Hub.questionID(rg) && Hub.questionID(rb) != Hub.questionID(rbm) && Hub.questionID(rb) == Hub.questionID(rb),
+          "r7 id: same screen id, other options or mode -> another hub id")
+    check(Hub.questionID(cq) == "call_1" && HubQuestion(rb).id == Hub.questionID(rb), "r7 id: log ids unchanged; the pushed card carries the hub id")
+    let prefixed = claude.replacingOccurrences(of: "  3. Type something.", with: "  3. Type something else\n  4. Type something.")
+    check(QuestionAdapter.claudeScreen(prefixed)?.question.options.map(\.label) == ["Red", "Blue", "Type something else"], "r7 claude: an option starting with 'Type something' is an option")
+    check(QuestionAdapter.claudeScreen(claude.replacingOccurrences(of: "────────────────────\n", with: "")) == nil, "r7 claude: no line above 'Chat about this' -> not read")
+    let recommended = codex.replacingOccurrences(of: "1. Red                r", with: "1. Red (Recommended)  r")
+    var cr = cq; cr.questions[0].options[0].recommended = true
+    check(QuestionAdapter.shows(cr, question: 0, screen: recommended) && !QuestionAdapter.shows(cr, question: 0, screen: recommended.replacingOccurrences(of: "Red (Recommended)", with: "Rose (Recommended)")),
+          "r7 codex: a recommended option matches with its mark")
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 

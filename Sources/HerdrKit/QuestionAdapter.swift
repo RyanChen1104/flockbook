@@ -156,49 +156,64 @@ public enum QuestionAdapter {
     }
 
     /// The picker shows question `k` of `q` exactly: its text, its options in order and no other, the same mode
-    /// (multiSelect), and for Claude the request's headers in the tab bar. `other`: the text we typed into Claude's
-    /// "Type something" row, which then shows as one more row with that text. Codex: its rows are the options in
-    /// order, then its own "None of the above".
+    /// (multiSelect), and for Claude the request's headers in the tab bar. `other`: what the hub put into the free
+    /// text field so far: nil = nothing (Claude's "Other" row empty, Codex notes closed), "" = Codex notes opened
+    /// and empty, else the text typed. Any other state (the user's own text, notes left open) is no match: a digit
+    /// would be typed into that field. Codex: its rows are the options in order, then its own "None of the above".
     public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil) -> Bool {
         guard q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" {
             guard !want.multiSelect, let s = codexScreen(screen), s.text == flat(want.text), s.rows.count == labels.count + 1,
-                  s.rows.last?.hasPrefix(codexOtherLabel) == true else { return false }
-            return zip(s.rows, labels).allSatisfy { row, label in row == label || row.hasPrefix(label + "  ") }
+                  s.rows.last?.hasPrefix(codexOtherLabel) == true, s.notes == other.map(flat) else { return false }
+            // A row: the label (maybe marked "(Recommended)"), then its description after two spaces.
+            return zip(s.rows, want.options).allSatisfy { row, o in
+                let (label, rec) = stripRecommended(row.components(separatedBy: "  ").first ?? row)
+                return flat(label) == flat(o.label) && rec == o.recommended
+            }
         }
-        guard let s = claudeScreen(screen), q.headers.isEmpty || s.headers == q.headers,
-              flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect else { return false }
-        let shown = s.question.options.map { flat($0.label) }
-        if shown == labels { return true }
-        guard let other, !other.isEmpty else { return false }
-        return shown == labels + [flat(other)]
+        guard let s = claudeParse(screen), q.headers.isEmpty || s.headers == q.headers,
+              flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
+              s.question.options.map({ flat($0.label) }) == labels else { return false }
+        // Text in the "Other" row: only ours. With text there, a digit would be typed into it, not pick.
+        return s.typed.map(flat) == other.map(flat).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Codex's picker, read from the screen: the question text (flat) and its option rows in order, each row's
-    /// text after "N." (label, then its description after two spaces). Nil when no Codex picker is shown or the
+    /// text after "N." (label, then its description after two spaces), and `notes`: nil when closed, "" when open
+    /// and empty ("› Add notes"), else their text (Codex 0.162, live). Nil when no Codex picker is shown or the
     /// rows are not numbered 1, 2, 3...
-    static func codexScreen(_ screen: String) -> (text: String, rows: [String])? {
+    static func codexScreen(_ screen: String) -> (text: String, rows: [String], notes: String?)? {
         let lines = screen.components(separatedBy: "\n")
         guard let start = lines.lastIndex(where: { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }),
               pickerRegion(agent: "codex", screen: screen) != nil else { return nil }
         let rowRe = /^\s*(?:›\s*)?(\d+)\.\s+(.*)$/
-        var text: [String] = [], rows: [String] = []
+        var text: [String] = [], rows: [String] = [], notes: [String] = [], inNotes = false, after = false
         for l in lines[(start + 1)...] {
             let t = l.trimmingCharacters(in: .whitespaces)
-            if let m = l.wholeMatch(of: rowRe) {
+            if t.contains("enter to submit") {
+                if t.contains("clear notes") != inNotes { return nil }   // the key line and the field disagree
+                break
+            }
+            if inNotes {
+                if !t.isEmpty { notes.append(t) }
+            } else if !after, let m = l.wholeMatch(of: rowRe) {
                 guard Int(m.1) == rows.count + 1 else { return nil }
                 rows.append(String(m.2).trimmingCharacters(in: .whitespaces))
             } else if rows.isEmpty {
                 if !t.isEmpty { text.append(t) }
-            } else if t.isEmpty || t.hasPrefix("›") || t.contains("enter to submit") {
-                break
+            } else if t.isEmpty {
+                after = true
+            } else if after, t.hasPrefix("›") {
+                inNotes = true
+                notes.append(String(t.dropFirst()).trimmingCharacters(in: .whitespaces))
             } else {
-                return nil   // a wrapped row: cannot be compared exactly
+                return nil   // a wrapped row or something unknown: cannot be compared exactly
             }
         }
         guard !rows.isEmpty, !text.isEmpty else { return nil }
-        return (flat(text.joined(separator: " ")), rows)
+        let typed = flat(notes.joined(separator: "\n"))
+        return (flat(text.joined(separator: " ")), rows, inNotes ? (typed == "Add notes" ? "" : typed) : nil)
     }
 
     /// Two questions are the same: text, option labels in order, mode.
@@ -325,6 +340,13 @@ extension QuestionAdapter {
     /// picker is open the question exists only on screen. This reads the visible question: the tab-bar headers
     /// (one per question) and the current question with its options. Nil when no Claude picker is shown.
     public static func claudeScreen(_ screen: String) -> (headers: [String], question: QuestionRequest.Question)? {
+        claudeParse(screen).map { ($0.headers, $0.question) }
+    }
+
+    /// `claudeScreen` plus `typed`: text typed into the "Other" row. 2.1.296 always shows that row as the last
+    /// numbered row before the line above "Chat about this": "Type something." (multiSelect "Type something") when
+    /// empty, else the typed text. It is never an option. No such line: nil (not a layout this reads).
+    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?)? {
         let lines = screen.components(separatedBy: "\n")
         guard let end = lines.lastIndex(where: { $0.contains("Chat about this") }) else { return nil }
         let isBar: (String) -> Bool = { l in
@@ -335,13 +357,12 @@ extension QuestionAdapter {
         let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
         let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
-        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false
+        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("──") { break }
+            if t.hasPrefix("──") { closed = true; break }
             if let m = l.wholeMatch(of: optRe) {
                 let label = String(m.3).trimmingCharacters(in: .whitespaces)
-                if label.hasPrefix("Type something") { break }
                 inOptions = true
                 if m.2 != nil { multi = true }
                 let (clean, rec) = stripRecommended(label)
@@ -352,9 +373,12 @@ extension QuestionAdapter {
                 text.append(t)
             }
         }
+        // The last row is the "Other" row.
+        guard closed, let last = options.popLast() else { return nil }
+        let typed: String? = last.label == "Type something." || last.label == "Type something" ? nil : last.label
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
-        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi))
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed)
     }
 }
 
@@ -397,19 +421,25 @@ extension HerdrClient {
                 throw QuestionAdapter.Failure.stuck("back to question 1")
             }
         }
-        var at = 0, review = false
+        // `shown`: what the "Other" row of question `at` should hold now: empty until the hub typed its text there.
+        var at = 0, review = false, otherOpen = false, shown: String?
         for step in steps {
-            let k = at, r = review
-            let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
-            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: typed) }
+            let k = at, r = review, inRow = shown
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
                 try await sendKeys(Array(s.utf8), to: paneId)   // typed as is: no Enter, not as a paste
+                let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
+                if typed != nil, q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true }
+                else if otherOpen, s == typed { shown = typed }
             case .keys(let k):
                 try await gatedKeys(k, gate: gate, paneId: paneId, screen: same)
+                // Codex: Tab on "None of the above" opens its notes, empty.
+                if q.agent == "codex", k.last == "Tab", answers.indices.contains(at), QuestionAdapter.otherText(answers[at]) != nil { otherOpen = true; shown = "" }
             case .waitFor(let s):
                 if s == "Review your answers" { review = true } else { at += 1 }
+                otherOpen = false; shown = nil
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }

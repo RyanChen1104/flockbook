@@ -77,6 +77,18 @@ public enum Hub {
     /// or Codex question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
     /// confirm", "Esc to cancel", "enter to submit", "enter continue"), such as Claude's setup and folder-trust
     /// pickers and Codex's trust picker.
+    /// The id the hub gives a question. A log question keeps its call id. A Claude screen question ("screen-…",
+    /// built from the headers only) also gets a hash of what the card shows: the questions read (text, options,
+    /// mode). An answer from a card whose question has changed since is then `stale`, even with the same headers.
+    public static func questionID(_ q: QuestionRequest) -> String {
+        guard q.toolUseId.hasPrefix("screen-") else { return q.toolUseId }
+        let key = ([q.headers.joined(separator: "\u{1f}")] + q.questions.map { k in
+            ([QuestionAdapter.flat(k.text), k.multiSelect ? "multi" : "one"] + k.options.map { QuestionAdapter.flat($0.label) }).joined(separator: "\u{1f}")
+        }).joined(separator: "\u{1e}")
+        let hash = key.utf8.reduce(UInt64(14695981039346656037)) { ($0 ^ UInt64($1)) &* 1099511628211 }   // FNV-1a, stable across runs
+        return q.toolUseId + "-" + String(hash, radix: 16)
+    }
+
     public static func screenTakesKeys(_ screen: String) -> Bool {
         if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
             || QuestionAdapter.pickerRegion(agent: "codex", screen: screen) != nil
@@ -426,7 +438,7 @@ public struct HubQuestion: Codable, Hashable, Sendable {
     /// One per question when answered and known.
     public var answers: [String]?
     public init(_ q: QuestionRequest) {
-        id = q.toolUseId; agent = q.agent; delivery = q.delivery == .picker ? .picker : .message
+        id = Hub.questionID(q); agent = q.agent; delivery = q.delivery == .picker ? .picker : .message
         headers = q.headers; questions = q.questions.map(HubQuestionItem.init)
         switch q.state {
         case .pending: state = .pending

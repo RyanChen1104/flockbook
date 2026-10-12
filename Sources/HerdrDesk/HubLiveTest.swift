@@ -40,7 +40,14 @@ enum HubLiveTest {
         try? await c.send(#"{"v":1,"type":"watch","id":"w","pane":"\#(paneId)"}"#)
         let watch = await c.untilReply()
         step("watch -> \(watch.map(\.type))", watch.last.map(isOK) == true)
-        let prompt = watch.compactMap { if case .prompt(let p) = $0 { p } else { nil } }.last
+        var prompt = watch.compactMap { if case .prompt(let p) = $0 { p } else { nil } }.last
+        // A log the store had not read yet (Codex's question is in its log) arrives in a later push.
+        if prompt?.approval == nil, prompt?.question == nil, model.store.workspaces.flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == paneId })?.agent?.status == .blocked {
+            for _ in 0..<6 {
+                guard let m = await c.next(1) else { continue }
+                if case .prompt(let p) = m { prompt = p; break }
+            }
+        }
         print("test-hub: prompt = approval \(prompt?.approval.map { "\($0.id) \($0.tool) | \($0.command)" } ?? "none"), question \(prompt?.question?.id ?? "none")")
 
         if let a = prompt?.approval {
@@ -62,7 +69,7 @@ enum HubLiveTest {
             // A question: a stale id is refused, the open one is answered with the first option of each question.
             try? await c.send(#"{"v":1,"type":"answer","id":"q0","pane":"\#(paneId)","question":"toolu_stale","answers":[{"picks":[0]}]}"#)
             step("answer with a stale id -> stale", errorCode(await c.untilReply().last) == .stale)
-            let answers = Array(repeating: #"{"picks":[0]}"#, count: max(1, q.headers.count)).joined(separator: ",")
+            let answers = Array(repeating: #"{"picks":[0]}"#, count: max(1, q.headers.count, q.questions.count)).joined(separator: ",")
             try? await c.send(#"{"v":1,"type":"answer","id":"q1","pane":"\#(paneId)","question":"\#(q.id)","answers":[\#(answers)]}"#)
             let r = await c.untilReply(20).last
             step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)

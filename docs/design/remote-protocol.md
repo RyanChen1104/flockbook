@@ -174,7 +174,7 @@ Tool inputs and outputs are not sent in v1 (size; the phone shows the summary).
 
 **Approval** `{id, tool, title, command, state}`. `state`: `pending` / `resolved`.
 
-**Question** `{id, agent, delivery, state, headers, questions, answers?}`. `delivery`: `picker` / `message`. `state`: `pending` / `answered` / `declined`. `answers`: one string per question when answered and known. Each question: `{id, header, text, multiSelect, options: [{label, detail?, recommended?}]}`.
+**Question** `{id, agent, delivery, state, headers, questions, answers?}`. `delivery`: `picker` / `message`. `state`: `pending` / `answered` / `declined`. `answers`: one string per question when answered and known. `id`: the log's call id; for a Claude picker read from the screen, `screen-<headers hash>-<content hash>`, where the content hash covers the questions the card shows (text, options in order, single or multi choice), so an answer from a card whose question has changed since is `stale`. Each question: `{id, header, text, multiSelect, options: [{label, detail?, recommended?}]}`.
 
 ## 6. Levels
 

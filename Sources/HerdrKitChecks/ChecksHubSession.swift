@@ -232,7 +232,8 @@ import Foundation
         let stale = await s.receive(msg(#"{"v":1,"type":"answer","id":"c2","pane":"w1:p1","question":"screen-0","answers":[{"picks":[0]}]}"#))
         check(code(stale) == .stale && b.answered.isEmpty, "hub session: answer another question -> stale, nothing sent")
         let ok = await s.receive(msg(#"{"v":1,"type":"answer","id":"c3","pane":"w1:p1","question":"\#(q?.id ?? "")","answers":[{"picks":[1]}]}"#))
-        check(reply(ok)?.ok == true && b.answered == ["w1:p1 \(q?.id ?? "") [[1]]"], "hub session: answer the open question -> answered")
+        let screenID = q.map { String($0.id[..<($0.id.lastIndex(of: "-") ?? $0.id.endIndex)]) } ?? ""   // the hub id = screen id + "-" + content hash
+        check(reply(ok)?.ok == true && b.answered == ["w1:p1 \(screenID) [[1]]"], "hub session: answer the open question -> answered")
         // Codex async question (answered by a message): the app does not answer it either.
         let cb = FakeHubBackend(workspaces: ws(.idle, kind: "codex"))
         let cq = QuestionRequest(toolUseId: "call_1", agent: "codex", delivery: .message, questions: [.init(header: "", text: "Which?", options: [.init(label: "A")])])
