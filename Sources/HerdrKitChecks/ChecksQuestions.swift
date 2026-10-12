@@ -115,7 +115,7 @@ import Foundation
               "keys: claude three questions")
         var cx = three; cx.agent = "codex"; cx.questions[1].multiSelect = false
         check((try? QuestionAdapter.steps(for: cx, answers: [A(picks: [0]), A(picks: [1]), A(other: "一隻魚")])) ==
-              [.text("1"), .waitFor("Second?"), .text("2"), .waitFor("Third?"), .keys(["Down", "Down", "Tab"]), .text("一隻魚"), .keys(["Enter"])],
+              [.text("1"), .waitFor("Second?"), .text("2"), .waitFor("Third?"), .keys(["Down", "Down"]), .keys(["Tab"]), .text("一隻魚"), .keys(["Enter"])],
               "keys: codex digits, notes on None of the above")
         var cxm = multi; cxm.agent = "codex"
         func fails(_ q: QuestionRequest, _ a: [A]) -> Bool { (try? QuestionAdapter.steps(for: q, answers: a)) == nil }

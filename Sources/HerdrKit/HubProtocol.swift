@@ -73,10 +73,14 @@ public enum Hub {
         return lines[(at + 1)...].prefix(4).contains { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "❯", with: "").trimmingCharacters(in: .whitespaces).hasPrefix("1.") }
     }
 
-    /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude
-    /// or Codex question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
-    /// confirm", "Esc to cancel", "enter to submit", "enter continue"), such as Claude's setup and folder-trust
-    /// pickers and Codex's trust picker.
+    /// The one switch for questions read only from the screen (Claude Code writes AskUserQuestion to its log only
+    /// after the answer). Off: a remote device cannot answer them, since a screen the agent's text is on cannot
+    /// prove which row a key picks; the card says to answer on the Mac. Questions from the log are not affected.
+    public static let screenQuestionsRemote = false
+
+    /// The question was read from the screen, not from the agent's log.
+    public static func screenRead(_ q: QuestionRequest) -> Bool { q.toolUseId.hasPrefix("screen-") }
+
     /// The id the hub gives a question. A log question keeps its call id. A Claude screen question ("screen-…",
     /// built from the headers only) also gets a hash of what the card shows: the questions read (text, options,
     /// mode). An answer from a card whose question has changed since is then `stale`, even with the same headers.
@@ -89,6 +93,10 @@ public enum Hub {
         return q.toolUseId + "-" + String(hash, radix: 16)
     }
 
+    /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude
+    /// or Codex question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
+    /// confirm", "Esc to cancel", "enter to submit", "enter continue"), such as Claude's setup and folder-trust
+    /// pickers and Codex's trust picker.
     public static func screenTakesKeys(_ screen: String) -> Bool {
         if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
             || QuestionAdapter.pickerRegion(agent: "codex", screen: screen) != nil
@@ -437,9 +445,12 @@ public struct HubQuestion: Codable, Hashable, Sendable {
     public var questions: [HubQuestionItem]
     /// One per question when answered and known.
     public var answers: [String]?
+    /// True: only the Mac answers it (`Hub.screenQuestionsRemote`); the phone shows it. Absent: the phone may answer.
+    public var onMac: Bool?
     public init(_ q: QuestionRequest) {
         id = Hub.questionID(q); agent = q.agent; delivery = q.delivery == .picker ? .picker : .message
         headers = q.headers; questions = q.questions.map(HubQuestionItem.init)
+        if !Hub.screenQuestionsRemote, Hub.screenRead(q) { onMac = true }
         switch q.state {
         case .pending: state = .pending
         case .answered(let a): state = .answered; answers = a

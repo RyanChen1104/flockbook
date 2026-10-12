@@ -164,18 +164,10 @@ public enum QuestionAdapter {
     /// "": on it, anywhere for multiSelect; text: on it).
     public enum FieldFocus: Sendable { case auto, any, other, submit }
 
-    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil, focus: FieldFocus = .auto) -> Bool {
+    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil, focus: FieldFocus = .auto, row: Int? = nil) -> Bool {
         guard q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
-        if q.agent == "codex" {
-            guard !want.multiSelect, let s = codexScreen(screen), s.text == flat(want.text), s.rows.count == labels.count + 1,
-                  s.rows.last?.hasPrefix(codexOtherLabel) == true, s.notes == other.map(flat) else { return false }
-            // A row: the label (maybe marked "(Recommended)"), then its description after two spaces.
-            return zip(s.rows, want.options).allSatisfy { row, o in
-                let (label, rec) = stripRecommended(row.components(separatedBy: "  ").first ?? row)
-                return flat(label) == flat(o.label) && rec == o.recommended
-            }
-        }
+        if q.agent == "codex" { return codexExact(q, question: k, screen: screen, notes: other, row: row) }
         // Exactly one focus mark: with none or two, the hub cannot know where a key lands.
         guard let s = claudeParse(screen), s.focusMarks == 1, q.headers.isEmpty || s.headers == q.headers,
               flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
@@ -196,6 +188,47 @@ public enum QuestionAdapter {
         case .other: return field && s.otherFocused
         case .submit: return field && s.submitFocused
         }
+    }
+
+    /// Codex 0.162.1's rendering of the logged question `k` is on screen, exactly. The picker head
+    /// ("Question k/n", maybe "(m unanswered)") and the key line (the screen's last line, closed or open notes) are
+    /// Codex's own; everything between them is compared with all whitespace dropped (wrapping does not count) to
+    /// the question text, then per row its number, label (with the log's "(Recommended)") and description, then
+    /// Codex's "None of the above" row, then the notes (`notes`: nil closed, "" open and empty, else the hub's
+    /// text). The focus mark "›" may stand only right before a row number: one row must have it, the `row` one
+    /// when given (0-based). Text in between is matched as the log's text, so a mark or a number in it is text.
+    /// A request read from the screen (no log) never matches. Any other change (a new Codex version) refuses.
+    static func codexExact(_ q: QuestionRequest, question k: Int, screen: String, notes: String?, row: Int?) -> Bool {
+        guard q.agent == "codex", !q.toolUseId.hasPrefix("screen-"), q.questions.indices.contains(k) else { return false }
+        let want = q.questions[k]
+        guard !want.multiSelect else { return false }
+        let lines = screen.components(separatedBy: "\n")
+        guard let head = lines.lastIndex(where: { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }),
+              let foot = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }), foot > head,
+              let m = lines[head].trimmingCharacters(in: .whitespaces).wholeMatch(of: /Question (\d+)\/(\d+)(?: \(\d+ unanswered\))?/),
+              Int(m.1) == k + 1, Int(m.2) == q.questions.count else { return false }
+        let key = lines[foot].trimmingCharacters(in: .whitespaces)
+        guard key.hasPrefix(notes == nil ? "tab to add notes | enter to submit" : "tab or esc to clear notes | enter to submit") else { return false }
+        let bare: (String) -> String = { String($0.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }) }
+        var body = Substring(bare(lines[(head + 1)..<foot].joined(separator: "\n")))
+        func take(_ lit: String) -> Bool {
+            guard body.hasPrefix(lit) else { return false }
+            body = body.dropFirst(lit.count); return true
+        }
+        guard take(bare(want.text)) else { return false }
+        var marked: [Int] = []
+        let rows: [(label: [String], detail: String)] = want.options.map { o in
+            (o.recommended ? recommendedSuffixes.map { bare(o.label + $0) } : [bare(o.label)], bare(o.detail))
+        } + [([bare(codexOtherLabel)], bare("Optionally, add details in notes (tab)"))]
+        for (i, r) in rows.enumerated() {
+            if take("›") { marked.append(i) }   // a row starts with its number: a mark before it is the focus
+            guard take("\(i + 1).") else { return false }
+            let fits = r.label.filter { body.hasPrefix($0) }
+            guard fits.count == 1, take(fits[0]), take(r.detail) else { return false }
+        }
+        if let notes { guard take("›" + (notes.isEmpty ? "Addnotes" : bare(notes))) else { return false } }
+        guard body.isEmpty, marked.count == 1 else { return false }
+        return row.map { marked == [$0] } ?? true
     }
 
     /// Codex's picker, read from the screen: the question text (flat) and its option rows in order, each row's
@@ -329,7 +362,10 @@ public enum QuestionAdapter {
             if question.multiSelect { throw Failure.unsupported("Codex has no multiSelect picker") }
             let a = answers[k], n = question.options.count
             if let other = otherText(a) {
-                out += [.keys(Array(repeating: "Down", count: a.picks.first ?? n) + ["Tab"]), .text(other), .keys(["Enter"])]
+                // Tab is its own step: it waits for the focus on the row it opens the notes for (`answerQuestion`).
+                let row = a.picks.first ?? n
+                if row > 0 { out.append(.keys(Array(repeating: "Down", count: row))) }
+                out += [.keys(["Tab"]), .text(other), .keys(["Enter"])]
             } else {
                 out.append(.text("\(a.picks[0] + 1)"))
             }
@@ -470,10 +506,14 @@ extension HerdrClient {
         // `shown`: what the "Other" row of question `at` should hold now: empty until the hub typed its text there.
         // `focus`: Claude multiSelect "Other": Down keys may run with focus anywhere, the text and Tab need it on the
         // row, Enter needs it on Submit (live, 2.1.296).
-        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto
+        // `row` (Codex): the row whose notes the hub opens; Tab and every key after it need the focus there.
+        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto, row: Int?
         for step in steps {
-            let k = at, r = review, inRow = shown, f = focus
-            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f) }
+            if q.agent == "codex", step == .keys(["Tab"]), answers.indices.contains(at), q.questions.indices.contains(at) {
+                row = answers[at].picks.first ?? q.questions[at].options.count
+            }
+            let k = at, r = review, inRow = shown, f = focus, fr = row
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f, row: fr) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
@@ -492,7 +532,7 @@ extension HerdrClient {
                 if q.agent == "codex", k.last == "Tab", answers.indices.contains(at), QuestionAdapter.otherText(answers[at]) != nil { otherOpen = true; shown = "" }
             case .waitFor(let s):
                 if s == "Review your answers" { review = true } else { at += 1 }
-                otherOpen = false; typedIn = false; shown = nil; focus = .auto
+                otherOpen = false; typedIn = false; shown = nil; focus = .auto; row = nil
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }

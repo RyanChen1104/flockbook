@@ -440,9 +440,10 @@ function fullQuestion(q: QuestionRequest, items: Item[]): QuestionRequest | null
 function questionCard(pane: string, prompt: QuestionRequest, items: Item[]): HTMLElement {
   const q = fullQuestion(prompt, items);
   const head = h("div", { class: "card-head" }, h("span", { class: "ask", "aria-hidden": "true" }, "?"), h("strong", {}, "Question"));
-  if (!q || q.delivery !== "picker" || !canInput()) {
+  if (!q || q.delivery !== "picker" || q.onMac || !canInput()) {
     const why = !canInput() ? "Read only: answer on the Mac, or turn on input for this device."
-      : !q ? `${prompt.headers.length} questions: answer them on the Mac.` : "Answer this one in the terminal.";
+      : !q ? `${prompt.headers.length} questions: answer them on the Mac.`
+      : q.onMac ? "Answer this question on the Mac." : "Answer this one in the terminal.";
     return h("div", { class: "card question glass-float" }, head,
       ...prompt.questions.map((x) => h("p", {}, x.text)), h("p", { class: "fine" }, why));
   }

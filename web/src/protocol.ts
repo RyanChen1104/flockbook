@@ -14,6 +14,8 @@ export interface Question { id: string; header: string; text: string; multiSelec
 export interface QuestionRequest {
   id: string; agent: string; delivery: "picker" | "message"; state: "pending" | "answered" | "declined";
   headers: string[]; questions: Question[]; answers?: string[];
+  /** Only the Mac answers it (read from the screen, not from the agent's log). */
+  onMac?: boolean;
 }
 export interface ToolCall { id: string; tool: string; summary: string; done: boolean; error: boolean }
 export interface ToolChip { symbol: string; text: string; calls: ToolCall[] }

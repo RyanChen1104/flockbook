@@ -39,8 +39,9 @@ import Foundation
 
       tab or esc to clear notes | enter to submit answer
     """
+    // The log's descriptions are the screen's ("r", "b"): a key needs the exact rendering (review 7).
     var cq = QuestionRequest(toolUseId: "call_1", agent: "codex", questions: [
-        .init(header: "Color", text: "Pick a color?", options: [opt("Red"), opt("Blue")], multiSelect: false),
+        .init(header: "Color", text: "Pick a color?", options: [.init(label: "Red", detail: "r"), .init(label: "Blue", detail: "b")], multiSelect: false),
         .init(header: "Size", text: "Pick a size?", options: [opt("Small"), opt("Large")], multiSelect: false)], headers: [])
     cq.state = .pending
     let swapped = codex.replacingOccurrences(of: "1. Red                r", with: "1. Blue               b")
@@ -58,7 +59,10 @@ import Foundation
     do { try await client.answerQuestion(paneId: "w1:p1", request: cq, answers: [QuestionAnswer(picks: [0]), QuestionAnswer(picks: [0])], gate: open) } catch {}
     check(keys(after: nn) == 0, "r6 codex: notes open -> a pick gets no key (\(keys(after: nn)))")
     fake.screen = codex
+    // Down moves the focus as Codex does: Tab waits for it on "None of the above" (review 7).
+    let onNone = codex.replacingOccurrences(of: "  › 1. Red", with: "    1. Red").replacingOccurrences(of: "    3. None", with: "  › 3. None")
     fake.onInput = { method, params in
+        if method == "pane.send_keys", (params["keys"] as? [String]) == ["Down"] { fake.screen = onNone }
         if method == "pane.send_keys", (params["keys"] as? [String]) == ["Tab"] { fake.screen = emptyNotes }
         if method == "pane.send_text" || method == "pane.send_input", fake.screen == emptyNotes { fake.screen = notes.replacingOccurrences(of: "fish note", with: "cat") }
     }

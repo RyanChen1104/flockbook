@@ -76,13 +76,22 @@ enum HubLiveTest {
             let answers = Array(repeating: one, count: max(1, q.headers.count, q.questions.count)).joined(separator: ",")
             try? await c.send(#"{"v":1,"type":"answer","id":"q1","pane":"\#(paneId)","question":"\#(q.id)","answers":[\#(answers)]}"#)
             let r = await c.untilReply(20).last
-            step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)
-            var cleared = false
-            for _ in 0..<20 {
-                guard let m = await c.next(1) else { continue }
-                if case .prompt(let p) = m, p.question == nil { cleared = true; break }
+            if q.onMac == true {
+                // Read from the screen only (Claude): the Mac answers it; the hub sends nothing and the picker stays.
+                step("screen-read question: marked onMac, answer -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")",
+                     r.map(isOK) == false && errorCode(r) == .failed)
+                try? await Task.sleep(for: .seconds(1))
+                let screen = (try? await model.store.client.visibleText(paneId: paneId)) ?? ""
+                step("picker still open, nothing chosen", QuestionAdapter.claudeScreen(screen)?.question.text == q.questions.first?.text)
+            } else {
+                step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)
+                var cleared = false
+                for _ in 0..<20 {
+                    guard let m = await c.next(1) else { continue }
+                    if case .prompt(let p) = m, p.question == nil { cleared = true; break }
+                }
+                step("prompt push without the question", cleared)
             }
-            step("prompt push without the question", cleared)
         } else if prompt?.question == nil {
             let word = "hub-ok-\(Int.random(in: 1000...9999))"
             var attachments = ""

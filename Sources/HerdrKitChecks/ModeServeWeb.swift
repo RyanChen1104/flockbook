@@ -15,7 +15,7 @@ import ImageIO
     var ws = [
         Workspace(id: "w1", label: "site", tabs: [
             Tab(id: "w1:t1", label: "build", number: 1, panes: [pane("w1:p1", agent(.blocked, "s1", "Fix the build"))], status: .blocked),
-            Tab(id: "w1:t2", label: "deploy", number: 2, panes: [pane("w1:p2", agent(.blocked, "s2", "Deploy target"))], status: .blocked),
+            Tab(id: "w1:t2", label: "deploy", number: 2, panes: [pane("w1:p2", agent(.blocked, "s2", "Deploy target", kind: "codex"))], status: .blocked),
         ]),
         Workspace(id: "w2", label: "api", tabs: [
             Tab(id: "w2:t1", label: "tests", number: 1, panes: [pane("w2:p1", agent(.working, "s3", "Add tests", kind: "codex"))], status: .working),
@@ -49,16 +49,26 @@ import ImageIO
 
      Esc to cancel · Tab to amend
     """
-    let q = QuestionRequest(toolUseId: "tq1", questions: [.init(header: "Target", text: "Which target?",
+    // A Codex question from its log: the phone may answer it. (A Claude one, read from the screen, is for the Mac: "ask me".)
+    let q = QuestionRequest(toolUseId: "tq1", agent: "codex", questions: [.init(header: "Target", text: "Which target?",
                             options: [.init(label: "Staging", detail: "The test site", recommended: true), .init(label: "Production")])])
     b.items["s2"] = [ConversationItem(id: "b1", kind: .userText("Deploy it.")), ConversationItem(id: "b2", kind: .question(q))]
     b.screens["w1:p2"] = """
+      Question 1/1 (1 unanswered)
+      Which target?
+
+      › 1. Staging (Recommended)  The test site
+        2. Production
+        3. None of the above      Optionally, add details in notes (tab)
+
+      tab to add notes | enter to submit answer | esc to interrupt
+    """
+    let claudePicker = """
      ←  ☐ Target  ✔ Submit  →
 
     Which target?
 
-    ❯ 1. Staging (Recommended)
-         The test site
+    ❯ 1. Staging
       2. Production
       3. Type something.
     ──────────────────────────
@@ -123,6 +133,8 @@ import ImageIO
             b.items[sid, default: []].append(ConversationItem(id: "u\(now.2)", kind: .userText(text)))
             // "block me": another agent starts to wait (the PWA's in-app alert).
             if text == "block me" { b.screens["w2:p1"] = "Waiting for you"; setStatus("w2:p1", .blocked) }
+            // "ask me": Claude opens a question picker (read from the screen only).
+            if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
         }
         seen = now
         try? await Task.sleep(for: .milliseconds(100))

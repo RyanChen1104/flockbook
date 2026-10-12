@@ -61,7 +61,7 @@ The in-app card binds its buttons to the request it shows (`ApprovalNotice.cardR
 
 A screen that shows a permission prompt the hub cannot read (the marker line, but no prompt box it can parse) counts as an open prompt: `approve` replies `stale` (no id matches), `send` replies `promptOpen`. The hub fails closed.
 
-**answer.** The hub reads the open question again (Claude: the picker on screen; Codex: the pending question in the log). It answers only when that question's id equals `question`. Otherwise it replies `stale`. Only a picker question can be answered from a client (`delivery: "picker"`, as in the app); a `message` question replies `failed`. Claude shows one question of a set at a time (`headers` names all of them). The hub then reads the others first (navigation keys only, as the app card does) and needs one answer per question; a different count replies `failed` and nothing is chosen.
+**answer.** The hub reads the open question again (Claude: the picker on screen; Codex: the pending question in the log). It answers only when that question's id equals `question`. Otherwise it replies `stale`. Only a picker question can be answered from a client (`delivery: "picker"`, as in the app); a `message` question replies `failed`. A question the hub could read only from the screen (Claude Code writes AskUserQuestion to its log only after the answer) is shown with `onMac: true` and an `answer` to it replies `failed` ("Answer this question on the Mac"), nothing sent: the agent's own text is on that screen, so the screen alone cannot prove which row a key picks. Only questions from the agent's log (Codex `request_user_input`) are answered from a client. One switch in the hub (`Hub.screenQuestionsRemote`, off) controls this.
 
 **send.** Only to an agent pane: a plain shell replies `readOnly` (shell input stays off remotely). When the pane has an open prompt (an approval, a question, a prompt the hub cannot read, a blocked agent, or any picker with its key line on screen, such as Claude's setup or folder-trust pickers), the hub refuses with `promptOpen` and sends nothing. Text typed into a permission prompt or a picker would choose an option. The client shows the prompt instead; the user answers it, then sends. Right before the keys, the hub reads the pane again (a fresh snapshot and screen: the agent is still there, not blocked, no picker); if that changed, it replies `promptOpen` and sends nothing.
 
@@ -74,15 +74,22 @@ it sends, not only once: the pane still shows the agent the checks saw (same kin
 snapshot; an agent without a session id cannot be bound, so a paired device gets no keys there), with its status as
 it is now (not blocked for text; blocked for an approval); the screen still shows what the key is for, read last:
 for text and image paths no prompt, question or picker
-(Claude's and Codex's question pickers, their notes view, any numbered picker with a key line); for an approval the same box; for an answer the exact
-question the key belongs to (its text, its options in order and no other, the same single or multi choice mode, the
-request's headers; Claude's typed "Other" row only with the text the hub typed) or the review screen listing every
-question of the request; when the hub first reads the questions not seen yet, the picker must still show the request
-the client answered (same headers, the questions it held, unchanged), before the first key and after the read; before Enter the new image markers; and the device still has `input` and Allow
+(Claude's and Codex's question pickers, their notes view, any numbered picker with a key line); for an approval the same box; for an answer the logged
+question's exact rendering (below); before Enter the new image markers; and the device still has `input` and Allow
 input is on. Named keys go one per gated call, so no committing key (Enter, Tab) rides in a batch past a check.
 Any no stops the input there; the keys after it are not sent (`failed`, or `readOnly` when the level changed). A
 multi-key answer can stop half way; the picker then shows where it stopped. A send whose second Enter is refused
 fails, and its images stay held.
+
+**An answer key needs the exact rendering.** The hub builds what the picker must show from the logged question
+and compares it with the screen, all whitespace dropped (so wrapping at any width does not count): Codex's head
+"Question k/n" (k and n of this request, maybe "(m unanswered)"), then the question text, then per row its number,
+its label (with the log's "(Recommended)") and its description, then Codex's own "None of the above" row, then the
+notes the hub opened or typed (nothing else), and Codex's key line (notes closed or open) as the screen's last
+line. The focus mark "›" counts only right before a row number, exactly one row has it, and Tab (which opens the
+notes) and every key after it need it on the row the answer chose. Text between those places is compared as the
+log's text, so a number, a mark or picker words in an option's text or in the question are text, never structure.
+A cut ("…"), a picker taller than the screen, or any other difference refuses the key.
 
 **What stays open.** herdr has no compare-and-send: the last read and the keys are two calls. A prompt that opens in the milliseconds between them can still get the keys. The checks make this window small; they cannot close it. (The Mac card and notification buttons have the same window.)
 
@@ -174,7 +181,7 @@ Tool inputs and outputs are not sent in v1 (size; the phone shows the summary).
 
 **Approval** `{id, tool, title, command, state}`. `state`: `pending` / `resolved`.
 
-**Question** `{id, agent, delivery, state, headers, questions, answers?}`. `delivery`: `picker` / `message`. `state`: `pending` / `answered` / `declined`. `answers`: one string per question when answered and known. `id`: the log's call id; for a Claude picker read from the screen, `screen-<headers hash>-<content hash>`, where the content hash covers the questions the card shows (text, options in order, single or multi choice), so an answer from a card whose question has changed since is `stale`. Each question: `{id, header, text, multiSelect, options: [{label, detail?, recommended?}]}`.
+**Question** `{id, agent, delivery, state, headers, questions, answers?, onMac?}`. `delivery`: `picker` / `message`. `state`: `pending` / `answered` / `declined`. `answers`: one string per question when answered and known. `onMac`: true when only the Mac answers it (read from the screen; the client shows it without answer controls). `id`: the log's call id; for a Claude picker read from the screen, `screen-<headers hash>-<content hash>`, where the content hash covers the questions the card shows (text, options in order, single or multi choice), so an answer from a card whose question has changed since is `stale`. Each question: `{id, header, text, multiSelect, options: [{label, detail?, recommended?}]}`.
 
 ## 6. Levels
 

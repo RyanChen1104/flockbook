@@ -243,6 +243,7 @@ extension Hub {
             guard st.screen != nil else { return [unreadable(m.id)] }
             guard let q = st.question, Hub.questionID(q) == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
+            guard Hub.screenQuestionsRemote || !Hub.screenRead(q) else { return [fail(m.id, .failed, "Answer this question on the Mac. Nothing was sent.")] }
             do {
                 try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: allowed)
                 return [ok(m.id)]

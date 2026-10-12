@@ -502,6 +502,16 @@ async function fakeRun() {
   await p.click(".banner");
   check(await p.until("location.hash === '#pane=w2%3Ap1'") === true, "alert: banner opens that agent");
 
+  // A Claude question read from the screen only: shown, answered on the Mac (no answer controls).
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("document.querySelector('#composer-text')?.disabled === false");
+  await p.type("#composer-text", "ask me");
+  await p.click("#composer-send");
+  check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,
+    "question: a screen-read question says answer on the Mac");
+  check(await p.eval("!document.querySelector('#submit-answer') && !document.querySelector('.option')") === true, "question: no answer controls for it");
+  await p.shot("question-mac");
+
   for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
 }
 
