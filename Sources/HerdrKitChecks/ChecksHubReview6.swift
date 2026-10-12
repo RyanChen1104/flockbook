@@ -89,7 +89,8 @@ import Foundation
       4. Chat about this
     Enter to select · ↑/↓ to navigate · Esc to cancel
     """
-    let typed = claude.replacingOccurrences(of: "3. Type something.", with: "3. Green typed")
+    // Live: typed text keeps the focus on its row.
+    let typed = claude.replacingOccurrences(of: "❯ 1. Red", with: "  1. Red").replacingOccurrences(of: "  3. Type something.", with: "❯ 3. Green typed")
     let extra = claude.replacingOccurrences(of: "3. Type something.", with: "3. Green\n  4. Type something.")
     let one = QuestionAdapter.screenRequest(headers: ["Color"], questions: [.init(header: "Color", text: "Pick a color?", options: [opt("Red"), opt("Blue")], multiSelect: false)])
     check(QuestionAdapter.shows(one, question: 0, screen: claude), "r6 claude: the picker matches")
@@ -168,6 +169,53 @@ import Foundation
     func refused(_ q: QuestionRequest, _ o: String) -> Bool { (try? QuestionAdapter.steps(for: q, answers: q.questions.map { _ in QuestionAnswer(other: o) })) == nil }
     check(refused(cq, "Add notes") && refused(one, "Type something.") && refused(one, "Type something") && !refused(one, "fish"),
           "r9 both: an Other text equal to the field's placeholder is refused before any key")
+    // Review 10 (26b8d12): the key after our text goes where it is meant to: single choice, Enter with focus on the
+    // Other row; multiSelect (live captures): Down anywhere, text and Tab on the Other row, Enter on Submit.
+    check(!QuestionAdapter.shows(one, question: 0, screen: typed.replacingOccurrences(of: "❯ 3. Green typed", with: "  3. Green typed").replacingOccurrences(of: "  1. Red", with: "❯ 1. Red"), other: "Green typed"),
+          "r10 claude: our text there but focus moved to an option -> no Enter")
+    let tops = """
+    ←  ☐ Tops  ✔ Submit  →
+    Which toppings?
+    ❯ 1. [ ] Cheese
+             Add cheese
+      2. [ ] Olive
+             Add olive
+      3. [ ] Type something
+         Submit
+    ────────────────────
+      4. Chat about this
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+    let topsChecked = tops.replacingOccurrences(of: "[ ] Type something", with: "[✔] Type something")
+    let topsOnRow = topsChecked.replacingOccurrences(of: "❯ 1. [ ] Cheese", with: "  1. [ ] Cheese").replacingOccurrences(of: "  3. [✔] Type something", with: "❯ 3. [✔] Type something")
+    let topsHam = topsOnRow.replacingOccurrences(of: "Type something", with: "ham")
+    let topsSubmit = topsHam.replacingOccurrences(of: "❯ 3. [✔] ham", with: "  3. [✔] ham").replacingOccurrences(of: "     Submit", with: "❯    Submit")
+    let mreq = QuestionAdapter.screenRequest(headers: ["Tops"], questions: [.init(header: "Tops", text: "Which toppings?", options: [opt("Cheese"), opt("Olive")], multiSelect: true)])
+    check(QuestionAdapter.claudeParse(topsSubmit)?.submitFocused == true && QuestionAdapter.claudeParse(topsHam)?.submitFocused == false, "r10 claude: focus on Submit is read")
+    final class Flow: @unchecked Sendable { var screens: [String] = []; var moved = false }
+    for moveAway in [false, true] {
+        let flow = Flow()
+        fake.screen = tops
+        fake.onInput = { method, params in
+            let k = (params["keys"] as? [String]) ?? []
+            if method == "pane.send_text", let t = params["text"] as? String {
+                if t == "3" { fake.screen = topsChecked } else if t == "ham" { fake.screen = moveAway ? topsHam.replacingOccurrences(of: "❯ 3. [✔] ham", with: "  3. [✔] ham").replacingOccurrences(of: "  1. [ ] Cheese", with: "❯ 1. [ ] Cheese") : topsHam }
+            }
+            if k == ["Down"] { flow.screens.append("down"); if flow.screens.count == 2 { fake.screen = topsOnRow } }
+            if k == ["Tab"] { fake.screen = topsSubmit }
+            if k == ["Enter"] { fake.screen = "❯ \n" }
+        }
+        nn = fake.requests.count
+        do { try await client.answerQuestion(paneId: "w1:p1", request: mreq, answers: [QuestionAnswer(other: "ham")],
+                                             gate: KeyGate(agent: Agent(name: "claude", kind: "claude", status: .blocked, sessionId: "s1", title: ""), allowed: { true })) } catch {}
+        let sent = fake.requests.dropFirst(nn).filter { keyMethods.contains($0.method) }.map { ($0.params["keys"] as? [String])?.joined() ?? (($0.params["text"] as? String) ?? "?") }
+        if moveAway {
+            check(sent == ["3", "Down", "Down", "ham"], "r10 claude multi: focus moved off the row after our text -> no Tab, no Enter (\(sent))")
+        } else {
+            check(sent == ["3", "Down", "Down", "ham", "Tab", "Enter"], "r10 claude multi: Other flow with focus checked at each key (\(sent))")
+        }
+    }
+    fake.onInput = nil
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 

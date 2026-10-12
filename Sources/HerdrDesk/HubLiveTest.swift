@@ -12,7 +12,8 @@ import ImageIO
 enum HubLiveTest {
     // Swift 6.2.1 crashes optimizing this function in release builds (CopyPropagation ownership error); test-only code.
     @_optimize(none)
-    static func run(model: AppModel, paneId: String, allow: Bool, image: Bool = false) async {
+    /// `other`: answer every open question with this free text instead of its first option.
+    static func run(model: AppModel, paneId: String, allow: Bool, image: Bool = false, other: String? = nil) async {
         try? await Task.sleep(for: .seconds(3))
         await model.store.refresh()
         var ok = true
@@ -69,7 +70,8 @@ enum HubLiveTest {
             // A question: a stale id is refused, the open one is answered with the first option of each question.
             try? await c.send(#"{"v":1,"type":"answer","id":"q0","pane":"\#(paneId)","question":"toolu_stale","answers":[{"picks":[0]}]}"#)
             step("answer with a stale id -> stale", errorCode(await c.untilReply().last) == .stale)
-            let answers = Array(repeating: #"{"picks":[0]}"#, count: max(1, q.headers.count, q.questions.count)).joined(separator: ",")
+            let one = other.map { #"{"picks":[],"other":"\#($0)"}"# } ?? #"{"picks":[0]}"#
+            let answers = Array(repeating: one, count: max(1, q.headers.count, q.questions.count)).joined(separator: ",")
             try? await c.send(#"{"v":1,"type":"answer","id":"q1","pane":"\#(paneId)","question":"\#(q.id)","answers":[\#(answers)]}"#)
             let r = await c.untilReply(20).last
             step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)

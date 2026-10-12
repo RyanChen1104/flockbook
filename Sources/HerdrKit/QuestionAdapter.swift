@@ -160,7 +160,11 @@ public enum QuestionAdapter {
     /// text field so far: nil = nothing (Claude's "Other" row empty, Codex notes closed), "" = Codex notes opened
     /// and empty, else the text typed. Any other state (the user's own text, notes left open) is no match: a digit
     /// would be typed into that field. Codex: its rows are the options in order, then its own "None of the above".
-    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil) -> Bool {
+    /// Where Claude's focus must be for the next key (`shows`). `.auto`: from `other` (nil: off the Other row;
+    /// "": on it, anywhere for multiSelect; text: on it).
+    public enum FieldFocus: Sendable { case auto, any, other, submit }
+
+    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil, focus: FieldFocus = .auto) -> Bool {
         guard q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" {
@@ -178,10 +182,18 @@ public enum QuestionAdapter {
         // The "Other" row with focus is a text field: a digit there is typed, not a pick. Its empty look ("Type
         // something.") may be the user's own text, so a pick needs the row without focus and empty; "" (opened by
         // the hub's digit, live: focus on it) needs it empty (multiSelect: Down moves focus there); text, ours.
+        let field: Bool
         switch other.map(flat) {
-        case nil: return s.typed == nil && !s.otherFocused
-        case ""?: return s.typed == nil && (s.otherFocused || want.multiSelect)
-        case let t?: return s.typed.map(flat) == t
+        case nil: field = s.typed == nil
+        case ""?: field = s.typed == nil
+        case let t?: field = s.typed.map(flat) == t
+        }
+        let where_: FieldFocus = focus != .auto ? focus : other == nil ? .auto : (other == "" && want.multiSelect) ? .any : .other
+        switch where_ {
+        case .auto: return field && !s.otherFocused
+        case .any: return field
+        case .other: return field && s.otherFocused
+        case .submit: return field && s.submitFocused
         }
     }
 
@@ -358,7 +370,7 @@ extension QuestionAdapter {
     /// `claudeScreen` plus `typed`: text typed into the "Other" row. 2.1.296 always shows that row as the last
     /// numbered row before the line above "Chat about this": "Type something." (multiSelect "Type something") when
     /// empty, else the typed text. It is never an option. No such line: nil (not a layout this reads).
-    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?, otherFocused: Bool)? {
+    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?, otherFocused: Bool, submitFocused: Bool)? {
         let lines = screen.components(separatedBy: "\n")
         guard let end = lines.lastIndex(where: { $0.contains("Chat about this") }) else { return nil }
         let isBar: (String) -> Bool = { l in
@@ -369,10 +381,11 @@ extension QuestionAdapter {
         let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
         let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
-        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = "", lastFocused = false
+        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = "", lastFocused = false, submitFocused = false
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
+            if t.hasPrefix("❯"), t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; continue }   // multiSelect
             if let m = l.wholeMatch(of: optRe) {
                 let label = String(m.3).trimmingCharacters(in: .whitespaces)
                 inOptions = true
@@ -393,7 +406,7 @@ extension QuestionAdapter {
         let typed: String? = lastRaw == "Type something." || lastRaw == "Type something" ? nil : lastRaw
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
-        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused)
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused, submitFocused)
     }
 }
 
@@ -437,10 +450,12 @@ extension HerdrClient {
             }
         }
         // `shown`: what the "Other" row of question `at` should hold now: empty until the hub typed its text there.
-        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?
+        // `focus`: Claude multiSelect "Other": Down keys may run with focus anywhere, the text and Tab need it on the
+        // row, Enter needs it on Submit (live, 2.1.296).
+        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto
         for step in steps {
-            let k = at, r = review, inRow = shown
-            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow) }
+            let k = at, r = review, inRow = shown, f = focus
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
@@ -452,11 +467,14 @@ extension HerdrClient {
                 else if typed != nil, otherOpen, !typedIn { shown = typed; typedIn = true }
             case .keys(let k):
                 try await gatedKeys(k, gate: gate, paneId: paneId, screen: same)
+                let multiOther = q.agent == "claude" && otherOpen && q.questions.indices.contains(at) && q.questions[at].multiSelect
+                if multiOther, !typedIn, k.allSatisfy({ $0 == "Down" }) { focus = .other }   // now on the row
+                if multiOther, typedIn, k == ["Tab"] { focus = .submit }
                 // Codex: Tab on "None of the above" opens its notes, empty.
                 if q.agent == "codex", k.last == "Tab", answers.indices.contains(at), QuestionAdapter.otherText(answers[at]) != nil { otherOpen = true; shown = "" }
             case .waitFor(let s):
                 if s == "Review your answers" { review = true } else { at += 1 }
-                otherOpen = false; typedIn = false; shown = nil
+                otherOpen = false; typedIn = false; shown = nil; focus = .auto
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }
