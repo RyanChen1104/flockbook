@@ -66,7 +66,9 @@ import Foundation
         guard model.writesEnabled, allowed() else { throw QuestionAdapter.Failure.unsupported("input is off") }
         var q = question
         if q.unread > 0 {
-            guard let full = try await store.client.loadAllQuestions(paneId: id, gate: gate) else { throw QuestionAdapter.Failure.notOnScreen }
+            // Bound to the request the client answered: another request on screen now (even with as many questions) is refused.
+            guard let full = try await store.client.loadAllQuestions(paneId: id, gate: gate, expect: question),
+                  QuestionAdapter.sameRequest(full, as: question) else { throw QuestionAdapter.Failure.notOnScreen }
             q = full
         }
         guard answers.count == q.questions.count else {

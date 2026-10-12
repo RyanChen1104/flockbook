@@ -366,7 +366,7 @@ QuestionAnswer { picks: [Int] /* 0-based */, other: String? }
 Where the pending question comes from:
 - **Claude Code**: NOT the log. Claude Code writes the AskUserQuestion call to its JSONL only after the answer, so the log has only answered/declined questions. While the picker is open:
   - `try await client.pendingQuestion(paneId:) -> QuestionRequest?` — **read-only, sends nothing**; safe to call automatically. `questions` = the one question on screen; `headers` = every question's header from the picker tab bar; `unread` = questions not read yet (0 for a single question). Nil = no picker.
-  - `try await client.loadAllQuestions(paneId:) -> QuestionRequest?` — **sends keys** (Left to question 1, Right through the questions, Left back to where the picker was; navigation only, nothing chosen; `.stuck` if the position is not restored). Call it only on a user action (Next on question 1, a click on the card, or the first step of Send), never on a timer, refresh or render.
+  - `try await client.loadAllQuestions(paneId:gate:expect:) -> QuestionRequest?` — **sends keys** (Left to question 1, Right through the questions, Left back to where the picker was; navigation only, nothing chosen; `.stuck` if the position is not restored). Call it only on a user action (Next on question 1, a click on the card, or the first step of Send), never on a timer, refresh or render.
   - Both give the same `toolUseId` (`screen-<hash>` of the tab bar). After the answer the logged item (`q-<real id>`) appears.
 - **Codex** `request_user_input` (Plan mode): the log item with `.pending` (the call is logged while the picker is open).
 - **Codex** `request_user_input_async`: the log item with `delivery == .message`; it stays `.pending` until the next user message.

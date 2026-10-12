@@ -82,6 +82,7 @@ try await checksHubSecurityReview2()
 try await checksHubReview3()
 try await checksHubReview4()
 try await checksHubReview5()
+try await checksHubReview6()
 try await checksUpdater()
 try await checksLaunchGuard()
 

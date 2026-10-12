@@ -155,18 +155,64 @@ public enum QuestionAdapter {
         return markers(agent: agent).contains { region.contains($0) } ? region : nil
     }
 
-    /// The picker shows question `k` of `q` exactly: its text and its options in order (typed "Other" text may
-    /// follow them), and for Claude the request's headers in the tab bar. Codex: its picker region holds the
-    /// question and every option label.
-    public static func shows(_ q: QuestionRequest, question k: Int, screen: String) -> Bool {
+    /// The picker shows question `k` of `q` exactly: its text, its options in order and no other, the same mode
+    /// (multiSelect), and for Claude the request's headers in the tab bar. `other`: the text we typed into Claude's
+    /// "Type something" row, which then shows as one more row with that text. Codex: its rows are the options in
+    /// order, then its own "None of the above".
+    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil) -> Bool {
         guard q.questions.indices.contains(k) else { return false }
-        let want = q.questions[k]
+        let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" {
-            guard let region = pickerRegion(agent: q.agent, screen: screen) else { return false }
-            return region.contains(flat(want.text)) && want.options.allSatisfy { region.contains(flat($0.label)) }
+            guard !want.multiSelect, let s = codexScreen(screen), s.text == flat(want.text), s.rows.count == labels.count + 1,
+                  s.rows.last?.hasPrefix(codexOtherLabel) == true else { return false }
+            return zip(s.rows, labels).allSatisfy { row, label in row == label || row.hasPrefix(label + "  ") }
         }
-        guard let s = claudeScreen(screen), q.headers.isEmpty || s.headers == q.headers else { return false }
-        return flat(s.question.text) == flat(want.text) && s.question.options.map(\.label).starts(with: want.options.map(\.label))
+        guard let s = claudeScreen(screen), q.headers.isEmpty || s.headers == q.headers,
+              flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect else { return false }
+        let shown = s.question.options.map { flat($0.label) }
+        if shown == labels { return true }
+        guard let other, !other.isEmpty else { return false }
+        return shown == labels + [flat(other)]
+    }
+
+    /// Codex's picker, read from the screen: the question text (flat) and its option rows in order, each row's
+    /// text after "N." (label, then its description after two spaces). Nil when no Codex picker is shown or the
+    /// rows are not numbered 1, 2, 3...
+    static func codexScreen(_ screen: String) -> (text: String, rows: [String])? {
+        let lines = screen.components(separatedBy: "\n")
+        guard let start = lines.lastIndex(where: { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }),
+              pickerRegion(agent: "codex", screen: screen) != nil else { return nil }
+        let rowRe = /^\s*(?:›\s*)?(\d+)\.\s+(.*)$/
+        var text: [String] = [], rows: [String] = []
+        for l in lines[(start + 1)...] {
+            let t = l.trimmingCharacters(in: .whitespaces)
+            if let m = l.wholeMatch(of: rowRe) {
+                guard Int(m.1) == rows.count + 1 else { return nil }
+                rows.append(String(m.2).trimmingCharacters(in: .whitespaces))
+            } else if rows.isEmpty {
+                if !t.isEmpty { text.append(t) }
+            } else if t.isEmpty || t.hasPrefix("›") || t.contains("enter to submit") {
+                break
+            } else {
+                return nil   // a wrapped row: cannot be compared exactly
+            }
+        }
+        guard !rows.isEmpty, !text.isEmpty else { return nil }
+        return (flat(text.joined(separator: " ")), rows)
+    }
+
+    /// Two questions are the same: text, option labels in order, mode.
+    static func sameQuestion(_ a: QuestionRequest.Question, _ b: QuestionRequest.Question) -> Bool {
+        flat(a.text) == flat(b.text) && a.options.map { flat($0.label) } == b.options.map { flat($0.label) } && a.multiSelect == b.multiSelect
+    }
+
+    /// `full` (every question read) is the request the client answered (`asked`, maybe with questions unread):
+    /// the same agent, headers and question count, and every question `asked` holds is in `full`, unchanged.
+    public static func sameRequest(_ full: QuestionRequest, as asked: QuestionRequest) -> Bool {
+        guard full.agent == asked.agent, full.headers == asked.headers, full.unread == 0,
+              asked.headers.isEmpty || full.questions.count == asked.headers.count else { return false }
+        if asked.questions.count == full.questions.count { return zip(asked.questions, full.questions).allSatisfy { sameQuestion($0, $1) } }
+        return asked.questions.allSatisfy { a in full.questions.contains { sameQuestion(a, $0) } }
     }
 
     /// The picker shows some question of `q` exactly (`shows`).
@@ -354,7 +400,8 @@ extension HerdrClient {
         var at = 0, review = false
         for step in steps {
             let k = at, r = review
-            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0) }
+            let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: typed) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
@@ -388,10 +435,19 @@ extension HerdrClient {
     /// timer, refresh or render. Moves the picker with Left to question 1, reads each question with Right
     /// (navigation only, nothing is chosen), then moves back to the question that was on screen and checks it is
     /// there again (`.stuck` if not). One question: no keys, same as `pendingQuestion`.
-    public func loadAllQuestions(paneId: String, gate: KeyGate? = nil) async throws -> QuestionRequest? {
+    public func loadAllQuestions(paneId: String, gate: KeyGate? = nil, expect: QuestionRequest? = nil) async throws -> QuestionRequest? {
         guard let shown = QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId)) else { return nil }
+        // `expect`: the request the caller answers. The picker must still show it (same headers, a question it
+        // holds), before any key and in the result; else `.notOnScreen`, nothing sent.
+        if let expect, shown.headers != expect.headers || !expect.questions.contains(where: { QuestionAdapter.sameQuestion($0, shown.question) }) {
+            throw QuestionAdapter.Failure.notOnScreen
+        }
         let n = shown.headers.count
-        guard n > 1 else { return QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question]) }
+        guard n > 1 else {
+            let one = QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question])
+            if let expect, !QuestionAdapter.sameRequest(one, as: expect) { throw QuestionAdapter.Failure.notOnScreen }
+            return one
+        }
         func now() async throws -> QuestionRequest.Question? { QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId))?.question }
         // `gate` (a remote device): before every key, the same agent, this request's picker still open, input allowed.
         // Bound to what was read: the same headers and, before each key, the exact question now expected on screen.
@@ -399,7 +455,7 @@ extension HerdrClient {
         func exact(_ want: QuestionRequest.Question) -> @Sendable (String) -> Bool {
             { s in
                 guard let r = QuestionAdapter.claudeScreen(s), r.headers == headers else { return false }
-                return QuestionAdapter.flat(r.question.text) == QuestionAdapter.flat(want.text) && r.question.options.map(\.label) == want.options.map(\.label)
+                return QuestionAdapter.sameQuestion(r.question, want)
             }
         }
         // To question 1 (Left stops there). Navigation keys only; none of them chooses anything.
@@ -428,7 +484,9 @@ extension HerdrClient {
         guard try await waitScreen(paneId: paneId, timeout: 2, { QuestionAdapter.claudeScreen($0)?.question.text == shown.question.text }) else {
             throw QuestionAdapter.Failure.stuck("back to the question on screen")
         }
-        return QuestionAdapter.screenRequest(headers: shown.headers, questions: questions)
+        let full = QuestionAdapter.screenRequest(headers: shown.headers, questions: questions)
+        if let expect, !QuestionAdapter.sameRequest(full, as: expect) { throw QuestionAdapter.Failure.notOnScreen }
+        return full
     }
 
     private func waitScreen(paneId: String, timeout: Double, _ ok: (String) -> Bool) async throws -> Bool {

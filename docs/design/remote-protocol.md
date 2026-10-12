@@ -73,9 +73,12 @@ Multi-line text is one message: the hub types it as the Mac composer does (`pane
 it sends, not only once: the pane still shows the agent the checks saw (same kind and the same session id, fresh
 snapshot; an agent without a session id cannot be bound, so a paired device gets no keys there), with its status as
 it is now (not blocked for text; blocked for an approval); the screen still shows what the key is for, read last:
-for text and image paths no prompt, question or picker; for an approval the same box; for an answer the exact
-question the key belongs to (its text, its options in order, the request's headers) or the review screen listing
-every question of the request; before Enter the new image markers; and the device still has `input` and Allow
+for text and image paths no prompt, question or picker
+(Claude's and Codex's question pickers, their notes view, any numbered picker with a key line); for an approval the same box; for an answer the exact
+question the key belongs to (its text, its options in order and no other, the same single or multi choice mode, the
+request's headers; Claude's typed "Other" row only with the text the hub typed) or the review screen listing every
+question of the request; when the hub first reads the questions not seen yet, the picker must still show the request
+the client answered (same headers, the questions it held, unchanged), before the first key and after the read; before Enter the new image markers; and the device still has `input` and Allow
 input is on. Named keys go one per gated call, so no committing key (Enter, Tab) rides in a batch past a check.
 Any no stops the input there; the keys after it are not sent (`failed`, or `readOnly` when the level changed). A
 multi-key answer can stop half way; the picker then shows where it stopped. A send whose second Enter is refused

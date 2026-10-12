@@ -74,14 +74,18 @@ public enum Hub {
     }
 
     /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude
-    /// question, or any picker with its key line near the bottom ("Enter to confirm", "Esc to cancel"), such as
-    /// Claude's setup and folder-trust pickers.
+    /// or Codex question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
+    /// confirm", "Esc to cancel", "enter to submit", "enter continue"), such as Claude's setup and folder-trust
+    /// pickers and Codex's trust picker.
     public static func screenTakesKeys(_ screen: String) -> Bool {
         if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
+            || QuestionAdapter.pickerRegion(agent: "codex", screen: screen) != nil
+            || QuestionAdapter.pickerRegion(agent: "claude", screen: screen) != nil
             || unreadablePrompt(screen: screen, blocked: false) { return true }
         let lines = screen.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(12)
-        guard let keys = lines.lastIndex(where: { $0.hasPrefix("Enter to confirm") || $0.hasPrefix("Esc to cancel") }) else { return false }
-        return lines[..<keys].contains { $0.hasPrefix("1.") || $0.firstMatch(of: /^❯\s*(1\.|\S)/) != nil && $0 != "❯" }
+        let keyLines = ["enter to confirm", "esc to cancel", "enter to submit", "enter to select", "enter continue"]
+        guard let keys = lines.lastIndex(where: { l in keyLines.contains { l.lowercased().hasPrefix($0) } }) else { return false }
+        return lines[..<keys].contains { $0.hasPrefix("1.") || $0.firstMatch(of: /^[❯›]\s*(1\.|\S)/) != nil && $0 != "❯" && $0 != "›" }
     }
 
     /// ISO 8601 UTC with milliseconds.
