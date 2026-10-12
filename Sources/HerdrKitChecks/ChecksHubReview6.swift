@@ -140,7 +140,11 @@ import Foundation
     final class Typed: @unchecked Sendable { var n = 0 }
     let typedCount = Typed()
     fake.onInput = { method, _ in
-        if method == "pane.send_text" { typedCount.n += 1; if typedCount.n == 2 { fake.screen = claude.replacingOccurrences(of: "3. Type something.", with: "3. 3") } }
+        if method == "pane.send_text" {
+            typedCount.n += 1
+            let focused = claude.replacingOccurrences(of: "❯ 1. Red", with: "  1. Red")
+            fake.screen = focused.replacingOccurrences(of: "  3. Type something.", with: typedCount.n == 1 ? "❯ 3. Type something." : "❯ 3. 3")
+        }
         if method == "pane.send_keys" { fake.screen = "❯ \n" }
     }
     nn = fake.requests.count
@@ -149,6 +153,21 @@ import Foundation
     let digitOther = fake.requests.dropFirst(nn).filter { keyMethods.contains($0.method) }.map { ($0.params["keys"] as? [String])?.joined() ?? "text" }
     check(digitOther == ["text", "text", "Enter"], "r8 claude: Other text equal to its digit -> digit, text, Enter (\(digitOther))")
     fake.onInput = nil
+    // Review 9 (ba03c0e): the Other row with focus is a text field (live: "❯" on it after its digit). A pick needs it
+    // without focus; the user's literal "Type something." there is not an empty row. Placeholder texts as answers
+    // cannot be told from the empty field: refused before any key.
+    let focusedOther = claude.replacingOccurrences(of: "❯ 1. Red", with: "  1. Red").replacingOccurrences(of: "  3. Type something.", with: "❯ 3. Type something.")
+    check(QuestionAdapter.claudeParse(focusedOther)?.otherFocused == true && QuestionAdapter.claudeParse(claude)?.otherFocused == false, "r9 claude: focus on the Other row is read")
+    check(!QuestionAdapter.shows(one, question: 0, screen: focusedOther) && QuestionAdapter.shows(one, question: 0, screen: focusedOther, other: ""),
+          "r9 claude: Other row with focus -> no pick; matches only 'opened by us, empty'")
+    fake.screen = focusedOther
+    nn = fake.requests.count
+    do { try await client.answerQuestion(paneId: "w1:p1", request: one, answers: [QuestionAnswer(picks: [0])],
+                                         gate: KeyGate(agent: Agent(name: "claude", kind: "claude", status: .blocked, sessionId: "s1", title: ""), allowed: { true })) } catch {}
+    check(keys(after: nn) == 0, "r9 claude: the user edits the Other row ('Type something.' typed) -> a pick gets no key (\(keys(after: nn)))")
+    func refused(_ q: QuestionRequest, _ o: String) -> Bool { (try? QuestionAdapter.steps(for: q, answers: q.questions.map { _ in QuestionAnswer(other: o) })) == nil }
+    check(refused(cq, "Add notes") && refused(one, "Type something.") && refused(one, "Type something") && !refused(one, "fish"),
+          "r9 both: an Other text equal to the field's placeholder is refused before any key")
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 

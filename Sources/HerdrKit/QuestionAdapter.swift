@@ -175,8 +175,14 @@ public enum QuestionAdapter {
         guard let s = claudeParse(screen), q.headers.isEmpty || s.headers == q.headers,
               flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
               s.question.options.map({ flat($0.label) }) == labels else { return false }
-        // Text in the "Other" row: only ours. With text there, a digit would be typed into it, not pick.
-        return s.typed.map(flat) == other.map(flat).flatMap { $0.isEmpty ? nil : $0 }
+        // The "Other" row with focus is a text field: a digit there is typed, not a pick. Its empty look ("Type
+        // something.") may be the user's own text, so a pick needs the row without focus and empty; "" (opened by
+        // the hub's digit, live: focus on it) needs it empty (multiSelect: Down moves focus there); text, ours.
+        switch other.map(flat) {
+        case nil: return s.typed == nil && !s.otherFocused
+        case ""?: return s.typed == nil && (s.otherFocused || want.multiSelect)
+        case let t?: return s.typed.map(flat) == t
+        }
     }
 
     /// Codex's picker, read from the screen: the question text (flat) and its option rows in order, each row's
@@ -263,6 +269,8 @@ public enum QuestionAdapter {
             guard a.picks.allSatisfy({ (0..<n).contains($0) }), n <= 8 else { throw Failure.unsupported("question \(k + 1): option out of range") }
             let other = a.other?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if other.contains(where: \.isNewline) { throw Failure.unsupported("question \(k + 1): line break in the text") }
+            // The empty field shows these: the gate could not tell the answer from no answer.
+            if ["Add notes", "Type something.", "Type something"].contains(flat(other)) { throw Failure.unsupported("question \(k + 1): this text is the field's placeholder") }
             if a.picks.isEmpty && other.isEmpty { throw Failure.unsupported("question \(k + 1): no answer") }
             if !q.questions[k].multiSelect && a.picks.count > 1 { throw Failure.unsupported("question \(k + 1): one choice only") }
         }
@@ -350,7 +358,7 @@ extension QuestionAdapter {
     /// `claudeScreen` plus `typed`: text typed into the "Other" row. 2.1.296 always shows that row as the last
     /// numbered row before the line above "Chat about this": "Type something." (multiSelect "Type something") when
     /// empty, else the typed text. It is never an option. No such line: nil (not a layout this reads).
-    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?)? {
+    static func claudeParse(_ screen: String) -> (headers: [String], question: QuestionRequest.Question, typed: String?, otherFocused: Bool)? {
         let lines = screen.components(separatedBy: "\n")
         guard let end = lines.lastIndex(where: { $0.contains("Chat about this") }) else { return nil }
         let isBar: (String) -> Bool = { l in
@@ -361,7 +369,7 @@ extension QuestionAdapter {
         let headers = lines[bar].split(whereSeparator: { "☐☒✔←→".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "Submit" }
         let optRe = /^\s*(?:❯\s*)?(\d+)\.\s+(\[[ ✔]\]\s+)?(.*)$/
-        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = ""
+        var text: [String] = [], options: [QuestionRequest.Option] = [], multi = false, inOptions = false, closed = false, lastRaw = "", lastFocused = false
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
@@ -372,6 +380,7 @@ extension QuestionAdapter {
                 let (clean, rec) = stripRecommended(label)
                 options.append(.init(label: clean, recommended: rec))
                 lastRaw = label
+                lastFocused = l.trimmingCharacters(in: .whitespaces).hasPrefix("❯")
             } else if inOptions {
                 if !t.isEmpty, !options.isEmpty { options[options.count - 1].detail += (options[options.count - 1].detail.isEmpty ? "" : " ") + t }
             } else if !t.isEmpty {
@@ -384,7 +393,7 @@ extension QuestionAdapter {
         let typed: String? = lastRaw == "Type something." || lastRaw == "Type something" ? nil : lastRaw
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
-        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed)
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused)
     }
 }
 
@@ -439,7 +448,7 @@ extension HerdrClient {
                 // By step purpose, not by text (the typed text may equal a digit): Claude's first text step for
                 // "Other" is its digit, which opens the row; the next text step is the typed text.
                 let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
-                if typed != nil, !otherOpen, q.agent == "claude", q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true }
+                if typed != nil, !otherOpen, q.agent == "claude", q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true; shown = "" }
                 else if typed != nil, otherOpen, !typedIn { shown = typed; typedIn = true }
             case .keys(let k):
                 try await gatedKeys(k, gate: gate, paneId: paneId, screen: same)
