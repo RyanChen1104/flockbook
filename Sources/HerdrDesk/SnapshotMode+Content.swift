@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Offscreen checks for the content area (conversation, composer). One entry point; `HerdrDeskApp` dispatches the flags.
 @MainActor enum ContentTests {
-    static let flags: Set<String> = ["--test-sendfail", "--test-loadstate", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search", "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn", "--test-question-live", "--bench-conversation"]
+    static let flags = LaunchGuard.content
     /// Pictures go here; `--light` runs a test in the light appearance with its own folder.
     static var dir = "build/snapshots-content"
 
