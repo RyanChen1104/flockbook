@@ -70,11 +70,16 @@ Multi-line text is one message: the hub types it as the Mac composer does (`pane
 **Unreadable screen.** When the hub cannot read the pane's screen, `send`, `approve` and `answer` reply `failed` and send nothing. Without the screen the hub cannot tell what the keys would answer.
 
 **Every key is gated.** For `send`, `approve` and `answer` the hub asks a gate (`KeyGate`) right before every key
-it sends, not only once: the pane still shows the agent the checks saw (same kind and session, fresh snapshot); the
-screen still shows what the key is for (the same approval box, this question's picker, the new image markers before
-Enter), read last; and the device still has `input` and Allow input is on. Any no stops the input there; the keys
-after it are not sent (`failed`, or `readOnly` when the level changed). A multi-key answer can stop half way; the
-picker then shows where it stopped.
+it sends, not only once: the pane still shows the agent the checks saw (same kind and the same session id, fresh
+snapshot; an agent without a session id cannot be bound, so a paired device gets no keys there), with its status as
+it is now (not blocked for text; blocked for an approval); the screen still shows what the key is for, read last:
+for text and image paths no prompt, question or picker; for an approval the same box; for an answer the exact
+question the key belongs to (its text, its options in order, the request's headers) or the review screen listing
+every question of the request; before Enter the new image markers; and the device still has `input` and Allow
+input is on. Named keys go one per gated call, so no committing key (Enter, Tab) rides in a batch past a check.
+Any no stops the input there; the keys after it are not sent (`failed`, or `readOnly` when the level changed). A
+multi-key answer can stop half way; the picker then shows where it stopped. A send whose second Enter is refused
+fails, and its images stay held.
 
 **What stays open.** herdr has no compare-and-send: the last read and the keys are two calls. A prompt that opens in the milliseconds between them can still get the keys. The checks make this window small; they cannot close it. (The Mac card and notification buttons have the same window.)
 

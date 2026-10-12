@@ -155,6 +155,31 @@ public enum QuestionAdapter {
         return markers(agent: agent).contains { region.contains($0) } ? region : nil
     }
 
+    /// The picker shows question `k` of `q` exactly: its text and its options in order (typed "Other" text may
+    /// follow them), and for Claude the request's headers in the tab bar. Codex: its picker region holds the
+    /// question and every option label.
+    public static func shows(_ q: QuestionRequest, question k: Int, screen: String) -> Bool {
+        guard q.questions.indices.contains(k) else { return false }
+        let want = q.questions[k]
+        if q.agent == "codex" {
+            guard let region = pickerRegion(agent: q.agent, screen: screen) else { return false }
+            return region.contains(flat(want.text)) && want.options.allSatisfy { region.contains(flat($0.label)) }
+        }
+        guard let s = claudeScreen(screen), q.headers.isEmpty || s.headers == q.headers else { return false }
+        return flat(s.question.text) == flat(want.text) && s.question.options.map(\.label).starts(with: want.options.map(\.label))
+    }
+
+    /// The picker shows some question of `q` exactly (`shows`).
+    public static func showsAny(_ q: QuestionRequest, screen: String) -> Bool {
+        q.questions.indices.contains { shows(q, question: $0, screen: screen) }
+    }
+
+    /// Claude's review screen of `q`: the request's headers and every one of its questions listed.
+    public static func showsReview(_ q: QuestionRequest, screen: String) -> Bool {
+        guard let region = pickerRegion(agent: q.agent, screen: screen), region.contains("Review your answers") else { return false }
+        return q.headers.allSatisfy { region.contains($0) } && q.questions.allSatisfy { region.contains(flat($0.text)) }
+    }
+
     public static func pickerShown(_ q: QuestionRequest, screen: String) -> Bool {
         pickerRegion(agent: q.agent, screen: screen) != nil
     }
@@ -313,28 +338,31 @@ extension HerdrClient {
             return
         }
         let steps = try QuestionAdapter.steps(for: q, answers: answers)
-        // `gate` (a remote device): before every key, the same agent, this question's picker still open, input allowed.
-        let same: @Sendable (String) -> Bool = { QuestionAdapter.pickerShown(q, screen: $0) }
+        // `gate` (a remote device): before every key, the same agent, the exact question the key is for on screen
+        // (its text, options, the request's headers; the review screen for the last key), input allowed.
+        let any: @Sendable (String) -> Bool = { QuestionAdapter.showsAny(q, screen: $0) }
         let screen = try await visibleText(paneId: paneId)
         if !QuestionAdapter.screenShows(q, screen: screen) {
             // Claude: the user may have moved the picker to a later question of THIS request; go back to question 1.
             guard q.agent == "claude", q.questions.count > 1, let shown = QuestionAdapter.claudeScreen(screen)?.question,
                   q.questions.dropFirst().contains(where: { $0.text == shown.text }) else { throw QuestionAdapter.Failure.notOnScreen }
-            try await gated(gate, paneId: paneId, screen: same)
-            try await sendNamedKeys(Array(repeating: "Left", count: q.questions.count - 1), to: paneId)
+            try await gatedKeys(Array(repeating: "Left", count: q.questions.count - 1), gate: gate, paneId: paneId, screen: any)
             guard try await waitScreen(paneId: paneId, timeout: 2, { QuestionAdapter.screenShows(q, screen: $0) }) else {
                 throw QuestionAdapter.Failure.stuck("back to question 1")
             }
         }
+        var at = 0, review = false
         for step in steps {
+            let k = at, r = review
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
                 try await sendKeys(Array(s.utf8), to: paneId)   // typed as is: no Enter, not as a paste
             case .keys(let k):
-                try await gated(gate, paneId: paneId, screen: same)
-                try await sendNamedKeys(k, to: paneId)
+                try await gatedKeys(k, gate: gate, paneId: paneId, screen: same)
             case .waitFor(let s):
+                if s == "Review your answers" { review = true } else { at += 1 }
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }
@@ -366,16 +394,22 @@ extension HerdrClient {
         guard n > 1 else { return QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question]) }
         func now() async throws -> QuestionRequest.Question? { QuestionAdapter.claudeScreen(try await visibleText(paneId: paneId))?.question }
         // `gate` (a remote device): before every key, the same agent, this request's picker still open, input allowed.
+        // Bound to what was read: the same headers and, before each key, the exact question now expected on screen.
         let headers = shown.headers
-        let same: @Sendable (String) -> Bool = { QuestionAdapter.claudeScreen($0)?.headers == headers }
-        // To question 1 (Left stops there).
-        try await gated(gate, paneId: paneId, screen: same)
+        func exact(_ want: QuestionRequest.Question) -> @Sendable (String) -> Bool {
+            { s in
+                guard let r = QuestionAdapter.claudeScreen(s), r.headers == headers else { return false }
+                return QuestionAdapter.flat(r.question.text) == QuestionAdapter.flat(want.text) && r.question.options.map(\.label) == want.options.map(\.label)
+            }
+        }
+        // To question 1 (Left stops there). Navigation keys only; none of them chooses anything.
+        try await gated(gate, paneId: paneId, screen: exact(shown.question))
         try await sendNamedKeys(Array(repeating: "Left", count: n - 1), to: paneId)
         try await Task.sleep(for: .milliseconds(200))
         guard let first = try await now() else { throw QuestionAdapter.Failure.stuck("question 1") }
         var questions = [first]
         for _ in 1..<n {
-            try await gated(gate, paneId: paneId, screen: same)
+            try await gated(gate, paneId: paneId, screen: exact(questions[questions.count - 1]))
             try await sendNamedKeys(["Right"], to: paneId)
             var next: QuestionRequest.Question?
             _ = try await waitScreen(paneId: paneId, timeout: 2) { screen in
@@ -388,7 +422,7 @@ extension HerdrClient {
         // Back to where the picker was.
         let back = n - 1 - (questions.firstIndex { $0.text == shown.question.text } ?? 0)
         if back > 0 {
-            try await gated(gate, paneId: paneId, screen: same)
+            try await gated(gate, paneId: paneId, screen: exact(questions[questions.count - 1]))
             try await sendNamedKeys(Array(repeating: "Left", count: back), to: paneId)
         }
         guard try await waitScreen(paneId: paneId, timeout: 2, { QuestionAdapter.claudeScreen($0)?.question.text == shown.question.text }) else {

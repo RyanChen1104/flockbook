@@ -17,12 +17,15 @@ public struct KeyGateStop: Error, Sendable, Hashable, CustomStringConvertible {
 }
 
 extension HerdrClient {
-    /// True when the next key may go: the pane still shows the gate's agent (same kind and session; fresh snapshot),
-    /// then `ok` holds on a fresh screen read, then `allowed()`. The screen is read last, right before the answer.
-    /// No gate: true, nothing read.
-    public func passes(_ gate: KeyGate?, paneId: String, screen ok: (@Sendable (String) -> Bool)? = nil) async -> Bool {
+    /// True when the next key may go: the pane still shows the gate's agent (same kind and session; fresh snapshot)
+    /// and `agentOK` holds for it as it is now, then `ok` holds on a fresh screen read, then `allowed()`. The screen
+    /// is read last, right before the answer. No gate: true, nothing read.
+    public func passes(_ gate: KeyGate?, paneId: String, screen ok: (@Sendable (String) -> Bool)? = nil,
+                       agent agentOK: (@Sendable (Agent) -> Bool)? = nil) async -> Bool {
         guard let gate else { return true }
-        if let seen = gate.agent { guard await showsAgent(seen, paneId: paneId) else { return false } }
+        if let seen = gate.agent {
+            guard let now = await freshAgent(seen, paneId: paneId), agentOK?(now) ?? true else { return false }
+        }
         if let ok { guard let s = try? await visibleText(paneId: paneId), ok(s) else { return false } }
         if let allowed = gate.allowed { guard await allowed() else { return false } }
         return true
@@ -33,9 +36,22 @@ extension HerdrClient {
         guard await passes(gate, paneId: paneId, screen: ok) else { throw KeyGateStop() }
     }
 
-    /// The pane shows `seen` now: same agent kind and session (fresh snapshot).
-    func showsAgent(_ seen: Agent, paneId: String) async -> Bool {
-        guard let ws = try? await snapshot(), let a = ws.flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == paneId })?.agent else { return false }
-        return a.kind == seen.kind && a.sessionId == seen.sessionId
+    /// Named keys for a paired device: one gated call per key, so no committing key (Enter, Tab) rides in a batch
+    /// past a check. No gate: one call, as before.
+    func gatedKeys(_ keys: [String], gate: KeyGate?, paneId: String, screen ok: (@Sendable (String) -> Bool)?) async throws {
+        guard gate != nil else { try await sendNamedKeys(keys, to: paneId); return }
+        for k in keys {
+            try await gated(gate, paneId: paneId, screen: ok)
+            try await sendNamedKeys([k], to: paneId)
+        }
+    }
+
+    /// The pane's agent now (fresh snapshot), when it is `seen`: same kind and the same session id. Without a session
+    /// id there is nothing stable to bind to (herdr gives no other agent identity), so nil: paired keys fail closed.
+    func freshAgent(_ seen: Agent, paneId: String) async -> Agent? {
+        guard let sid = seen.sessionId, !sid.isEmpty,
+              let ws = try? await snapshot(), let a = ws.flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == paneId })?.agent,
+              a.kind == seen.kind, a.sessionId == sid else { return nil }
+        return a
     }
 }

@@ -178,8 +178,13 @@ extension HerdrClient {
     /// False: nothing sent. The notification buttons and the hub both answer through this.
     public func respondIfOpen(paneId: String, prompt: String, allow: Bool, agentKind: String, blocked: Bool, pending: PermissionRequest?, gate: KeyGate? = nil) async throws -> Bool {
         let action = (allow ? ApprovalNotice.Action.allow : .deny).rawValue
-        // `gate` (a remote device): the same agent first, then the screen read is the last call before the key.
-        if let seen = gate?.agent { guard await showsAgent(seen, paneId: paneId) else { return false } }
+        // `gate` (a remote device): the same agent first, its status as it is now (not the one from the check), then
+        // the screen read is the last call before the key.
+        var blocked = blocked
+        if let seen = gate?.agent {
+            guard let now = await freshAgent(seen, paneId: paneId) else { return false }
+            blocked = now.status == .blocked
+        }
         guard let now = await approvalState(paneId: paneId, agentKind: agentKind, blocked: blocked, pending: pending),
               ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: true) == .send(allow: allow) else { return false }
         if let allowed = gate?.allowed { guard await allowed() else { return false } }

@@ -16,6 +16,9 @@ final class FakeHerdr: @unchecked Sendable {
     private var _screen = ""
     private var _agents = "[]"
     private var _requests: [(method: String, params: [String: Any])] = []
+    private var _onInput: ((String, [String: Any]) -> Void)?
+    /// Runs after each input request (send_text, send_keys, send_input), before its reply: a test changes the screen.
+    var onInput: ((String, [String: Any]) -> Void)? { get { lock.withLock { _onInput } } set { lock.withLock { _onInput = newValue } } }
 
     init(path: String) { self.path = path }
 
@@ -91,6 +94,7 @@ final class FakeHerdr: @unchecked Sendable {
                     let text = String(decoding: try! JSONSerialization.data(withJSONObject: [screen]), as: UTF8.self).dropFirst().dropLast()
                     reply = #"{"id":"\#(id)","result":{"type":"pane_read","read":{"text":\#(text)}}}"#
                 case "pane.send_text", "pane.send_keys", "pane.send_input":
+                    onInput?(o["method"] as? String ?? "", o["params"] as? [String: Any] ?? [:])
                     reply = #"{"id":"\#(id)","result":{"type":"ok"}}"#
                 default:
                     reply = #"{"id":"\#(id)","error":{"code":"unknown","message":"fake"}}"#
