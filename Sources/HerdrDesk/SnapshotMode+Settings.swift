@@ -99,8 +99,11 @@ extension SnapshotRunner {
     }
 }
 
-/// Where the Settings page lies (global frame); zero while it is not shown.
-enum SettingsProbe { nonisolated(unsafe) static var page: CGRect = .zero }
+/// Where the Settings page and its first row lie (global frames); the page is zero while it is not shown.
+enum SettingsProbe {
+    nonisolated(unsafe) static var page: CGRect = .zero
+    nonisolated(unsafe) static var firstRow: CGRect = .zero
+}
 
 extension ChromeTests {
     /// `--test-settings-page`: Settings is a page of the main window, not a window of its own. A Settings row at the foot of
@@ -151,12 +154,20 @@ extension ChromeTests {
 
         // It scrolls: the page is taller than the column (with the remote section, even here); a wheel over it moves it.
         func scrollViews(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrollViews) }
+        // At the top of the page: the first row starts below the toolbar (the detail column's top, under its safe area), and
+        // the rows' column is centred in the detail column.
+        func topCheck(_ tag: String) {
+            let row = SettingsProbe.firstRow, detail = ChromeProbe.detail
+            step("\(tag): first row y \(Int(row.minY)) below the toolbar (\(Int(detail.minY))), column midX \(Int(row.midX)) = detail midX \(Int(detail.midX))",
+                 row.width > 0 && row.minY >= detail.minY && abs(row.midX - detail.midX) <= 2)
+        }
         let p = NSPoint(x: page.midX, y: page.midY)
         let hit = host.hitTest(host.convert(NSPoint(x: p.x, y: host.isFlipped ? p.y : host.bounds.height - p.y), to: host.superview))
         if let sv = hit?.enclosingScrollView {
             let shown = sv.contentView.bounds.height, content = sv.documentView?.frame.height ?? 0
+            topCheck("light, top")
             ContentTests.capture(win, to: "\(dir)/settings-page-light.png")
-            let y0 = sv.contentView.bounds.origin.y
+            let top = sv.contentView.bounds.origin, y0 = top.y
             if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -400, wheel2: 0, wheel3: 0),
                let e = NSEvent(cgEvent: cg) { hit?.scrollWheel(with: e) }
             try? await Task.sleep(for: .milliseconds(600))
@@ -166,8 +177,13 @@ extension ChromeTests {
             win.appearance = NSAppearance(named: .darkAqua)
             try? await Task.sleep(for: .milliseconds(600))
             ContentTests.capture(win, to: "\(dir)/settings-page-dark-scrolled.png")
-            sv.contentView.scroll(to: .zero); sv.reflectScrolledClipView(sv.contentView)
+            // Back to where the page started, insets included (the origin at the top is negative: the toolbar's inset above,
+            // the centring margin at the side). Scrolling to .zero would put the first row under the toolbar, off centre.
+            sv.contentView.scroll(to: top); sv.reflectScrolledClipView(sv.contentView)
             try? await Task.sleep(for: .milliseconds(600))
+            let back = sv.contentView.bounds.origin
+            step("dark: back at the top origin (\(Int(back.x)), \(Int(back.y))) = (\(Int(top.x)), \(Int(top.y)))", abs(back.x - top.x) < 1 && abs(back.y - top.y) < 1)
+            topCheck("dark, top")
             ContentTests.capture(win, to: "\(dir)/settings-page-dark.png")
             win.appearance = nil
         } else { step("a scroll view under the page (\(hit.map { "\(type(of: $0))" } ?? "no view"))", false) }

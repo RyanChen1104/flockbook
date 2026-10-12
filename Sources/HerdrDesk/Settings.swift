@@ -32,6 +32,7 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(reduce)
+                .probe { SettingsProbe.firstRow = $0 }
             }
             Section("Reading") {
                 Picker(selection: $readingSize) {
