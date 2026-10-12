@@ -338,7 +338,8 @@ function listScreen(): HTMLElement {
   }
   if (!all.length) sections.push(h("p", { class: "center muted" }, "No agents running."));
   return h("section", { class: "list" },
-    h("header", { class: "top glass-bar" }, h("h1", {}, "Agents"),
+    // A large title that scrolls away with the list (no bar on top: nothing on this page needs one).
+    h("header", { class: "list-head" }, h("h1", {}, "Agents"),
       h("span", { class: `level ${state.level}` }, state.level === "input" ? "Input on" : "Read only")),
     ...sections);
 }

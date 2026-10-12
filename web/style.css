@@ -91,10 +91,14 @@ button:disabled { opacity: .35; cursor: default; }
 .label { font: var(--caption); font-weight: 600; color: var(--label-2); margin-top: 6px; }
 .pair .primary { margin-top: 8px; }
 
-/* Bars: sticky frosted glass across the full width (the toolbar row). */
+/* The conversation's bar: sticky frosted glass across the full width (the toolbar row). */
 .top { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px;
   margin: 0 -16px; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; border-bottom: .5px solid var(--sep); }
 .top h1 { margin: 0; font: var(--large-title); }
+/* The list's large title: plain content, it scrolls away. */
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 18px) 0 2px; }
+.list-head h1 { margin: 0; font: var(--large-title); }
 .level { font: var(--caption); font-weight: 500; padding: 3px 9px; border-radius: 99px; background: rgba(var(--primary), .1); color: var(--label-2-glass); }
 .level.input { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 

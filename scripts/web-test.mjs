@@ -274,12 +274,27 @@ async function fakeRun() {
   check(await p.eval("document.querySelectorAll('.dot.blocked').length") === 2 && await p.eval("document.querySelectorAll('.dot.working').length") === 1,
     "list: status shapes");
   check(await p.eval(noScroll), "list: no sideways scroll at 390 pt");
+  // No bar that stays on top: the title and the input level are plain content and scroll away with the list.
+  const head = "document.querySelector('.list-head')";
+  check(await p.eval(`!!${head} && !document.querySelector('.list .top') && !['sticky', 'fixed'].includes(getComputedStyle(${head}).position)`) === true,
+    "list: the title is not a sticky bar");
+  check(await p.eval(`${head}.querySelector('h1').textContent === 'Agents' && ['Input on', 'Read only'].includes(${head}.querySelector('.level').textContent)`) === true,
+    "list: title and input level still shown");
   await p.shot("list");
   await p.shot("list", true);
+  // Scrolled (page-only filler rows, gone on the next render): the title has gone up with the content.
+  await p.eval(`(() => { const g = document.querySelector('.list .group:last-of-type');
+    for (let i = 0; i < 12; i++) { const li = document.createElement('li'); li.innerHTML = '<div class="row glass-float"><span class="row-text"><span class="row-title">Filler agent ' + (i + 1) + '</span><span class="row-sub">claude · filler</span></span></div>'; g.append(li); }
+    window.scrollTo(0, 260); })()`);
+  check(await p.eval(`window.scrollY > 0 && ${head}.getBoundingClientRect().bottom <= 0`) === true, "list: scrolled, the title is out of view");
+  await p.shot("list-scrolled");
+  await p.shot("list-scrolled", true);
+  await p.eval("window.scrollTo(0, 0)");
 
   // Conversation with an approval.
   await p.click("[data-pane='w1:p1']");
   check(await p.until("!!document.querySelector('#allow')") === true, "approval: card with Allow");
+  check(await p.eval("getComputedStyle(document.querySelector('.top')).position") === "sticky", "conversation: the back bar stays on top");
   check(await p.eval("location.hash") === "#pane=w1%3Ap1", "nav: pane in the address (back button works)");
   check(await p.eval("document.querySelector('.msg.assistant strong')?.textContent") === "src/app.ts", "conversation: markdown bold");
   check(await p.eval("document.querySelector('.msg.assistant pre code')?.textContent") === "npm run build", "conversation: code block");
