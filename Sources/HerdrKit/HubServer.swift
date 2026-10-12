@@ -42,6 +42,8 @@ import Network
     /// Keyed by a number never used twice: a late callback of a closed connection finds nothing, so it can never
     /// touch a newer connection (an object address, by contrast, is reused once the old connection is freed).
     private var conns: [Int: Conn] = [:]
+    /// Image uploads per device, over all its connections.
+    private let uploads = HubUploadLimiter()
     private var lastID = 0
     private let queue = DispatchQueue(label: "hub.server")
 
@@ -105,7 +107,7 @@ import Network
         listener?.cancel()
         listener = nil
         fingerprint = nil
-        for c in conns.values { c.close() }
+        for c in conns.values { c.close(); c.session.discard() }
         conns = [:]
     }
 
@@ -138,7 +140,7 @@ import Network
         let pending = conns.values.filter { $0.session.device == nil }.count
         guard pending < Self.maxPending, conns.count < Self.maxConnections else { nw.cancel(); return }
         lastID += 1
-        let c = Conn(id: lastID, nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing, source: Self.source(nw)))
+        let c = Conn(id: lastID, nw: nw, session: HubSession(backend: backend, devices: devices, pairing: pairing, source: Self.source(nw), uploads: uploads))
         let key = c.id
         conns[key] = c
         nw.stateUpdateHandler = { [weak self] state in
@@ -172,7 +174,9 @@ import Network
     }
 
     private func drop(_ key: Int) {
-        conns.removeValue(forKey: key)?.close()
+        guard let c = conns.removeValue(forKey: key) else { return }
+        c.close()
+        c.session.discard()   // unsent uploads and their files
     }
 
     private func receive(_ key: Int) {

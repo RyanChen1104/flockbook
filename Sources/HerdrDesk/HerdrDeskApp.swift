@@ -117,7 +117,7 @@ struct HerdrDeskApp: App {
         }
         if let i = args.firstIndex(of: "--test-hub"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1], allow = !args.contains("--deny")
-            Task { @MainActor in await HubLiveTest.run(model: m, paneId: paneId, allow: allow) }
+            Task { @MainActor in await HubLiveTest.run(model: m, paneId: paneId, allow: allow, image: args.contains("--image")) }
         }
         if let i = args.firstIndex(of: "--test-terminal"), args.indices.contains(i + 1), store.session.name != nil {
             let paneId = args[i + 1]

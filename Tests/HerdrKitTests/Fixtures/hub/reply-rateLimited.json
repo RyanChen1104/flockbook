@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "rateLimited",
+    "message": "Too many images from this device. Try again in a few minutes."
+  },
+  "ok": false,
+  "re": "c9",
+  "type": "reply",
+  "v": 1
+}

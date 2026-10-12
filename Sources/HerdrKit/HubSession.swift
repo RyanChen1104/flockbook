@@ -21,8 +21,10 @@ import CryptoKit
     func loadEarlier(session: String) async -> Bool
     /// The pane's visible screen text (read-only).
     func screen(pane: String) async -> String?
-    /// Types the text and submits it, as the composer does. False when herdr did not take it.
-    func send(pane: String, text: String) async -> HubSendResult
+    /// Where re-encoded images from remote devices go (the composer's image folder). Nil: images are refused.
+    var imageDirectory: URL? { get }
+    /// Types the text, then the image files' paths, and submits, as the composer does.
+    func send(pane: String, text: String, images: [URL]) async -> HubSendResult
     /// The approval card's input (`HerdrClient.respond`). Called only after the prompt was checked.
     func approve(pane: String, prompt: String, allow: Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
@@ -79,8 +81,27 @@ extension Hub {
     /// `source`: the peer's address; wrong pairing tries are counted per source.
     private let source: String
 
-    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "") {
+    /// Image uploads: the per-device limit (one limiter per hub), the open upload, and the finished unsent ones.
+    private let uploads: HubUploadLimiter
+    private struct OpenUpload { var name: String; var parts: Int; var next: Int; var data: Data }
+    private var openUpload: OpenUpload?
+    private var held: [(name: String, url: URL)] = []
+    /// Counts `discard` calls, so an upload that finishes after one is deleted, not held.
+    private var discards = 0
+    /// Uploads held per connection.
+    public static let maxHeld = 4
+
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "", uploads: HubUploadLimiter? = nil) {
         self.backend = backend; self.devices = devices; self.pairing = pairing; self.source = source
+        self.uploads = uploads ?? HubUploadLimiter()
+    }
+
+    /// The connection ends: unsent uploads and their files go.
+    public func discard() {
+        discards += 1
+        openUpload = nil
+        for h in held { try? FileManager.default.removeItem(at: h.url) }
+        held.removeAll()
     }
 
     /// The device of this connection, looked up again each time (nil after a revoke).
@@ -131,20 +152,30 @@ extension Hub {
             return [ok(m.id)]
         case .loadEarlier(let session, let before):
             return await loadEarlier(session: session, before: before, re: m.id)
-        case .send(let id, let text):
+        case .attach(let name, let part, let parts, let data):
+            guard canInput else { return [readOnly(m.id)] }
+            return await attach(m.id, device: device, name: name, part: part, parts: parts, base64: data)
+        case .send(let id, let text, let attachments):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             // A plain shell is never typed into from a remote device.
             guard p.agent != nil else { return [fail(m.id, .readOnly, "Remote input goes to agents only.")] }
             if let why = Hub.inputProblem(text, limit: Hub.maxSendText) { return [fail(m.id, .badRequest, why)] }
+            guard attachments.count <= Hub.maxAttachments else { return [fail(m.id, .badRequest, "At most \(Hub.maxAttachments) images per message.")] }
+            guard Set(attachments).count == attachments.count else { return [fail(m.id, .badRequest, "An image is named twice.")] }
+            let images = attachments.compactMap { n in held.first { $0.name == n }?.url }
+            guard images.count == attachments.count else { return [fail(m.id, .badRequest, "Unknown image. Attach it again. Nothing was sent.")] }
+            guard !text.isEmpty || !images.isEmpty else { return [fail(m.id, .badRequest, "Nothing to send.")] }
             let st = await state(p)
             guard let screen = st.screen else { return [unreadable(m.id)] }
             guard st.approval == nil, st.question == nil, !st.unreadablePrompt, p.agent?.status != .blocked, !Hub.screenTakesKeys(screen) else {
                 return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")]
             }
             // The backend reads the pane once more right before the keys (`HerdrClient.readyForText`).
-            switch await backend.send(pane: id, text: text) {
-            case .sent: return [ok(m.id)]
+            switch await backend.send(pane: id, text: text, images: images) {
+            case .sent:
+                held.removeAll { attachments.contains($0.name) }   // sent: the files stay for the agent (the folder's purge removes them)
+                return [ok(m.id)]
             case .changed: return [fail(m.id, .promptOpen, "The pane changed before the text went out. Nothing was sent.")]
             case .failed: return [fail(m.id, .failed, "herdr did not take the message.")]
             }
@@ -189,6 +220,62 @@ extension Hub {
             if let p = pane(id) { out += await pushes(p, force: false) }
         }
         return out
+    }
+
+    // MARK: - Images
+
+    private static func uploadName(_ s: String) -> Bool {
+        (1...32).contains(s.count) && s.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" || $0 == "-" }
+    }
+
+    /// One `attach` part (remote-protocol.md 3.3). Any refused part drops the open upload.
+    private func attach(_ re: String, device: HubDevice, name: String, part: Int, parts: Int, base64: String) async -> [HubMessage] {
+        guard let dir = backend.imageDirectory else { return [fail(re, .failed, "This hub takes no images.")] }
+        let open = openUpload
+        openUpload = nil
+        func bad(_ why: String) -> [HubMessage] { [fail(re, .badRequest, why)] }
+        guard Self.uploadName(name) else { return bad("Upload names are 1-32 letters, digits, _ or -.") }
+        guard (1...HubImage.maxParts).contains(parts), (0..<parts).contains(part) else { return bad("An image has 1-\(HubImage.maxParts) parts.") }
+        if let open {
+            guard open.name == name, open.parts == parts, open.next == part else { return bad("Parts of one image come in order, one image at a time.") }
+        } else {
+            guard part == 0 else { return bad("Parts of one image come in order, one image at a time.") }
+            guard !held.contains(where: { $0.name == name }) else { return bad("Upload \(name) is already held.") }
+        }
+        // Base64 of 640 KiB is under 874 KiB; a longer string is refused before decoding.
+        guard base64.utf8.count <= (HubImage.maxPartBytes + 2) / 3 * 4, let data = Data(base64Encoded: base64) else { return bad("Part data is not base64.") }
+        guard data.count <= HubImage.maxPartBytes else { return bad("A part is at most \(HubImage.maxPartBytes / 1024) KiB.") }
+        let all = (open?.data ?? Data()) + data
+        guard all.count <= HubImage.maxBytes else { return bad("An image is at most \(HubImage.maxBytes / 1024 / 1024) MiB.") }
+        guard uploads.take(device: device.id, bytes: data.count, image: part == 0) else {
+            return [fail(re, .rateLimited, "Too many images from this device. Try again in a few minutes.")]
+        }
+        guard part == parts - 1 else {
+            openUpload = OpenUpload(name: name, parts: parts, next: part + 1, data: all)
+            return [ok(re)]
+        }
+        // Decoding is off the main thread; a `discard` meanwhile deletes the result.
+        let round = discards
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<HubImage.Output, HubImage.Failure> in
+            do { return .success(try HubImage.reencode(all, into: dir)) } catch { return .failure(error as? HubImage.Failure ?? .undecodable) }
+        }.value
+        switch result {
+        case .failure(let f):
+            switch f {
+            case .notImage: return bad("Not a PNG, JPEG, HEIC or WebP image.")
+            case .tooLarge: return bad("The image is too large (at most \(HubImage.maxSide) px a side, \(HubImage.maxPixels / 1_000_000) megapixels).")
+            case .undecodable: return bad("The image could not be read.")
+            case .writeFailed: return [fail(re, .failed, "The hub could not store the image.")]
+            }
+        case .success(let out):
+            guard round == discards, !held.contains(where: { $0.name == name }) else {
+                try? FileManager.default.removeItem(at: out.url)
+                return bad("The upload was dropped.")
+            }
+            held.append((name, out.url))
+            while held.count > Self.maxHeld { try? FileManager.default.removeItem(at: held.removeFirst().url) }
+            return [.attached(HubAttached(upload: name, width: out.width, height: out.height, bytes: out.bytes)), ok(re)]
+        }
     }
 
     // MARK: - Helpers

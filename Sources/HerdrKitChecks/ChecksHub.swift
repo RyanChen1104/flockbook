@@ -29,8 +29,12 @@ import Foundation
     check(clientSeen == Set(Hub.clientTypes), "hub: a fixture for every client type (missing \(Set(Hub.clientTypes).subtracting(clientSeen).sorted()))")
     check(hubSeen == Set(Hub.hubTypes), "hub: a fixture for every hub type (missing \(Set(Hub.hubTypes).subtracting(hubSeen).sorted()))")
 
-    // Intent only: no client message carries keys or bytes.
-    check(Hub.clientTypes == ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"], "hub: client types are the intent list")
+    // Intent only: no client message carries keys or terminal bytes (attach carries an image the hub re-encodes).
+    check(Hub.clientTypes == ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping"], "hub: client types are the intent list")
+    if case .send(_, _, let att)? = (try? Hub.decodeClient(fixture("hub/send-attachments.json")))?.body { check(att == ["img-1"], "hub: send names its attachments") }
+    else { check(false, "hub: send-attachments.json is a send") }
+    if case .send(_, _, let att)? = (try? Hub.decodeClient(fixture("hub/send.json")))?.body { check(att.isEmpty, "hub: send without attachments: none") }
+    else { check(false, "hub: send.json is a send") }
     check(Hub.version == 1, "hub: protocol version 1")
 
     // Decoded values.

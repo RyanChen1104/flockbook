@@ -52,7 +52,7 @@ enum PasteImages {
     static func purgeOld(days: Int = 7) {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        for f in files where f.pathExtension == "png" {
+        for f in files where ["png", "jpg"].contains(f.pathExtension) {
             if let m = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, m < cutoff { remove(f) }
         }
     }

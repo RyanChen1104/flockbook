@@ -199,12 +199,16 @@ Path, end to end:
 5. File: the app's own cache folder, the same one the Mac composer uses (`~/Library/Caches/HerdrDesk/paste`, mode
    700), name `remote-<random UUID>.png|jpg`, created exclusively with mode 600. Never a client-chosen name or path.
 6. `send` with `attachments`: all the `send` rules of protocol 3.1 still apply (agent pane only, no prompt open, a
-   fresh read right before the keys). The message is the text and then the quoted file paths, typed by the same
-   code as the Mac composer (`MessageSender`: types the text, waits for Claude's `[Image` marker, then Enter).
+   fresh read right before the keys). The message is the text and then the file paths, sent by the same code as
+   the Mac composer (`MessageSender`): the text is typed; each path of the image folder goes as a **bracketed
+   paste** (`ImagePaste`), because Claude Code turns a pasted image path into an attachment but keeps a typed one
+   as text (seen live: typed -> plain path, pasted -> `[Image #1]`). It then waits for the `[Image` marker and
+   sends Enter. The paste markers come only from the hub around its own file names; client text with ESC is
+   refused (3.1), so a phone cannot open or close a paste.
 7. Cleanup: unsent uploads are deleted when their connection closes, and when a fifth one replaces the oldest.
    Sent files stay for the agent to read and go with the Mac composer's 7-day cache purge.
 
-Agents: Claude Code turns the path into an image attachment. Codex and pi get the path as text and read it with
+Agents: Claude Code turns the pasted path into an image attachment. Other agents get the path and read it with
 their file tools (the same as from the Mac composer).
 
 

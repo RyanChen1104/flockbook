@@ -1,16 +1,18 @@
 import HerdrKit
 import Foundation
 import AppKit
+import ImageIO
 
 /// `--session <named> --test-hub <paneId> [--deny]`: the remote hub over a real WebSocket on 127.0.0.1, with this
 /// app's store and input paths. A read-level device must be refused; with an approval open, `send` must be refused
 /// (promptOpen), a stale prompt id must be refused, and the real id must answer. Without a prompt, `send` types a
-/// short message. Refuses to run on the default session (checked at launch).
+/// short message; with `--image`, it first attaches a JPEG that carries GPS (the stored file must have none) and
+/// sends it with the text. Refuses to run on the default session (checked at launch).
 @MainActor
 enum HubLiveTest {
     // Swift 6.2.1 crashes optimizing this function in release builds (CopyPropagation ownership error); test-only code.
     @_optimize(none)
-    static func run(model: AppModel, paneId: String, allow: Bool) async {
+    static func run(model: AppModel, paneId: String, allow: Bool, image: Bool = false) async {
         try? await Task.sleep(for: .seconds(3))
         await model.store.refresh()
         var ok = true
@@ -58,7 +60,22 @@ enum HubLiveTest {
             step("prompt push without the approval", cleared)
         } else if prompt?.question == nil {
             let word = "hub-ok-\(Int.random(in: 1000...9999))"
-            try? await c.send(#"{"v":1,"type":"send","id":"s","pane":"\#(paneId)","text":"Reply with just: \#(word)"}"#)
+            var attachments = ""
+            if image, let jpeg = gpsJPEG() {
+                try? await c.send(#"{"v":1,"type":"attach","id":"i","upload":"live-1","part":0,"parts":1,"data":"\#(jpeg.base64EncodedString())"}"#)
+                let up = await c.untilReply(8)
+                let at = up.compactMap { if case .attached(let a) = $0 { a } else { nil } }.first
+                step("attach -> \(up.map(\.type)) \(at.map { "\($0.width)x\($0.height) \($0.bytes) B" } ?? "")", up.last.map(isOK) == true && at != nil)
+                let newest = ((try? FileManager.default.contentsOfDirectory(at: PasteImages.directory, includingPropertiesForKeys: [.creationDateKey])) ?? [])
+                    .filter { $0.lastPathComponent.hasPrefix("remote-") }
+                    .max { ((try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) }
+                let props = newest.flatMap { CGImageSourceCreateWithURL($0 as CFURL, nil) }.flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [String: Any] } ?? [:]
+                let mode = newest.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int } ?? 0
+                step("stored \(newest?.lastPathComponent ?? "nothing"): no GPS, mode \(String(mode, radix: 8))",
+                     newest != nil && props[kCGImagePropertyGPSDictionary as String] == nil && mode == 0o600)
+                attachments = #","attachments":["live-1"]"#
+            }
+            try? await c.send(#"{"v":1,"type":"send","id":"s","pane":"\#(paneId)","text":"Reply with just: \#(word)"\#(attachments)}"#)
             step("send -> ok", await c.untilReply(8).last.map(isOK) == true)
             // A pane without a transcript (CLAUDE_CODE_CHILD_SESSION) has no conversation to push; its screen still changes.
             var pushed: String?
@@ -68,10 +85,28 @@ enum HubLiveTest {
                 if case .screen(let sc) = m, sc.text.components(separatedBy: word).count > 2 { pushed = "screen"; break }
             }
             step("\(pushed ?? "no") push after the send", pushed != nil)
+            if image {
+                let text = (try? await model.store.client.readScrollback(paneId: paneId, lines: 40, ansi: false).text) ?? ""
+                step("the agent took the image as an attachment ([Image #n] on screen)", text.contains("[Image #"))
+            }
         }
         c.close()
         server.stop()
         finish(ok)
+    }
+
+    /// A small JPEG with GPS and a camera name in its metadata.
+    static func gpsJPEG() -> Data? {
+        guard let ctx = CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(srgbRed: 0.2, green: 0.6, blue: 0.3, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        let out = NSMutableData()
+        guard let img = ctx.makeImage(), let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        let props: [CFString: Any] = [kCGImagePropertyGPSDictionary: [kCGImagePropertyGPSLatitude: 47.37, kCGImagePropertyGPSLatitudeRef: "N",
+                                                                     kCGImagePropertyGPSLongitude: 8.54, kCGImagePropertyGPSLongitudeRef: "E"],
+                                      kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFMake: "TestCam"]]
+        CGImageDestinationAddImage(dest, img, props as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? out as Data : nil
     }
 
     /// `--session <named> --test-remote`: the app's RemoteHub on 127.0.0.1 with its files in a temp folder: a new

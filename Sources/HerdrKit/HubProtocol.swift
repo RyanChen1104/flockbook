@@ -5,9 +5,12 @@ import Foundation
 /// Wire types only; no listener here. Clients send intent (send, approve, answer), never raw keys.
 public enum Hub {
     public static let version = 1
-    /// Every client message type. Intent only: there is no type for keys or bytes.
-    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "approve", "answer", "ping"]
-    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "pong"]
+    /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
+    /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong"]
+    /// Finished uploads a `send` may name.
+    public static let maxAttachments = 4
 
     public enum DecodeError: Error, Equatable, Sendable {
         case missingVersion
@@ -108,8 +111,11 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case watch(pane: String)
         case unwatch(pane: String)
         case loadEarlier(session: String, before: String)
-        /// Type the text and submit it, as the composer does.
-        case send(pane: String, text: String)
+        /// Type the text and submit it, as the composer does. `attachments`: finished `attach` uploads of this
+        /// connection; their file paths follow the text.
+        case send(pane: String, text: String, attachments: [String] = [])
+        /// One part of an image (remote-protocol.md 3.3). `data`: standard base64.
+        case attach(upload: String, part: Int, parts: Int, data: String)
         /// `prompt` = the approval id from the last `prompt` push.
         case approve(pane: String, prompt: String, allow: Bool)
         case answer(pane: String, question: String, answers: [HubAnswer])
@@ -123,6 +129,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             case .unwatch: "unwatch"
             case .loadEarlier: "loadEarlier"
             case .send: "send"
+            case .attach: "attach"
             case .approve: "approve"
             case .answer: "answer"
             case .ping: "ping"
@@ -133,7 +140,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, prompt, allow, question, answers }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -145,7 +152,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case "watch": body = .watch(pane: try s(.pane))
         case "unwatch": body = .unwatch(pane: try s(.pane))
         case "loadEarlier": body = .loadEarlier(session: try s(.session), before: try s(.before))
-        case "send": body = .send(pane: try s(.pane), text: try s(.text))
+        case "send": body = .send(pane: try s(.pane), text: try s(.text), attachments: try c.decodeIfPresent([String].self, forKey: .attachments) ?? [])
+        case "attach": body = .attach(upload: try s(.upload), part: try c.decode(Int.self, forKey: .part), parts: try c.decode(Int.self, forKey: .parts), data: try s(.data))
         case "approve": body = .approve(pane: try s(.pane), prompt: try s(.prompt), allow: try c.decode(Bool.self, forKey: .allow))
         case "answer": body = .answer(pane: try s(.pane), question: try s(.question), answers: try c.decode([HubAnswer].self, forKey: .answers))
         case "ping": body = .ping
@@ -167,8 +175,11 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(pane, forKey: .pane)
         case .loadEarlier(let session, let before):
             try c.encode(session, forKey: .session); try c.encode(before, forKey: .before)
-        case .send(let pane, let text):
+        case .send(let pane, let text, let attachments):
             try c.encode(pane, forKey: .pane); try c.encode(text, forKey: .text)
+            if !attachments.isEmpty { try c.encode(attachments, forKey: .attachments) }
+        case .attach(let upload, let part, let parts, let data):
+            try c.encode(upload, forKey: .upload); try c.encode(part, forKey: .part); try c.encode(parts, forKey: .parts); try c.encode(data, forKey: .data)
         case .approve(let pane, let prompt, let allow):
             try c.encode(pane, forKey: .pane); try c.encode(prompt, forKey: .prompt); try c.encode(allow, forKey: .allow)
         case .answer(let pane, let question, let answers):
@@ -201,7 +212,7 @@ public struct HubWelcome: Codable, Hashable, Sendable {
 }
 
 public struct HubError: Codable, Hashable, Sendable {
-    public enum Code: String, Codable, Hashable, Sendable { case unauthorized, readOnly, stale, promptOpen, notFound, badRequest, unsupportedVersion, failed }
+    public enum Code: String, Codable, Hashable, Sendable { case unauthorized, readOnly, stale, promptOpen, notFound, badRequest, rateLimited, unsupportedVersion, failed }
     public var code: Code
     public var message: String
     public init(code: Code, message: String) { self.code = code; self.message = message }
@@ -234,6 +245,14 @@ public struct HubPrompt: Codable, Hashable, Sendable {
     public init(pane: String, approval: HubApproval? = nil, question: HubQuestion? = nil) { self.pane = pane; self.approval = approval; self.question = question }
 }
 
+/// The last `attach` part was taken: the re-encoded image's size.
+public struct HubAttached: Codable, Hashable, Sendable {
+    public var upload: String
+    public var width: Int, height: Int
+    public var bytes: Int
+    public init(upload: String, width: Int, height: Int, bytes: Int) { self.upload = upload; self.width = width; self.height = height; self.bytes = bytes }
+}
+
 public enum HubMessage: Codable, Hashable, Sendable {
     /// The answer to a good `pair`: the new device token, shown once. The client sends `hello` with it next.
     case paired(HubPaired)
@@ -244,6 +263,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
     case conversation(HubConversation)
     case screen(pane: String, text: String)
     case prompt(HubPrompt)
+    case attached(HubAttached)
     case pong
 
     public var type: String {
@@ -256,6 +276,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .conversation: "conversation"
         case .screen: "screen"
         case .prompt: "prompt"
+        case .attached: "attached"
         case .pong: "pong"
         }
     }
@@ -273,6 +294,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case "conversation": self = .conversation(try HubConversation(from: decoder))
         case "screen": self = .screen(pane: try c.decode(String.self, forKey: .pane), text: try c.decode(String.self, forKey: .text))
         case "prompt": self = .prompt(try HubPrompt(from: decoder))
+        case "attached": self = .attached(try HubAttached(from: decoder))
         case "pong": self = .pong
         case let t: throw Hub.DecodeError.unknownType(t)
         }
@@ -285,6 +307,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .reply(let r): try r.encode(to: encoder)
         case .conversation(let m): try m.encode(to: encoder)
         case .prompt(let p): try p.encode(to: encoder)
+        case .attached(let a): try a.encode(to: encoder)
         case .snapshot, .status, .screen, .pong: break
         }
         var c = encoder.container(keyedBy: K.self)

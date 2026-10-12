@@ -22,12 +22,17 @@ import Foundation
     func loadEarlier(session: String) async -> Bool { await store.loadEarlier(for: session) }
     func screen(pane: String) async -> String? { try? await store.client.visibleText(paneId: pane) }
 
-    func send(pane id: String, text: String) async -> HubSendResult {
+    /// The composer's image folder: `MessageSender` waits for the agent's image marker on paths in it.
+    var imageDirectory: URL? { PasteImages.directory }
+
+    /// The composer's send: the text, then the image paths (quoted as the composer does).
+    func send(pane id: String, text: String, images: [URL]) async -> HubSendResult {
         guard model.writesEnabled else { return .failed }
         // herdr has no compare-and-send: this read and the keys are two calls, so a small window stays.
         guard await store.client.readyForText(paneId: id) else { return .changed }
         model.noteSent(id)
-        return await MessageSender.send(text, to: id, client: store.client) ? .sent : .failed
+        let message = ([text] + images.map(ComposerHandle.quoted)).filter { !$0.isEmpty }.joined(separator: " ")
+        return await MessageSender.send(message, to: id, client: store.client) ? .sent : .failed
     }
 
     /// The approval card's keys, without its UI follow-up (the Mac window does not change for a phone action).

@@ -28,7 +28,14 @@ import Foundation
     }
     func screen(pane: String) async -> String? { screens[pane] }
     var sendResult = HubSendResult.sent
-    func send(pane: String, text: String) async -> HubSendResult { sent.append("\(pane) \(text)"); return sendOK ? sendResult : .failed }
+    var imageDirectory: URL?
+    /// The image files of each send that had some.
+    var sentImages: [[URL]] = []
+    func send(pane: String, text: String, images: [URL]) async -> HubSendResult {
+        sent.append("\(pane) \(text)")
+        if !images.isEmpty { sentImages.append(images) }
+        return sendOK ? sendResult : .failed
+    }
     var approveOK = true
     func approve(pane: String, prompt: String, allow: Bool) async -> Bool { approved.append("\(pane) \(prompt) \(allow)"); return approveOK }
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws {
