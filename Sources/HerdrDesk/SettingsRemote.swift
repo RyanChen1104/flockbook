@@ -71,6 +71,7 @@ struct RemoteAccessSection: View {
         guard hub.enabled else { return "Off. Nothing listens." }
         if let p = hub.problem { return p }
         guard let url = hub.url else { return "Starting…" }
+        if hub.mode == .tailscale, case .taken? = hub.serve { return "Ready on this Mac. Port \(TailscaleSetup.servePort) is in use; see Tailscale Serve below." }
         if hub.mode == .tailscale && hub.serve != .ours { return "Ready on this Mac. Turn on Tailscale Serve below." }
         let c = hub.connections
         return "On at \(url)" + (c > 0 ? " · \(c) connected" : "")

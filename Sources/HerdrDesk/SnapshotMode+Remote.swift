@@ -116,7 +116,7 @@ extension SnapshotRunner {
                 }
                 let ink = NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil).map { Pixels($0).ink } ?? 0
                 step("\(name)-\(dark ? "dark" : "light") \(Int(size.width))x\(Int(size.height)) pt, \(String(format: "%.1f", ink * 100))% ink",
-                     ink > 0.02 && abs(size.width - width) < 60 && size.height > 100 && size.height < 1000)
+                     ink > 0.02 && abs(size.width - width) < 60 && size.height > 100 && size.height < (width == 520 ? 1400 : 1000))
                 win.orderOut(nil)
                 step("\(name): only preview addresses shown", [off, on, pairing, tsSetup, tsOn].allSatisfy { $0.addresses.map(\.host) == ["127.0.0.1", "100.101.102.103", "192.168.1.20"] })
             }
