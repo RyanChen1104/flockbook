@@ -371,6 +371,8 @@ async function fakeRun() {
     "item spaces with U+2028": "'- ' + ' '.repeat(40000) + 'x\\u2028'",
     "130k empty items": "'-\\n'.repeat(130000)",
     "200k paragraphs": "'a\\n\\n'.repeat(200000)",
+    "budget edge: rules then *x*": "'---\\n'.repeat(19999) + '\\n*x*'",
+    "budget edge: rules then nested": "'---\\n'.repeat(19995) + '\\n# ' + '**a *b ~~c **d**~~*'.repeat(3)",
     "table cells full of *a*": "['a|b', '-|-', ...Array(4999).fill('*a* '.repeat(100) + '|' + '*a* '.repeat(100))].join('\\n')",
   };
   for (const [name, src] of Object.entries(hostile)) {
@@ -379,7 +381,7 @@ async function fakeRun() {
       try { const f = markdown(s); const d = document.createElement('div'); d.append(f);
         return { ms: performance.now() - t, nodes: d.querySelectorAll('*').length };
       } catch (e) { return { error: String(e) }; } })()`);
-    check(!r.error && r.ms < 250 && r.nodes <= 21000,
+    check(!r.error && r.ms < 250 && r.nodes <= 20000,
       `markdown hostile: ${name} (${r.error ?? `${Math.round(r.ms)} ms, ${r.nodes} nodes`})`);
   }
   check(await p.eval(`(async () => { const { markdown } = await import('/markdown.js');

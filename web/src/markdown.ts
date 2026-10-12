@@ -209,14 +209,16 @@ export function inline(text: string): DocumentFragment {
 }
 function spans(text: string, depth = 0): DocumentFragment {
   const out = document.createDocumentFragment();
-  if (depth > MAX_INLINE_DEPTH || text.length > MAX_LINE || budget <= 0) {
+  // Room for a new element plus the ones around it, built after this returns: its depth's spans and the block.
+  const room = () => budget >= depth + 2;
+  if (depth > MAX_INLINE_DEPTH || text.length > MAX_LINE || !room()) {
     out.append(text);
     return out;
   }
   const re = new RegExp(INLINE);
   let at = 0;
   for (const m of text.matchAll(re)) {
-    if (budget <= 0) break;
+    if (!room()) break;
     out.append(text.slice(at, m.index));
     if (m[1] !== undefined) out.append(el("code", m[1]));
     else if (m[2] !== undefined || m[3] !== undefined) out.append(el("strong", spans(m[2] ?? m[3], depth + 1)));
