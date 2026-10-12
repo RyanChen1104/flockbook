@@ -154,10 +154,12 @@ h2 .parts { font: var(--caption); color: var(--label-2); }
 /* Wide tables scroll sideways inside their own box, never the page. */
 .msg .table-wrap { max-width: 100%; overflow-x: auto; margin: 10px 0; border-radius: var(--r-card); border: .5px solid rgba(var(--primary), .14); }
 .msg table { border-collapse: collapse; min-width: 100%; font-size: 15px; line-height: 21px; }
-.msg th, .msg td { padding: 7px 12px; min-width: 4em; text-align: left; vertical-align: top; border-bottom: .5px solid rgba(var(--primary), .09); }
+/* A readable width per cell (CJK wraps at any character): a table wider than the column scrolls in its box. */
+.msg th, .msg td { padding: 7px 12px; min-width: 7em; text-align: left; vertical-align: top; border-bottom: .5px solid rgba(var(--primary), .09); }
+.msg th.short, .msg td.short { min-width: 0; white-space: nowrap; }
 .msg th { font-weight: 600; background: rgba(var(--primary), .04); }
 .msg tbody tr:last-child td { border-bottom: none; }
-.msg td code, .msg th code { font-size: 13px; }
+.msg td code, .msg th code { font-size: 13px; overflow-wrap: anywhere; }
 .status-line { text-align: center; color: var(--label-3); font: var(--caption); font-variant-numeric: tabular-nums; margin: 0; }
 .tools { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: var(--subhead); }

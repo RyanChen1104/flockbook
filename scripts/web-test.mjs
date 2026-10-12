@@ -314,7 +314,10 @@ async function fakeRun() {
     "> quoted *line*", "", "---", "",
     "| " + Array.from({ length: 8 }, (_, i) => `column_${i}_with_a_long_unbroken_name`).join(" | ") + " |",
     "|" + "---|".repeat(8), "| " + Array.from({ length: 8 }, (_, i) => `value_${i}_that_does_not_wrap_at_all`).join(" | ") + " |", "",
-    "<img src=x onerror=\"window.__xss=1\"> [bad](javascript:window.__xss=2) [ok](https://example.com/a)",
+    "<img src=x onerror=\"window.__xss=1\"> [bad](javascript:window.__xss=2) [ok](https://example.com/a)", "",
+    "| # | 專案 | 是什麼 |", "|---|---|---|",
+    "| 1 | `~/Library/Caches/ExampleApp/paste/` 裡 1 個 1-byte 的 png | 測試留下的暫存檔 |",
+    "| 2 | 視窗位置 | 誤開視窗那 8 次留下的視窗位置 |",
   ].join("\n");
   await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
     const d = document.createElement('div'); d.className = 'msg assistant'; d.id = 'md-test'; d.append(markdown(${JSON.stringify(md)}));
@@ -330,11 +333,21 @@ async function fakeRun() {
   check(await p.eval(`document.querySelectorAll('#md-test > ol')[1]?.querySelector('li pre code')?.textContent`) === "npm test",
     "markdown: fence indented inside a list item");
   check(await p.eval(`${q("blockquote em")}?.textContent`) === "line" && await p.eval(`!!${q("hr")}`) === true, "markdown: > quote and --- rule");
-  check(await p.eval(`!/^#|\\n\\||^\\|/m.test(document.querySelector('#md-test').innerText)`) === true, "markdown: no raw # or | lines left");
+  // Outside rendered tables (a "#" header cell is fine), no line still starts with # or |.
+  check(await p.eval(`(() => { const c = document.querySelector('#md-test').cloneNode(true); c.querySelectorAll('.table-wrap').forEach(t => t.remove());
+    document.body.append(c); const t = c.innerText; c.remove(); return !/^#|^\\|/m.test(t); })()`) === true, "markdown: no raw # or | lines left");
   check(await p.eval(`(() => { const w = document.querySelectorAll('#md-test .table-wrap')[1]; return !!w && w.scrollWidth > w.clientWidth; })()`) === true
     && await p.eval(noScroll), "markdown: a wide table scrolls in its own box, the page does not");
   check(await p.eval(`!${q("img")} && !window.__xss && [...document.querySelectorAll('#md-test a')].map(a => a.href).join() === 'https://example.com/a'`) === true,
     "markdown: HTML stays text, only http(s) links");
+  // CJK and long inline code at a phone column: every cell keeps a readable width (no one-character-per-line
+  // column), no row grows tall, and the table box scrolls sideways instead.
+  const cjk = await p.eval(`(() => { const t = document.querySelectorAll('#md-test .table-wrap')[2]; if (!t) return null;
+    return { col: document.querySelector('#md-test').clientWidth, cell: Math.min(...[...t.querySelectorAll('td:not(.short), th:not(.short)')].map(c => c.getBoundingClientRect().width)),
+      row: Math.max(...[...t.querySelectorAll('tr')].map(r => r.getBoundingClientRect().height)),
+      short: t.querySelector('th').getBoundingClientRect().width }; })()`);
+  check(!!cjk && cjk.cell >= 96 && cjk.row <= 110 && cjk.short < 60 && await p.eval(noScroll),
+    `markdown: CJK table keeps readable columns (column ${cjk?.col} px, narrowest cell ${Math.round(cjk?.cell)} px, tallest row ${Math.round(cjk?.row)} px, # column ${Math.round(cjk?.short)} px)`);
   // Hostile nesting renders (capped) instead of exhausting the stack.
   check(await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
     const f = markdown('>'.repeat(20000) + ' deep\\n\\n' + '- '.repeat(20000) + 'deep');
@@ -342,7 +355,7 @@ async function fakeRun() {
   await p.eval("document.querySelector('#md-test').scrollIntoView()");
   await p.shot("markdown");
   await p.shot("markdown", true);
-  await p.eval("document.querySelectorAll('#md-test .table-wrap')[1].scrollIntoView({ block: 'center' })");
+  await p.eval("document.querySelectorAll('#md-test .table-wrap')[2].scrollIntoView({ block: 'center' })");
   await p.shot("markdown-end");
   await p.shot("markdown-end", true);
   await p.eval("document.querySelector('#md-test').remove()");

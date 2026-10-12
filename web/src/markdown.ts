@@ -127,17 +127,21 @@ function table(lines: string[], i: number, into: ParentNode): number {
   const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
   const head = cells(lines[i]);
   const aligns = cells(lines[i + 1]).map((d) => (d.startsWith(":") && d.endsWith(":") ? "center" : d.endsWith(":") ? "right" : ""));
+  const body: string[][] = [];
+  for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) body.push(cells(lines[i]));
+  // A column whose cells are all short (like "#") keeps its own width; the others get a readable minimum.
+  const short = head.map((h, c) => [h, ...body.map((r) => r[c] ?? "")].every((v) => [...v].length <= 6));
   const row = (vals: string[], tag: "th" | "td") => {
     const tr = el("tr");
     head.forEach((_, c) => {
       const cell = el(tag, inline(vals[c] ?? ""));
       if (aligns[c]) cell.style.textAlign = aligns[c];
+      if (short[c]) cell.className = "short";
       tr.append(cell);
     });
     return tr;
   };
-  const tbody = el("tbody");
-  for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) tbody.append(row(cells(lines[i]), "td"));
+  const tbody = el("tbody", ...body.map((r) => row(r, "td")));
   const wrap = el("div", el("table", el("thead", row(head, "th")), tbody));
   wrap.className = "table-wrap";
   into.append(wrap);
