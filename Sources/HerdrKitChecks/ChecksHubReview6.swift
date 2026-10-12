@@ -234,6 +234,11 @@ import Foundation
     check(QuestionAdapter.claudeScreen(gap) == nil && !QuestionAdapter.shows(one, question: 0, screen: gap), "r12 claude: rows not numbered 1, 2, 3 -> no picker read")
     let listed = claude.replacingOccurrences(of: "Pick a color?", with: "1. Pick a color?")
     check(QuestionAdapter.claudeScreen(listed)?.question.options.map(\.label) == ["Red", "Blue"], "r12 claude: a numbered question line is not row 1")
+    // An indented list in the question must not take the row column: the real rows, one with the focus, follow.
+    let indented = claude.replacingOccurrences(of: "Pick a color?", with: "Pick a color?\n    1. Violet\n    2. Type something.")
+    let violetReq = QuestionAdapter.screenRequest(headers: ["Color"], questions: [.init(header: "Color", text: "Pick a color?", options: [opt("Violet")], multiSelect: false)])
+    check(!QuestionAdapter.shows(violetReq, question: 0, screen: indented) && !QuestionAdapter.shows(one, question: 0, screen: indented),
+          "r13 claude: a focus mark on a line that is not a row or Submit -> focus unknown, no key")
     var om = one; om.questions[0].multiSelect = true
     check(!QuestionAdapter.shows(om, question: 0, screen: claude), "r6 claude: another mode (multiSelect) -> not this question")
 

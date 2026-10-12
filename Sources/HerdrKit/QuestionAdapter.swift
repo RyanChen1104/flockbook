@@ -387,18 +387,21 @@ extension QuestionAdapter {
         // the same text anywhere else is option text. `sinceRow`: lines with text since the last numbered row.
         // Rows: after the two-column focus slot ("❯ "), their number in the column of row 1, numbered 1, 2, 3…; a
         // numbered line in another column is question or option text.
-        var marks = 0, sinceRow = 0, rowColumn: Int?
+        // `marks` counts the focus marks on rows and on Submit; a mark on any other line means the hub does not
+        // know where the focus is (focusMarks 0: no key).
+        var marks = 0, sinceRow = 0, rowColumn: Int?, strayMark = false
         for l in lines[(bar + 1)..<end] {
             let t = l.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("──") { closed = true; break }
-            if t.hasPrefix("❯") { marks += 1 }
-            if !t.isEmpty, submitFocused { submitFocused = false; sinceRow += 1 }
-            if inOptions, sinceRow == 0, t.hasPrefix("❯"), t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; continue }
+            let marked = t.hasPrefix("❯")
+            if !t.isEmpty, submitFocused { submitFocused = false; strayMark = true; sinceRow += 1 }   // that was not Submit
+            if inOptions, sinceRow == 0, marked, t.dropFirst().trimmingCharacters(in: .whitespaces) == "Submit" { submitFocused = true; marks += 1; continue }
             if let m = l.wholeMatch(of: optRe), rowColumn == nil ? m.2 == "1" && m.1.count >= 2 : m.1.count == rowColumn {
                 if rowColumn == nil { rowColumn = m.1.count }
                 // A gap or a repeated number: the rows are not what they seem, so no picker is read.
                 guard Int(m.2) == options.count + 1 else { return nil }
                 sinceRow = 0
+                if marked { marks += 1 }
                 let label = String(m.4).trimmingCharacters(in: .whitespaces)
                 inOptions = true
                 if m.3 != nil { multi = true }
@@ -407,9 +410,11 @@ extension QuestionAdapter {
                 lastRaw = label
                 lastFocused = l.trimmingCharacters(in: .whitespaces).hasPrefix("❯")
             } else if inOptions {
+                if marked { strayMark = true }
                 if !t.isEmpty { sinceRow += 1 }
                 if !t.isEmpty, !options.isEmpty { options[options.count - 1].detail += (options[options.count - 1].detail.isEmpty ? "" : " ") + t }
             } else if !t.isEmpty {
+                if marked { strayMark = true }
                 text.append(t)
             }
         }
@@ -419,7 +424,7 @@ extension QuestionAdapter {
         let typed: String? = lastRaw == "Type something." || lastRaw == "Type something" ? nil : lastRaw
         guard !options.isEmpty, !text.isEmpty else { return nil }
         let q = text.joined(separator: " ")
-        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused, submitFocused, marks)
+        return (headers, .init(header: headers.count == 1 ? headers[0] : "", text: q, options: options, multiSelect: multi), typed, lastFocused, submitFocused, strayMark ? 0 : marks)
     }
 }
 
