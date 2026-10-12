@@ -256,7 +256,9 @@ final class RemoteHub {
         return URL(string: url).map { offer.link(base: $0, fingerprint: fingerprint) }
     }
 
-    func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); deviceList = devices.all }
+    /// A changed level closes that device's connections at once; in-flight input is refused by the level check
+    /// right before its keys.
+    func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); server?.dropRevoked(); deviceList = devices.all }
     /// Removes the device and closes its open connections at once.
     func revoke(device id: String) { devices.revoke(device: id); server?.dropRevoked(); deviceList = devices.all }
 

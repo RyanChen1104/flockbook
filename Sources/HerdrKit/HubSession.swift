@@ -24,11 +24,13 @@ import CryptoKit
     /// Where re-encoded images from remote devices go (the composer's image folder). Nil: images are refused.
     var imageDirectory: URL? { get }
     /// Types the text, then the image files' paths, and submits, as the composer does.
-    func send(pane: String, text: String, images: [URL]) async -> HubSendResult
+    /// `agent`: the agent the checks saw (refuse when another one is in the pane now). `allowed`: asked again right
+    /// before each key goes out (the device's level and Allow input now); false -> nothing more is sent.
+    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor () -> Bool) async -> HubSendResult
     /// The approval card's input (`HerdrClient.respond`). Called only after the prompt was checked.
-    func approve(pane: String, prompt: String, allow: Bool) async -> Bool
+    func approve(pane: String, prompt: String, allow: Bool, allowed: @escaping @MainActor () -> Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
-    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws
+    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], allowed: @escaping @MainActor () -> Bool) async throws
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -96,11 +98,32 @@ extension Hub {
         self.uploads = uploads ?? HubUploadLimiter()
     }
 
+    /// Test hook: runs after an image is decoded, before it is held.
+    var afterDecode: (@MainActor () -> Void)?
+    /// The level at hello, and the device whose connection slot this connection holds.
+    private var helloLevel: HubLevel?
+    private var slot: String?
+
+    /// The device's level now differs from the one at hello (changed or revoked): the connection is closed, and
+    /// the client says hello again to learn its level.
+    public var levelChanged: Bool { deviceID != nil && device?.level != helloLevel }
+    /// Input allowed right now: the device's level and the app's Allow input, looked up again on every call.
+    /// Checked after every wait and again right before the keys (the backend asks `allowed`).
+    private var inputAllowed: Bool { !closed && device?.level == .input && backend.writesEnabled }
+
+    /// The connection ends for good: `discard`, and the device's connection slot is freed.
+    public func end() {
+        closed = true
+        discard()
+        if let d = slot { uploads.disconnect(device: d); slot = nil }
+    }
+
     /// The connection ends: unsent uploads and their files go.
     public func discard() {
         discards += 1
         openUpload = nil
         for h in held { try? FileManager.default.removeItem(at: h.url) }
+        if let d = deviceID, !held.isEmpty { uploads.release(device: d, count: held.count) }
         held.removeAll()
     }
 
@@ -130,13 +153,23 @@ extension Hub {
         }
         if case .hello(let token, _, _) = m.body {
             guard let d = devices.device(token: token) else { closed = true; return [fail(m.id, .unauthorized, "Unknown device. Pair it on the hub.")] }
+            guard deviceID == nil || deviceID == d.id else { return [fail(m.id, .badRequest, "This connection belongs to another device.")] }
+            if slot == nil {
+                guard uploads.connect(device: d.id) else {
+                    closed = true
+                    return [fail(m.id, .rateLimited, "Too many connections from this device. Close another one.")]
+                }
+                slot = d.id
+            }
             deviceID = d.id
+            helloLevel = d.level
             lastSnapshot = snapshot()
             return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName)),
                     .snapshot(lastSnapshot ?? []), ok(m.id)]
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
-        let canInput = device.level == .input && backend.writesEnabled
+        let canInput = inputAllowed
+        let allowed: @MainActor () -> Bool = { [weak self] in self?.inputAllowed ?? false }
         switch m.body {
         case .hello, .pair:
             return []   // handled above
@@ -167,15 +200,22 @@ extension Hub {
             guard images.count == attachments.count else { return [fail(m.id, .badRequest, "Unknown image. Attach it again. Nothing was sent.")] }
             guard !text.isEmpty || !images.isEmpty else { return [fail(m.id, .badRequest, "Nothing to send.")] }
             let st = await state(p)
+            guard inputAllowed else { return [readOnly(m.id)] }
             guard let screen = st.screen else { return [unreadable(m.id)] }
             guard st.approval == nil, st.question == nil, !st.unreadablePrompt, p.agent?.status != .blocked, !Hub.screenTakesKeys(screen) else {
                 return [fail(m.id, .promptOpen, "A prompt is open in this pane. Nothing was sent.")]
             }
             // The backend reads the pane once more right before the keys (`HerdrClient.readyForText`).
-            switch await backend.send(pane: id, text: text, images: images) {
-            case .sent:
-                held.removeAll { attachments.contains($0.name) }   // sent: the files stay for the agent (the folder's purge removes them)
-                return [ok(m.id)]
+            let result = await backend.send(pane: id, text: text, images: images, agent: p.agent!, allowed: allowed)
+            if result == .sent {
+                // Sent: the files stay for the agent (the folder's purge removes them later).
+                let gone = held.filter { attachments.contains($0.name) }.count
+                held.removeAll { attachments.contains($0.name) }
+                uploads.release(device: device.id, count: gone)
+            }
+            if result != .sent, !inputAllowed { return [readOnly(m.id)] }
+            switch result {
+            case .sent: return [ok(m.id)]
             case .changed: return [fail(m.id, .promptOpen, "The pane changed before the text went out. Nothing was sent.")]
             case .failed: return [fail(m.id, .failed, "herdr did not take the message.")]
             }
@@ -183,12 +223,14 @@ extension Hub {
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             let st = await state(p)
+            guard inputAllowed else { return [readOnly(m.id)] }
             guard st.screen != nil else { return [unreadable(m.id)] }
             let action = (allow ? ApprovalNotice.Action.allow : .deny).rawValue
             guard case .send(let a) = ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: st.pane, writes: true) else {
                 return [fail(m.id, .stale, "The prompt changed. Nothing was sent.")]
             }
-            guard await backend.approve(pane: id, prompt: prompt, allow: a) else {
+            guard await backend.approve(pane: id, prompt: prompt, allow: a, allowed: allowed) else {
+                if !inputAllowed { return [readOnly(m.id)] }
                 return [fail(m.id, .stale, "The prompt changed before the keys went out. Nothing was sent.")]
             }
             return [ok(m.id)]
@@ -197,13 +239,15 @@ extension Hub {
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             for a in answers { if let o = a.other, let why = Hub.inputProblem(o, limit: Hub.maxOtherText) { return [fail(m.id, .badRequest, why)] } }
             let st = await state(p)
+            guard inputAllowed else { return [readOnly(m.id)] }
             guard st.screen != nil else { return [unreadable(m.id)] }
             guard let q = st.question, q.toolUseId == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
             do {
-                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) })
+                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, allowed: allowed)
                 return [ok(m.id)]
             } catch {
+                if !inputAllowed { return [readOnly(m.id)] }
                 return [fail(m.id, .failed, "\(error)")]
             }
         }
@@ -212,7 +256,7 @@ extension Hub {
     /// Pushes since the last call: a new snapshot, and for watched panes new items, screen and prompt changes.
     public func tick() async -> [HubMessage] {
         guard !closed, deviceID != nil else { return [] }
-        guard device != nil else { closed = true; return [] }
+        guard device != nil, !levelChanged else { closed = true; return [] }
         var out: [HubMessage] = []
         let snap = snapshot()
         if snap != lastSnapshot { lastSnapshot = snap; out.append(.snapshot(snap)) }
@@ -241,24 +285,33 @@ extension Hub {
         } else {
             guard part == 0 else { return bad("Parts of one image come in order, one image at a time.") }
             guard !held.contains(where: { $0.name == name }) else { return bad("Upload \(name) is already held.") }
+            // The device holds its cap over all its connections (this one could only free a slot by dropping its own).
+            guard held.count >= Self.maxHeld || uploads.held(device: device.id) < HubUploadLimiter.maxHeld else { return [tooMany(re)] }
         }
         // Base64 of 640 KiB is under 874 KiB; a longer string is refused before decoding.
-        guard base64.utf8.count <= (HubImage.maxPartBytes + 2) / 3 * 4, let data = Data(base64Encoded: base64) else { return bad("Part data is not base64.") }
+        let size = base64.utf8.count
+        guard size <= (HubImage.maxPartBytes + 2) / 3 * 4 else { return bad("A part is at most \(HubImage.maxPartBytes / 1024) KiB.") }
+        guard (open?.data.count ?? 0) + size / 4 * 3 <= HubImage.maxBytes else { return bad("An image is at most \(HubImage.maxBytes / 1024 / 1024) MiB.") }
+        // The limit is counted before any decoding, by the size the string decodes to.
+        guard uploads.take(device: device.id, bytes: size / 4 * 3, image: part == 0) else { return [tooMany(re)] }
+        guard let data = Data(base64Encoded: base64) else { return bad("Part data is not base64.") }
         guard data.count <= HubImage.maxPartBytes else { return bad("A part is at most \(HubImage.maxPartBytes / 1024) KiB.") }
         let all = (open?.data ?? Data()) + data
-        guard all.count <= HubImage.maxBytes else { return bad("An image is at most \(HubImage.maxBytes / 1024 / 1024) MiB.") }
-        guard uploads.take(device: device.id, bytes: data.count, image: part == 0) else {
-            return [fail(re, .rateLimited, "Too many images from this device. Try again in a few minutes.")]
-        }
         guard part == parts - 1 else {
             openUpload = OpenUpload(name: name, parts: parts, next: part + 1, data: all)
             return [ok(re)]
         }
-        // Decoding is off the main thread; a `discard` meanwhile deletes the result.
+        // Decoding is off the main thread, at most 2 at once for the hub; a `discard` meanwhile deletes the result.
+        // The folder's own files are capped right after (count, bytes, age).
         let round = discards
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<HubImage.Output, HubImage.Failure> in
-            do { return .success(try HubImage.reencode(all, into: dir)) } catch { return .failure(error as? HubImage.Failure ?? .undecodable) }
-        }.value
+        let result = await HubWorkSlots.images.run { () -> Result<HubImage.Output, HubImage.Failure> in
+            do {
+                let out = try HubImage.reencode(all, into: dir)
+                HubImage.purge(dir)
+                return .success(out)
+            } catch { return .failure(error as? HubImage.Failure ?? .undecodable) }
+        }
+        afterDecode?()
         switch result {
         case .failure(let f):
             switch f {
@@ -268,12 +321,19 @@ extension Hub {
             case .writeFailed: return [fail(re, .failed, "The hub could not store the image.")]
             }
         case .success(let out):
+            uploads.count(device: device.id, bytes: out.bytes)
             guard round == discards, !held.contains(where: { $0.name == name }) else {
                 try? FileManager.default.removeItem(at: out.url)
                 return bad("The upload was dropped.")
             }
+            // Downgraded or revoked while decoding: the file goes.
+            guard inputAllowed else { try? FileManager.default.removeItem(at: out.url); return [readOnly(re)] }
+            if held.count >= Self.maxHeld {
+                try? FileManager.default.removeItem(at: held.removeFirst().url)
+                uploads.release(device: device.id)
+            }
+            guard uploads.hold(device: device.id) else { try? FileManager.default.removeItem(at: out.url); return [tooMany(re)] }
             held.append((name, out.url))
-            while held.count > Self.maxHeld { try? FileManager.default.removeItem(at: held.removeFirst().url) }
             return [.attached(HubAttached(upload: name, width: out.width, height: out.height, bytes: out.bytes)), ok(re)]
         }
     }
@@ -287,6 +347,7 @@ extension Hub {
         .reply(HubReply(re: re, ok: false, error: HubError(code: code, message: message)))
     }
     private func readOnly(_ re: String) -> HubMessage { fail(re, .readOnly, "Input is off for this device.") }
+    private func tooMany(_ re: String) -> HubMessage { fail(re, .rateLimited, "Too many images from this device. Try again in a few minutes.") }
     /// Fail closed: without the screen the hub cannot tell what the keys would answer.
     private func unreadable(_ re: String) -> HubMessage { fail(re, .failed, "Could not read the pane. Nothing was sent.") }
 

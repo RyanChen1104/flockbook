@@ -109,9 +109,16 @@ the header (at most 12,000 px a side and 50 megapixels) before decoding, decodes
 **new** image (orientation applied, long side at most 4,096 px; PNG stays PNG, the rest become JPEG; no metadata).
 Then it pushes `attached` and replies `ok`. A file that does not decode replies `badRequest`.
 
-Limits: 4 finished uploads held per connection (a fifth drops the oldest unsent one and its file); per device, 20
-images and 100 MiB in 10 minutes, counted over all its connections (`rateLimited`). Unsent uploads are deleted when
-the connection closes. A `send` that names an unknown upload replies `badRequest` and sends nothing; uploads stay
+Limits: 4 finished uploads held per connection (a fifth drops the oldest unsent one and its file) and 8 per device
+over all its connections (more: `rateLimited`); per device, 20 images and 100 MiB in 10 minutes, counted over all its
+connections, before any decoding, and the written files count too (`rateLimited`). At most 4 connections per device
+(a fifth `hello` gets `rateLimited` and is closed). At most 2 images are decoded at once on the hub. Unsent uploads
+are deleted when the connection closes. The level is checked again after the decoding: a device downgraded or
+revoked meanwhile gets `readOnly`, and the new file is deleted.
+
+Queues: client messages waiting on one connection are capped at 64 KiB before `hello` and 4 MiB after; over it the
+connection is closed (1008). A level change or a revoke on the hub closes the device's connections at once; the
+client says `hello` again to learn its level. A `send` that names an unknown upload replies `badRequest` and sends nothing; uploads stay
 until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be repeated.
 
 ## 4. Hub to client

@@ -232,7 +232,7 @@ extension PaneView {
                      deliver: { text in
                          guard model.writesEnabled else { return false }
                          model.noteSent(pane.id)
-                         return await MessageSender.send(text, to: pane.id, client: model.store.client)
+                         return await MessageSender.send(text, to: pane.id, client: model.store.client, kind: agent.kind)
                      },
                      placeholder: focused ? nil : "Click to reply to \(agent.name)",
                      focusRequest: focusRequest)

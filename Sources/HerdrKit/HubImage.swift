@@ -101,18 +101,46 @@ public enum HubImage {
         return (be(16), be(20))
     }
 
-    private static func write(_ data: Data, to url: URL, dir: URL) throws {
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        if !fm.fileExists(atPath: dir.path, isDirectory: &isDir) {
-            do { try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) } catch { throw Failure.writeFailed }
-        } else {
-            // Our folder only: a real directory (not a link to elsewhere), closed to other users.
-            let attrs = try? fm.attributesOfItem(atPath: dir.path)
-            guard attrs?[.type] as? FileAttributeType == .typeDirectory else { throw Failure.writeFailed }
-            if (attrs?[.posixPermissions] as? Int ?? 0) & 0o077 != 0 { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+    /// The hub's files in the cache folder at most (oldest go first), and their age.
+    public static let cacheMaxFiles = 200, cacheMaxBytes = 512 * 1024 * 1024
+    public static let cacheMaxAge: TimeInterval = 7 * 86_400
+    /// Deletes the hub's own files (`remote-<UUID>.png|jpg`, regular files) older than `maxAge`, then the oldest
+    /// beyond `maxFiles` or `maxBytes`. Never another name. The number deleted.
+    @discardableResult
+    public static func purge(_ dir: URL, maxFiles: Int = cacheMaxFiles, maxBytes: Int = cacheMaxBytes, maxAge: TimeInterval = cacheMaxAge,
+                             now: Date = Date()) -> Int {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return 0 }
+        var files: [(path: String, at: Date, bytes: Int)] = []
+        for n in names where n.hasPrefix("remote-") && ImagePaste.isOwnName(n) {
+            let path = dir.appendingPathComponent(n).path
+            var st = stat()
+            guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { continue }
+            files.append((path, Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)), Int(st.st_size)))
         }
-        let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        files.sort { $0.at < $1.at }
+        var total = files.reduce(0) { $0 + $1.bytes }, count = files.count, gone = 0
+        for f in files {
+            guard now.timeIntervalSince(f.at) > maxAge || count > maxFiles || total > maxBytes else { break }
+            if unlink(f.path) == 0 { gone += 1 }
+            count -= 1; total -= f.bytes
+        }
+        return gone
+    }
+
+    /// Opens `dir` as our own folder: made mode 700 if missing; a real directory (no link), owned by us, closed to
+    /// others. The file is then created inside the open folder, so a folder swapped meanwhile is not followed.
+    private static func write(_ data: Data, to url: URL, dir: URL) throws {
+        if mkdir(dir.path, 0o700) != 0, errno != EEXIST {
+            do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) } catch { throw Failure.writeFailed }
+        }
+        let dfd = open(dir.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard dfd >= 0 else { throw Failure.writeFailed }
+        defer { close(dfd) }
+        var st = stat()
+        guard fstat(dfd, &st) == 0, st.st_mode & S_IFMT == S_IFDIR, st.st_uid == getuid() else { throw Failure.writeFailed }
+        if st.st_mode & 0o077 != 0 { guard fchmod(dfd, 0o700) == 0 else { throw Failure.writeFailed } }
+        let name = url.lastPathComponent
+        let fd = openat(dfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw Failure.writeFailed }
         let ok = data.withUnsafeBytes { buf -> Bool in
             var off = 0
@@ -124,7 +152,23 @@ public enum HubImage {
             return true
         }
         close(fd)
-        if !ok { unlink(url.path); throw Failure.writeFailed }
+        if !ok { unlinkat(dfd, name, 0); throw Failure.writeFailed }
+    }
+}
+
+/// At most `max` jobs at once, the rest wait in order (image decoding on the hub: 2).
+@MainActor public final class HubWorkSlots {
+    public static let images = HubWorkSlots(max: 2)
+    private let max: Int
+    private var running = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    public init(max: Int) { self.max = Swift.max(1, max) }
+
+    public func run<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T {
+        if running < max { running += 1 } else { await withCheckedContinuation { waiting.append($0) } }   // the slot is handed over
+        let result = await Task.detached(priority: .userInitiated) { await work() }.value
+        if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
+        return result
     }
 }
 
@@ -138,6 +182,35 @@ public enum HubImage {
     private var log: [String: [(at: Date, bytes: Int, image: Bool)]] = [:]
 
     public init(now: @escaping () -> Date = Date.init) { self.now = now }
+
+    /// Unsent images held per device over its connections; connections per device.
+    public static let maxHeld = 8, maxConnections = 4
+    private var heldCount: [String: Int] = [:]
+    private var connections: [String: Int] = [:]
+
+    /// Takes one held slot for `device`; false when it holds `maxHeld` already.
+    public func hold(device: String) -> Bool {
+        guard held(device: device) < Self.maxHeld else { return false }
+        heldCount[device, default: 0] += 1
+        return true
+    }
+    public func release(device: String, count: Int = 1) { heldCount[device] = Swift.max(0, held(device: device) - count) }
+    public func held(device: String) -> Int { heldCount[device] ?? 0 }
+    /// Takes one connection slot for `device`; false when it has `maxConnections` open.
+    public func connect(device: String) -> Bool {
+        guard connections[device, default: 0] < Self.maxConnections else { return false }
+        connections[device, default: 0] += 1
+        return true
+    }
+    public func disconnect(device: String) { connections[device] = Swift.max(0, (connections[device] ?? 0) - 1) }
+    /// What `device` used in the window.
+    public func used(device: String) -> (images: Int, bytes: Int) {
+        let t = now()
+        let e = (log[device] ?? []).filter { t.timeIntervalSince($0.at) < Self.window }
+        return (e.filter(\.image).count, e.reduce(0) { $0 + $1.bytes })
+    }
+    /// Counts written bytes too (the stored file), over the limit or not: the next upload sees them.
+    public func count(device: String, bytes: Int) { log[device, default: []].append((now(), bytes, false)) }
 
     /// Counts `bytes` (and one image when `image`) for `device`. False, and nothing counted, when over a limit.
     public func take(device: String, bytes: Int, image: Bool) -> Bool {

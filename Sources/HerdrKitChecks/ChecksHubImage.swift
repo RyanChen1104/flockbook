@@ -265,20 +265,23 @@ func bombPNG(w: UInt32, h: UInt32) -> Data {
 func checksImagePaste() {
     typealias S = ImagePaste.Segment
     let dir = "/home/a/Library/Caches/HerdrDesk/paste"
+    let u1 = UUID().uuidString, u2 = UUID().uuidString
     check(ImagePaste.segments("look", directory: dir) == [S.text("look")], "paste: text alone is typed")
-    check(ImagePaste.segments("look \(dir)/remote-AB12.jpg", directory: dir) == [.text("look "), .image("\(dir)/remote-AB12.jpg")],
+    check(ImagePaste.segments("look \(dir)/remote-\(u1).jpg", directory: dir) == [.text("look "), .image("\(dir)/remote-\(u1).jpg")],
           "paste: text, then the image path pasted")
-    check(ImagePaste.segments("\(dir)/A.png \(dir)/remote-B.jpg", directory: dir) == [.image("\(dir)/A.png"), .text(" "), .image("\(dir)/remote-B.jpg")],
+    check(ImagePaste.segments("\(dir)/\(u1).png \(dir)/remote-\(u2).jpg", directory: dir) == [.image("\(dir)/\(u1).png"), .text(" "), .image("\(dir)/remote-\(u2).jpg")],
           "paste: two images, the space between typed")
-    check(ImagePaste.segments("see /tmp/x.png and \(dir)/../x.png", directory: dir) == [.text("see /tmp/x.png and \(dir)/../x.png")],
+    check(ImagePaste.segments("see /tmp/\(u1).png and \(dir)/../\(u1).png", directory: dir) == [.text("see /tmp/\(u1).png and \(dir)/../\(u1).png")],
           "paste: paths outside the folder (or climbing out) stay typed text")
-    check(ImagePaste.segments("\(dir)/a.gif \(dir)/sub/a.png", directory: dir) == [.text("\(dir)/a.gif \(dir)/sub/a.png")], "paste: other types and subfolders stay text")
+    check(ImagePaste.segments("\(dir)/\(u1).gif \(dir)/sub/\(u1).png", directory: dir) == [.text("\(dir)/\(u1).gif \(dir)/sub/\(u1).png")], "paste: other types and subfolders stay text")
     let spaced = "/home/a b/Library/Caches/HerdrDesk/paste"
-    check(ImagePaste.segments("hi '\(spaced)/C.png'", directory: spaced) == [.text("hi "), .image("\(spaced)/C.png")],
+    check(ImagePaste.segments("hi '\(spaced)/\(u1).png'", directory: spaced) == [.text("hi "), .image("\(spaced)/\(u1).png")],
           "paste: a quoted path (home with a space) is pasted unquoted")
     let quote = "/home/o'b/paste"
-    check(ImagePaste.segments("'/home/o'\\''b/paste/D.png'", directory: quote) == [.image("\(quote)/D.png")], "paste: a quote in the folder name")
+    check(ImagePaste.segments("'/home/o'\\''b/paste/\(u1).png'", directory: quote) == [.image("\(quote)/\(u1).png")], "paste: a quote in the folder name")
     check(ImagePaste.paste("/p/A.png") == "\u{1b}[200~/p/A.png\u{1b}[201~", "paste: bracketed paste markers around the path")
-    check(ImagePaste.segments("x \(dir)/A\u{1b}[201~.png", directory: dir).allSatisfy { if case .image = $0 { false } else { true } },
+    check(ImagePaste.segments("x \(dir)/\(u1)\u{1b}[201~.png", directory: dir).allSatisfy { if case .image = $0 { false } else { true } },
           "paste: a name with control characters is never pasted")
+    check(ImagePaste.plan("look \(dir)/remote-\(u1).jpg", directory: dir, isFile: { _ in true }) == [.input("look "), .paste("\(dir)/remote-\(u1).jpg")],
+          "paste: plan = text as input, our file as a paste")
 }

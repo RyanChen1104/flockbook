@@ -26,19 +26,38 @@ import Foundation
         if let e = earlier.removeValue(forKey: session) { items[session] = e + (items[session] ?? []) }
         return false
     }
-    func screen(pane: String) async -> String? { screens[pane] }
+    /// Called on each screen read (a test can change the world mid-check).
+    var onScreen: (() -> Void)?
+    func screen(pane: String) async -> String? { onScreen?(); return screens[pane] }
     var sendResult = HubSendResult.sent
     var imageDirectory: URL?
     /// The image files of each send that had some.
     var sentImages: [[URL]] = []
-    func send(pane: String, text: String, images: [URL]) async -> HubSendResult {
+    /// Called while the backend works (between its checks and the keys): a downgrade there must stop the keys.
+    var beforeKeys: (() -> Void)?
+    /// What `allowed()` said right before the keys, per call.
+    private(set) var allowedAtKeys: [Bool] = []
+    private(set) var sentAgents: [String?] = []
+    func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor () -> Bool) async -> HubSendResult {
+        beforeKeys?()
+        allowedAtKeys.append(allowed())
+        guard allowed() else { return .failed }
+        sentAgents.append(agent.sessionId)
         sent.append("\(pane) \(text)")
         if !images.isEmpty { sentImages.append(images) }
         return sendOK ? sendResult : .failed
     }
     var approveOK = true
-    func approve(pane: String, prompt: String, allow: Bool) async -> Bool { approved.append("\(pane) \(prompt) \(allow)"); return approveOK }
-    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer]) async throws {
+    func approve(pane: String, prompt: String, allow: Bool, allowed: @escaping @MainActor () -> Bool) async -> Bool {
+        beforeKeys?()
+        allowedAtKeys.append(allowed())
+        guard allowed() else { return false }
+        approved.append("\(pane) \(prompt) \(allow)"); return approveOK
+    }
+    func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], allowed: @escaping @MainActor () -> Bool) async throws {
+        beforeKeys?()
+        allowedAtKeys.append(allowed())
+        guard allowed() else { throw QuestionAdapter.Failure.unsupported("input is off") }
         answered.append("\(pane) \(question.toolUseId) \(answers.map(\.picks))")
     }
 }

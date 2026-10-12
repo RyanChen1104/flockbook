@@ -1,3 +1,4 @@
+import HerdrKit
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -42,17 +43,18 @@ enum PasteImages {
         do { try png.write(to: url, options: .atomic); return url } catch { return nil }
     }
 
-    /// Deletes a file only if it is one of ours.
+    /// Deletes a file only if it is one of ours: in this folder, with a name the app gives (`ImagePaste.isOwnName`).
     static func remove(_ url: URL) {
-        guard url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL else { return }
+        guard url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+              ImagePaste.isOwnName(url.lastPathComponent) else { return }
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// At launch: drop cache files older than `days`.
+    /// At launch: drop our cache files older than `days` (never another name).
     static func purgeOld(days: Int = 7) {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        for f in files where ["png", "jpg"].contains(f.pathExtension) {
+        for f in files where ImagePaste.isOwnName(f.lastPathComponent) {
             if let m = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, m < cutoff { remove(f) }
         }
     }

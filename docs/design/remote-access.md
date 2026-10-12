@@ -135,7 +135,7 @@ Input to an agent pane is remote code execution: an agent with tool access runs 
 | Token replay from a captured QR | Pairing secret is single use and short-lived |
 | A malicious client sends raw keys | No raw-key API; only `send`, `approve`, `answer` with hub-side checks |
 | Approve the wrong prompt (screen changed) | Hub re-reads the pane; prompt id must match the prompt on screen (a log id only when the log's call is that box); one more read right before the keys; an unreadable prompt counts as open (same rules as the notification) |
-| A crafted image (decoder bug, decompression bomb, polyglot) | Only `input` devices; 10 MB and 16-part caps per image, 4 held per connection, a rate limit per device; type from magic bytes, never from a name or MIME; pixel size checked from the header before decoding; always re-encoded into a new file, so nothing of the upload's bytes reaches the agent |
+| A crafted image (decoder bug, decompression bomb, polyglot) | Only `input` devices; 10 MB and 16-part caps per image, 4 held per connection and 8 per device, 4 connections per device, a rate limit per device checked before decoding, 2 decodes at once; type from magic bytes, never from a name or MIME; pixel size checked from the header before decoding; always re-encoded into a new file, so nothing of the upload's bytes reaches the agent |
 | Image metadata leaks (GPS, camera, time) | Re-encoding copies no metadata |
 | The hub writes a file where it should not | Only into its own cache folder, a random name it makes, mode 600, created exclusively; no client path or name is used |
 | Remote text into a shell, or control keys in text | `send` goes to agent panes only; text has no control characters except LF and tab, and a length cap |
@@ -200,13 +200,27 @@ Path, end to end:
    700), name `remote-<random UUID>.png|jpg`, created exclusively with mode 600. Never a client-chosen name or path.
 6. `send` with `attachments`: all the `send` rules of protocol 3.1 still apply (agent pane only, no prompt open, a
    fresh read right before the keys). The message is the text and then the file paths, sent by the same code as
-   the Mac composer (`MessageSender`): the text is typed; each path of the image folder goes as a **bracketed
-   paste** (`ImagePaste`), because Claude Code turns a pasted image path into an attachment but keeps a typed one
-   as text (seen live: typed -> plain path, pasted -> `[Image #1]`). It then waits for the `[Image` marker and
-   sends Enter. The paste markers come only from the hub around its own file names; client text with ESC is
-   refused (3.1), so a phone cannot open or close a paste.
+   the Mac composer (`MessageSender`): the text goes through herdr's normal text call without Enter
+   (`pane.send_input`, so a newline stays inside the agent's input; seen live in Claude Code, Codex and pi), and
+   each path goes as a **bracketed paste** (`ImagePaste`), because Claude Code turns a pasted image path into an
+   attachment but keeps a typed one as text (seen live: typed -> plain path, pasted -> `[Image #1]`; Codex the
+   same, pi keeps the path). Only a path that is one of our files right now is pasted: a name the app gives
+   (`remote-<UUID>.png|jpg`, the composer's `<UUID>.png`) and an existing regular file, not a link; anything else
+   stays text. For Claude Code and Codex the sender counts the `[Image #` markers in the input (below the last
+   prompt line) before the paste, waits until the new ones show, and only then sends Enter. No new marker within
+   5 s, or the screen cannot be read: no Enter, the send fails. The paste markers come only from the hub around
+   its own file names; client text with ESC is refused (3.1), so a phone cannot open or close a paste.
+   Right before the keys the hub reads the pane once more: the same agent (kind and session) the checks saw, not
+   blocked, nothing on screen that takes keys; and before every key step it asks again whether the device still
+   has `input` and Allow input is on. Left: the moment between that read and the keys (herdr has no
+   compare-and-send).
 7. Cleanup: unsent uploads are deleted when their connection closes, and when a fifth one replaces the oldest.
-   Sent files stay for the agent to read and go with the Mac composer's 7-day cache purge.
+   Sent files stay for the agent to read. The hub's files in the folder are capped at 200 files and 512 MiB (the
+   oldest go first) and 7 days, checked after every upload and every hour; the composer's launch purge also takes
+   only the app's own names. Nothing else in the folder is ever deleted.
+8. Folder: opened with `O_DIRECTORY|O_NOFOLLOW`, it must be a real directory owned by this user (else nothing is
+   written), closed to mode 700, and the file is created inside the open folder (`openat`), so a folder swapped
+   for a link meanwhile is not followed.
 
 Agents: Claude Code turns the pasted path into an image attachment. Other agents get the path and read it with
 their file tools (the same as from the Mac composer).

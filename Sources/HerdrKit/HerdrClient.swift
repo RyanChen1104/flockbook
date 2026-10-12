@@ -46,6 +46,11 @@ public actor HerdrClient {
         _ = try await rawRequest(method: "pane.send_input", params: ["pane_id": paneId, "text": text, "keys": ["Enter"]])
     }
 
+    /// Text through the same call as `send(text:to:)`, without Enter: a newline stays inside the agent's input.
+    public func type(text: String, to paneId: String) async throws {
+        _ = try await rawRequest(method: "pane.send_input", params: ["pane_id": paneId, "text": text, "keys": [String]()])
+    }
+
     /// Raw bytes (control keys, escape sequences) via the terminal text channel.
     public func sendKeys(_ bytes: [UInt8], to paneId: String) async throws {
         let text = String(decoding: bytes, as: UTF8.self)

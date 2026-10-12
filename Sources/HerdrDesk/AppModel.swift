@@ -94,8 +94,8 @@ final class AppModel {
     func send(_ text: String, to pane: Pane) {
         guard writesEnabled else { return }
         noteSent(pane.id)
-        let client = store.client, id = pane.id
-        Task { await MessageSender.send(text, to: id, client: client) }
+        let client = store.client, id = pane.id, kind = pane.agent?.kind
+        Task { await MessageSender.send(text, to: id, client: client, kind: kind) }
     }
     /// Test hook: when set, replaces the call to herdr (tests must never create a real tab).
     var newTabHook: ((Workspace) -> Void)?

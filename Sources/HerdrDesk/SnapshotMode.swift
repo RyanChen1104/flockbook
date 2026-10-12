@@ -983,7 +983,12 @@ enum SnapshotRunner {
         func screen() async -> String { (try? await client.readScrollback(paneId: paneId, lines: 60, ansi: false).text) ?? "" }
         var failures = 0
         func step(_ name: String, _ ok: Bool) { if !ok { failures += 1 }; print("send-image-test: \(name) \(ok ? "ok" : "FAIL")") }
-        let msg = "look at \(PasteImages.directory.path)/test-\(UUID().uuidString).png"
+        // A file of ours: only those are pasted (`ImagePaste.plan`).
+        try? FileManager.default.createDirectory(at: PasteImages.directory, withIntermediateDirectories: true)
+        let image = PasteImages.directory.appendingPathComponent(UUID().uuidString + ".png")
+        FileManager.default.createFile(atPath: image.path, contents: Data([0x89]))
+        defer { PasteImages.remove(image) }
+        let msg = "look at \(image.path)"
         // Control: the old single call (text + Enter) is swallowed by the fake agent.
         try? await client.send(text: "python3 \(script.path)", to: paneId)
         try? await Task.sleep(for: .seconds(2))
@@ -997,7 +1002,7 @@ enum SnapshotRunner {
         try? await Task.sleep(for: .seconds(0.5))
         try? await client.send(text: "python3 \(script.path)", to: paneId)
         try? await Task.sleep(for: .seconds(2))
-        await MessageSender.send(msg, to: paneId, client: client)
+        await MessageSender.send(msg, to: paneId, client: client, kind: "claude")
         try? await Task.sleep(for: .seconds(1.5))
         let s = await screen()
         step("MessageSender submits after the attachment appears, the path pasted", s.contains("[Image #1]") && s.contains("SUBMITTED:(pasted) " + msg))

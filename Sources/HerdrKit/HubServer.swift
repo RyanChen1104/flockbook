@@ -35,6 +35,23 @@ import Network
     public static let maxMessage = 1 << 20
     /// Connections without a paired device (a page load, pairing, before hello) held at once; more are refused.
     public static let maxPending = 16
+    /// Bytes of client messages waiting for their turn on one connection; over it the connection is closed
+    /// (a client that sends faster than the hub works). Before hello the cap is small.
+    public struct QueueBudget: Sendable {
+        public static let preHello = 64 * 1024, paired = 4 * 1024 * 1024
+        public private(set) var queued = 0
+        public init() {}
+        /// False, and nothing counted, when `n` more bytes would pass the cap.
+        public mutating func add(_ n: Int, paired: Bool) -> Bool {
+            guard queued + n <= (paired ? Self.paired : Self.preHello) else { return false }
+            queued += n
+            return true
+        }
+        public mutating func done(_ n: Int) { queued = max(0, queued - n) }
+    }
+    /// The hub's files in the image folder are capped this often too (and after every upload).
+    public static let purgeInterval: Duration = .seconds(3600)
+    private var purger: Task<Void, Never>?
     /// Connections held at once in all.
     public static let maxConnections = 64
 
@@ -94,20 +111,30 @@ import Network
         }
         listener = l
         fingerprint = tls?.fingerprint
+        if let dir = backend.imageDirectory {
+            purger = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    HubImage.purge(dir)
+                    try? await Task.sleep(for: Self.purgeInterval)
+                }
+            }
+        }
         return bound
     }
 
-    /// Closes the connections of devices that were removed (call after a revoke), at once rather than on their next
-    /// message or push.
+    /// Closes the connections of devices that were removed or whose level changed (call after a revoke or a level
+    /// change), at once rather than on their next message or push. A changed device says hello again.
     public func dropRevoked() {
-        for c in conns.values where c.session.revoked { finish(c, WebSocketFrames.close(1008)) }
+        for c in conns.values where c.session.revoked || c.session.levelChanged { c.session.end(); finish(c, WebSocketFrames.close(1008)) }
     }
 
     public func stop() {
         listener?.cancel()
         listener = nil
         fingerprint = nil
-        for c in conns.values { c.close(); c.session.discard() }
+        purger?.cancel()
+        purger = nil
+        for c in conns.values { c.close(); c.session.end() }
         conns = [:]
     }
 
@@ -123,6 +150,7 @@ import Network
         var ticker: Task<Void, Never>?
         var deadline: Task<Void, Never>?
         var closed = false
+        var budget = QueueBudget()
         init(id: Int, nw: NWConnection, session: HubSession) { self.id = id; self.nw = nw; self.session = session }
         var isSocket: Bool { if case .socket = mode { true } else { false } }
         func close() {
@@ -176,7 +204,7 @@ import Network
     private func drop(_ key: Int) {
         guard let c = conns.removeValue(forKey: key) else { return }
         c.close()
-        c.session.discard()   // unsent uploads and their files
+        c.session.end()   // unsent uploads and their files, the device's connection slot
     }
 
     private func receive(_ key: Int) {
@@ -240,7 +268,12 @@ import Network
         guard let c = conns[key] else { return }
         for e in events {
             switch e {
-            case .message(let d): serially(key) { await $0.session.receive(d) }
+            case .message(let d):
+                guard c.budget.add(d.count, paired: c.session.device != nil) else { finish(c, WebSocketFrames.close(1008)); return }
+                serially(key) { c in
+                    defer { c.budget.done(d.count) }
+                    return await c.session.receive(d)
+                }
             case .ping(let d): write(c, WebSocketFrames.encode(opcode: 10, d))
             case .close: finish(c, WebSocketFrames.close(1000))
             case .fail(let code): finish(c, WebSocketFrames.close(code))
