@@ -969,7 +969,8 @@ enum SnapshotRunner {
                 for ch in os.read(fd, 4096).decode(errors="ignore"):
                     if ch in "\\r\\n":
                         if busy_until and time.time() < busy_until: continue   # Enter dropped while converting
-                        out("\\nSUBMITTED:" + buf + "\\n"); buf = ""; shown = False
+                        pasted = "\\x1b[200~" in buf
+                        out("\\nSUBMITTED:" + ("(pasted) " if pasted else "") + buf.replace("\\x1b[200~", "").replace("\\x1b[201~", "") + "\\n"); buf = ""; shown = False
                     else:
                         buf += ch
                         if ".png" in buf and not shown and not busy_until: busy_until = time.time() + 0.5
@@ -999,7 +1000,7 @@ enum SnapshotRunner {
         await MessageSender.send(msg, to: paneId, client: client)
         try? await Task.sleep(for: .seconds(1.5))
         let s = await screen()
-        step("MessageSender submits after the attachment appears", s.contains("[Image #1]") && s.contains("SUBMITTED:" + msg))
+        step("MessageSender submits after the attachment appears, the path pasted", s.contains("[Image #1]") && s.contains("SUBMITTED:(pasted) " + msg))
         try? await client.sendNamedKeys(["C-c"], to: paneId)
         print("send-image-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

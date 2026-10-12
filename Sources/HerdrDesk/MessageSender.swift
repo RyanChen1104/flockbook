@@ -2,8 +2,9 @@ import HerdrKit
 import Foundation
 
 /// Sends a composer message to a pane.
-/// Plain text: one call, text + Enter. With a pasted image path: agents such as Claude Code turn the path into an
-/// attachment asynchronously and drop an Enter that arrives meanwhile. So the text goes first, the screen is polled
+/// Plain text: one call, text + Enter. With image paths: each path of the image folder goes as a bracketed paste
+/// (`ImagePaste`; typed, Claude Code keeps it as text), the rest is typed. The agent turns a pasted path into an
+/// attachment asynchronously and drops an Enter that arrives meanwhile. So the text goes first, the screen is polled
 /// (read-only) until the attachment shows up, and only then Enter is sent.
 enum MessageSender {
     static func hasImagePath(_ text: String) -> Bool { text.contains(PasteImages.directory.path) }
@@ -16,7 +17,10 @@ enum MessageSender {
             do { try await client.send(text: text, to: paneId); return true } catch { return false }
         }
         do {
-            try await client.sendKeys(Array(text.utf8), to: paneId)
+            let keys = ImagePaste.segments(text, directory: PasteImages.directory.path).map { s -> String in
+                switch s { case .text(let t): t; case .image(let path): ImagePaste.paste(path) }
+            }.joined()
+            try await client.sendKeys(Array(keys.utf8), to: paneId)
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: maxWait)
             while clock.now < deadline {
