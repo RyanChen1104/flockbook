@@ -31,6 +31,12 @@ enum HeadlessTest {
         guard let tab = model.store.workspaces.flatMap(\.tabs).first(where: { $0.panes.contains { $0.id == paneId } }) else {
             print("test: pane \(paneId) not found"); NSApp.terminate(nil); return
         }
+        // `--warm`: read the pane's log first, as the app does once the tab was open (the store tails a log from its first use).
+        if CommandLine.arguments.contains("--warm"), let sid = tab.panes.first(where: { $0.id == paneId })?.agent?.sessionId {
+            _ = model.store.conversation(for: sid)
+            for _ in 0..<50 where model.store.conversationState(for: sid) == .loading { try? await Task.sleep(for: .milliseconds(100)) }
+            print("test: log warmed, \(model.store.conversation(for: sid).count) items")
+        }
         let bound = await model.approvalPrompt(in: tab)
         print("test: buttons = \(bound.map { "pane \($0.pane) prompt \($0.prompt)" } ?? "none")")
         let ws = model.store.workspaces.first { $0.tabs.contains { $0.id == tab.id } }
