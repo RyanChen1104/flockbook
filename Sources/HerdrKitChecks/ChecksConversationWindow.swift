@@ -30,4 +30,21 @@ func checksConversationWindow() async throws {
     check(front.range(short) == 0..<80, "window: all of a short tail")
     front.showEarlier(ids)   // the store prepended 920 older rows
     check(front.range(ids) == 800..<1000 && !front.detached, "window: rows loaded in front join the window (\(front.range(ids)))")
+
+    // The read's timeout ends only its own read: a newer Show earlier stays pending.
+    var load = ConversationWindow()
+    let first = load.beginLoad()
+    check(load.pendingLoad != nil, "window: a read of older rows is pending")
+    load.loadEnded(first)
+    check(load.pendingLoad == nil, "window: its timeout ends it")
+    let a = load.beginLoad(), b = load.beginLoad()
+    check(a != b, "window: each read has its own token (\(a), \(b))")
+    load.loadEnded(a)
+    check(load.pendingLoad == b, "window: an older read's timeout leaves the newer read pending (\(String(describing: load.pendingLoad)))")
+    check(load.takeLoaded(ids) && load.range(ids) == 800..<1000 && load.pendingLoad == nil,
+          "window: rows that arrive for the pending read join the window (\(load.range(ids)))")
+    check(!load.takeLoaded(ids) && load.range(ids) == 800..<1000, "window: rows that arrive with no read pending do not")
+    let c = load.beginLoad()
+    load.jumpToLatest()
+    check(load.pendingLoad == nil && load.beginLoad() != c, "window: Jump to latest drops the pending read; tokens are not reused")
 }

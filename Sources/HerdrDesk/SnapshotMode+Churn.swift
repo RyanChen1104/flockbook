@@ -15,6 +15,22 @@ extension ContentTests {
         var failures = 0
         let t0 = Date()
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("churn-test: \(n) \(ok ? "ok" : "FAIL")") }
+        // The probe actions: none outside the checks, and none after the view left.
+        let probe = ProbeHolder()
+        let probeWin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        probeWin.contentView = NSHostingView(rootView: ProbeView(holder: probe)); probeWin.setFrameOrigin(NSPoint(x: -3000, y: -3000))
+        probeWin.orderFrontRegardless()
+        try? await Task.sleep(for: .milliseconds(500))
+        step("probe: no action kept outside the checks", ConversationProbe.pressEarlier == nil)
+        ConversationProbe.enabled = true
+        probe.generation += 1
+        try? await Task.sleep(for: .milliseconds(500))
+        step("probe: a check gets the Show earlier action", ConversationProbe.pressEarlier != nil)
+        probe.shown = false
+        try? await Task.sleep(for: .milliseconds(500))
+        step("probe: the action goes with the view", ConversationProbe.pressEarlier == nil)
+        probeWin.orderOut(nil)
+
         let all = ChurnData.items(3000)
         let holder = ChurnHolder(items: Array(all.prefix(2800)))
         let size = NSSize(width: 1100, height: 760)
@@ -24,7 +40,7 @@ extension ContentTests {
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1))
 
-        // Main-thread stalls: a 5 ms timer; the longest gap between two ticks.
+        // Main-thread stalls: a 5 ms timer; the longest gap between two ticks, not counting the check's own captures.
         let stall = StallMeter()
         stall.start()
         func scrollView() -> NSScrollView? {
@@ -42,6 +58,7 @@ extension ContentTests {
 
         /// Ink in the viewport between the bars: pixels away from their row's median tone, on a 3 px grid.
         func ink() -> Int {
+            defer { stall.skip() }   // the check's own work (capture, pixel scan) is not an app stall
             typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
             guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
                   let img = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue(),
@@ -87,7 +104,7 @@ extension ContentTests {
             step("\(name): comes to rest (\(moves) scroll moves in 1.5 s, y \(Int(before)) -> \(Int(sv.contentView.bounds.origin.y)))", moves == 0)
             let n = ink()
             step("\(name): viewport drawn at rest (\(n) ink)", n >= 40)
-            if n < 40 { capture(win, to: "\(dir)/churn-\(ConversationView.page)-\(name)-blank.png") }
+            if n < 40 { capture(win, to: "\(dir)/churn-\(ConversationView.page)-\(name)-blank.png"); stall.skip() }
             let worst = stall.take() * 1000, p = (passes[name] ?? []).sorted()
             let p95 = p.isEmpty ? 0 : p[min(p.count - 1, p.count * 95 / 100)]
             print("churn-test: \(name): at \(Int(Date().timeIntervalSince(t0))) s; layout pass after a change: median \(Int(p.isEmpty ? 0 : p[p.count / 2])) ms, p95 \(Int(p95)) ms")
@@ -205,6 +222,19 @@ private struct ChurnView: View {
     }
 }
 
+@MainActor @Observable private final class ProbeHolder { var shown = true; var generation = 0 }
+
+/// A short conversation with a Show earlier button on screen.
+private struct ProbeView: View {
+    let holder: ProbeHolder
+    var body: some View {
+        if holder.shown {
+            ConversationView(items: Array(ChurnData.items(3)), agentName: "probe", loadState: .ready, onLoadEarlier: { false })
+                .id(holder.generation)
+        }
+    }
+}
+
 /// Longest gap between ticks of a 5 ms main-thread timer.
 @MainActor private final class StallMeter {
     private var timer: Timer?
@@ -221,6 +251,8 @@ private struct ChurnView: View {
         RunLoop.main.add(timer!, forMode: .common)
     }
     func take() -> TimeInterval { defer { worst = 0 }; return worst }
+    /// Restarts the gap: time the check spent on its own work does not count.
+    func skip() { last = Date() }
     func stop() { timer?.invalidate() }
 }
 

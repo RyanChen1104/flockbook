@@ -28,8 +28,8 @@ struct ConversationView: View {
     static var page = ConversationWindow.page
     /// The rows shown: at most `ConversationWindow.maxRows`, the newest unless "Show earlier" went past that.
     @State private var window = ConversationWindow(shown: ConversationView.page)
-    /// "Show earlier" read older log content; the window takes it in once those rows arrive in front.
-    @State private var earlierPending = false
+    /// Which view set the probe's actions (a replaced view disappears after its successor appeared).
+    @State private var probeId = UUID()
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
@@ -126,7 +126,8 @@ struct ConversationView: View {
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity).padding(.bottom, 20).help("Load older messages")
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.earlier = $0 }
-                        .onAppear { ConversationProbe.pressEarlier = { showEarlier() } }
+                        .onAppear { ConversationProbe.set(.earlier, probeId) { showEarlier() } }
+                        .onDisappear { ConversationProbe.clear(.earlier, probeId) }
                     }
                     let rows = Self.displayRows(items[range])
                     let lastReply = window.detached ? nil : rows.last { if case .assistantText = $0.kind { true } else { false } }?.id
@@ -142,8 +143,8 @@ struct ConversationView: View {
                         .buttonStyle(.bordered).controlSize(.small)
                         .frame(maxWidth: .infinity).padding(.top, 24).help("Show the newest messages")
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.latest = $0 }
-                        .onAppear { ConversationProbe.pressLatest = { jumpToLatest() } }
-                        .onDisappear { ConversationProbe.latest = .zero; ConversationProbe.pressLatest = nil }
+                        .onAppear { ConversationProbe.set(.latest, probeId) { jumpToLatest() } }
+                        .onDisappear { ConversationProbe.latest = .zero; ConversationProbe.clear(.latest, probeId) }
                     }
                 }
                 .frame(maxWidth: size.column, alignment: .leading)
@@ -172,9 +173,7 @@ struct ConversationView: View {
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
-                guard earlierPending else { return }
-                earlierPending = false
-                window.showEarlier(items.map(\.id), page: Self.page)
+                window.takeLoaded(items.map(\.id), page: Self.page)
             }
     }
 
@@ -184,10 +183,10 @@ struct ConversationView: View {
         if window.range(ids).lowerBound > 0 { window.showEarlier(ids, page: Self.page); return }
         guard let load = onLoadEarlier, !loadingEarlier else { return }
         loadingEarlier = true
-        earlierPending = true
+        let token = window.beginLoad()
         Task {
             moreEarlier = await load(); loadingEarlier = false
-            try? await Task.sleep(for: .seconds(3)); earlierPending = false   // nothing arrived
+            try? await Task.sleep(for: .seconds(3)); window.loadEnded(token)   // nothing arrived (a newer read stays pending)
         }
     }
 
@@ -333,8 +332,25 @@ struct ConversationView: View {
 /// The checks press them through the actions (a synthetic click does not reach a button in a scroll view of a window that is
 /// not key, and a headless run never has a key window).
 @MainActor enum ConversationProbe {
+    /// Only a check turns them on: the actions keep the view's state alive.
+    static var enabled = false
     static var earlier = CGRect.zero, latest = CGRect.zero
-    static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
+    private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
+    private static var owners: [Button: UUID] = [:]
+    enum Button { case earlier, latest }
+
+    static func set(_ b: Button, _ owner: UUID, _ action: @escaping () -> Void) {
+        guard enabled else { return }
+        owners[b] = owner
+        if b == .earlier { pressEarlier = action } else { pressLatest = action }
+    }
+
+    /// Only the view that set the action clears it.
+    static func clear(_ b: Button, _ owner: UUID) {
+        guard owners[b] == owner else { return }
+        owners[b] = nil
+        if b == .earlier { pressEarlier = nil } else { pressLatest = nil }
+    }
 }
 
 /// Gray bubble, right aligned, inline markdown only (reading.md §10).

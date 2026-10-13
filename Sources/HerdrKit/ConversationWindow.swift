@@ -32,6 +32,30 @@ public struct ConversationWindow: Equatable, Sendable {
 
     /// Back to the newest page.
     public mutating func jumpToLatest(page: Int = ConversationWindow.page) {
+        let loads = loads
         self = ConversationWindow(shown: page)
+        self.loads = loads   // a token of a read before the jump never matches a later read
+    }
+
+    /// The "Show earlier" read of the log in flight, if any: rows that then arrive in front join the window.
+    public private(set) var pendingLoad: Int?
+    private var loads = 0
+
+    /// A read of older rows starts. Returns its token for `loadEnded`.
+    public mutating func beginLoad() -> Int {
+        loads += 1; pendingLoad = loads
+        return loads
+    }
+
+    /// That read is over and nothing arrived (a timeout). An older read's end leaves a newer read pending.
+    public mutating func loadEnded(_ token: Int) { if pendingLoad == token { pendingLoad = nil } }
+
+    /// Rows arrived in front: when a read is pending, the window takes a page of them. True when it did.
+    @discardableResult
+    public mutating func takeLoaded(_ ids: [String], page: Int = ConversationWindow.page) -> Bool {
+        guard pendingLoad != nil else { return false }
+        pendingLoad = nil
+        showEarlier(ids, page: page)
+        return true
     }
 }
