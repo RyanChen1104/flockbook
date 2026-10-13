@@ -245,6 +245,26 @@ import Foundation
         check(code(await cs.receive(msg(#"{"v":1,"type":"answer","id":"c4","pane":"w1:p1","question":"call_1","answers":[{"picks":[0]}]}"#))) == .failed && cb.answered.isEmpty,
               "hub session: a message-delivery question -> failed")
         check(code(await cs.receive(msg(#"{"v":1,"type":"send","id":"c5","pane":"w1:p1","text":"A"}"#))) == .promptOpen, "hub session: open Codex question blocks send too")
+        // A logged Codex picker question: the phone answers it when herdr gives the agent's session, else the Mac
+        // does (the session was found from the log path, so no key gate can bind to the agent).
+        let pq = QuestionRequest(toolUseId: "call_2", agent: "codex", questions: [.init(header: "", text: "Which?", options: [.init(label: "A"), .init(label: "B")])])
+        for resolvedSession in [false, true] {
+            var w = ws(.blocked, kind: "codex")
+            w[0].tabs[0].panes[0].agent?.sessionResolved = resolvedSession
+            let pb = FakeHubBackend(workspaces: w)
+            pb.items["s1"] = [ConversationItem(id: "q", kind: .question(pq))]
+            pb.screens["w1:p1"] = "  Question 1/1"
+            let (ps, _) = await session(pb)
+            let pw = await ps.receive(msg(#"{"v":1,"type":"watch","id":"c6","pane":"w1:p1"}"#))
+            let hq: HubQuestion? = pw.compactMap { if case .prompt(let p) = $0 { p.question } else { nil } }.first
+            let a = await ps.receive(msg(#"{"v":1,"type":"answer","id":"c7","pane":"w1:p1","question":"call_2","answers":[{"picks":[0]}]}"#))
+            if resolvedSession {
+                check(hq?.onMac == true && code(a) == .failed && pb.answered.isEmpty,
+                      "hub session: an agent without a herdr session -> its question is onMac, answer failed, nothing sent")
+            } else {
+                check(hq != nil && hq?.onMac == nil && reply(a)?.ok == true && pb.answered.count == 1, "hub session: a herdr session -> the phone answers")
+            }
+        }
     }
 
     // Revoke and level changes take effect on the next message.

@@ -79,6 +79,7 @@ public final class HerdrStore {
             let pane = ws[w].tabs[t].panes[p]
             if pane.agent != nil, pane.agent?.sessionId == nil, let path = resolved[pane.id] {
                 ws[w].tabs[t].panes[p].agent?.sessionId = path
+                ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
         return ws

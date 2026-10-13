@@ -25,6 +25,9 @@ public struct Agent: Sendable, Hashable {
     public var status: AgentStatus
     public var sessionId: String?
     public var title: String
+    /// `sessionId` was found by `SessionResolver` (a log path), not given by herdr: a fresh snapshot has none, so a
+    /// remote key gate cannot bind to this agent.
+    public var sessionResolved = false
     public init(name: String, kind: String, status: AgentStatus, sessionId: String?, title: String) {
         self.name = name; self.kind = kind; self.status = status; self.sessionId = sessionId; self.title = title
     }

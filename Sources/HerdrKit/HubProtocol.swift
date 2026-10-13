@@ -81,6 +81,14 @@ public enum Hub {
     /// The question was read from the screen, not from the agent's log.
     public static func screenRead(_ q: QuestionRequest) -> Bool { q.toolUseId.hasPrefix("screen-") }
 
+    /// Only the Mac answers this question: it was read from the screen (switch above), or herdr gives the agent no
+    /// session (the app found its log by path), so a key gate cannot bind to the agent and every key would stop.
+    public static func answerOnMac(_ q: QuestionRequest, agent: Agent?) -> Bool {
+        if !screenQuestionsRemote, screenRead(q) { return true }
+        guard let agent else { return false }
+        return agent.sessionResolved || (agent.sessionId ?? "").isEmpty
+    }
+
     /// The id the hub gives a question. A log question keeps its call id. A Claude screen question ("screen-…",
     /// built from the headers only) also gets a hash of what the card shows: the questions read (text, options,
     /// mode). An answer from a card whose question has changed since is then `stale`, even with the same headers.
@@ -447,10 +455,11 @@ public struct HubQuestion: Codable, Hashable, Sendable {
     public var answers: [String]?
     /// True: only the Mac answers it (`Hub.screenQuestionsRemote`); the phone shows it. Absent: the phone may answer.
     public var onMac: Bool?
-    public init(_ q: QuestionRequest) {
+    /// `paneAgent`: the pane's agent, for a prompt push (`Hub.answerOnMac`); nil for a conversation item.
+    public init(_ q: QuestionRequest, paneAgent: Agent? = nil) {
         id = Hub.questionID(q); agent = q.agent; delivery = q.delivery == .picker ? .picker : .message
         headers = q.headers; questions = q.questions.map(HubQuestionItem.init)
-        if !Hub.screenQuestionsRemote, Hub.screenRead(q) { onMac = true }
+        if Hub.answerOnMac(q, agent: paneAgent) { onMac = true }
         switch q.state {
         case .pending: state = .pending
         case .answered(let a): state = .answered; answers = a
