@@ -51,6 +51,13 @@ extension ContentTests {
         let texts = overlayTexts(host)
         let rowsWithOverlays = texts.filter { $0.hasPrefix("Step ") || $0.hasPrefix("Finished step ") }.count
         step("selectable text: \(texts.count) selection overlays in \(rowsWithOverlays) row(s) (want at most 1 row)", rowsWithOverlays <= 1)
+        // The "Select Text" action (no pointer, e.g. VoiceOver) makes one row selectable; still only that row. An offscreen
+        // window has no accessibility tree, so the check calls the same code through the probe.
+        let canSelect = ConversationProbe.selectLastRow != nil
+        ConversationProbe.selectLastRow?()
+        try? await Task.sleep(for: .milliseconds(500))
+        let selected = overlayTexts(host).filter { $0.hasPrefix("Step ") || $0.hasPrefix("Finished step ") }.count
+        step("selectable text: after Select Text on one row, \(selected) row(s) selectable (want 1)", canSelect && selected == 1)
 
         // Main-thread stalls: a 5 ms timer; the longest gap between two ticks, not counting the check's own captures.
         let stall = StallMeter()

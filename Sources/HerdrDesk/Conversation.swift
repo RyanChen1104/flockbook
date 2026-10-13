@@ -32,6 +32,7 @@ struct ConversationView: View {
     @State private var probeId = UUID()
     /// The one row whose text can be selected: the last one under the pointer.
     @State private var selectableKey: String?
+    private func select(_ key: String) { if selectableKey != key { selectableKey = key } }
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
@@ -139,7 +140,10 @@ struct ConversationView: View {
                             // Selectable only under the pointer (see `selectableText`). Leaving a row keeps it selectable,
                             // so a selection made there stays until the pointer reaches another row.
                             .environment(\.selectableText, selectableKey == e.key)
-                            .onHover { if $0, selectableKey != e.key { selectableKey = e.key } }
+                            .onHover { if $0 { select(e.key) } }
+                            // Without a pointer (VoiceOver) the same row change is an action.
+                            .accessibilityAction(named: "Select Text") { select(e.key) }
+                            .onAppear { if e.key == entries.last(where: { $0.item != nil })?.key { ConversationProbe.selectLastRow(probeId) { select(e.key) } } }
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
                     }
                     if window.detached {
@@ -342,6 +346,9 @@ struct ConversationView: View {
     static var enabled = false
     static var earlier = CGRect.zero, latest = CGRect.zero
     private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
+    /// Makes the last row selectable, as its "Select Text" action does.
+    private(set) static var selectLastRow: (() -> Void)?
+    static func selectLastRow(_ owner: UUID, _ action: @escaping () -> Void) { if enabled { selectLastRow = action } }
     private static var owners: [Button: UUID] = [:]
     enum Button { case earlier, latest }
 
