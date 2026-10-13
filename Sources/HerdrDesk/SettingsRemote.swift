@@ -35,6 +35,7 @@ struct RemoteAccessSection: View {
                     Text("Devices")
                     Text(hub.deviceList.isEmpty ? "None paired." : "\(hub.deviceList.count) paired, \(hub.deviceList.filter { $0.device.level == .input }.count) with input.")
                 }
+                ClaudeHookRow(setup: hub.claudeHook)
             }
         } header: {
             Text("Remote access")

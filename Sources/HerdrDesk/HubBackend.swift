@@ -57,6 +57,9 @@ import Foundation
         return true
     }
 
+    /// The hook's newest AskUserQuestion call for this session (the files the hook wrote, read-only).
+    func hookedQuestion(session: String) -> QuestionRequest? { ClaudeHookSetup.live.question(session: session) }
+
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);
     /// the answers must then cover every question, else nothing is sent. Every key is gated: the agent from the
     /// hub's check, this question's picker on screen, the device's level now (`KeyGate`).

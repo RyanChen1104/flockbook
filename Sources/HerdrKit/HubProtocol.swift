@@ -78,6 +78,10 @@ public enum Hub {
     /// prove which row a key picks; the card says to answer on the Mac. Questions from the log are not affected.
     public static let screenQuestionsRemote = false
 
+    /// The one switch for Claude questions bound to the AskUserQuestion hook (`ClaudeQuestionHook`). Off: every
+    /// Claude question is a screen read again, answered on the Mac only.
+    public static let claudeHookQuestions = true
+
     /// The question was read from the screen, not from the agent's log.
     public static func screenRead(_ q: QuestionRequest) -> Bool { q.toolUseId.hasPrefix("screen-") }
 

@@ -54,6 +54,8 @@ final class RemoteHub {
     private(set) var deviceList: [HubDeviceRecord] = []
     private(set) var addresses: [HubAddress] = []
     private(set) var busy = false
+    /// Settings > Remote access > Answer Claude questions from the phone.
+    @ObservationIgnored private(set) var claudeHook: ClaudeHookSetup = .live
 
     init(model: AppModel?, devices: HubDeviceStore, dir: URL?) {
         self.model = model; self.devices = devices; self.dir = dir
@@ -267,7 +269,7 @@ final class RemoteHub {
     /// A hub that shows a state without listening (Settings snapshots).
     static func preview(running: Bool, devices: [(HubDevice, Date)], offer: Bool,
                         tailscale: TailscaleSetup.Status? = nil, serve: TailscaleSetup.Serve? = nil, mode: Mode = .direct,
-                        pairStopped: Bool = false) -> RemoteHub {
+                        pairStopped: Bool = false, claudeHook: ClaudeHookSetup.State = .off) -> RemoteHub {
         let store = MemoryDeviceStore()
         for (i, d) in devices.enumerated() { store.add(token: "preview-\(i)", device: d.0, paired: d.1) }
         let hub = RemoteHub(model: nil, devices: store, dir: nil)
@@ -286,6 +288,7 @@ final class RemoteHub {
         hub.fingerprint = running && direct ? String(repeating: "3f9a", count: 16) : nil
         if offer { hub.startPairing() }
         hub.pairingEndedByWrongTries = pairStopped
+        hub.claudeHook = .preview(claudeHook)
         return hub
     }
 }

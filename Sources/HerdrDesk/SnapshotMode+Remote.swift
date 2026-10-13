@@ -27,6 +27,8 @@ extension SnapshotRunner {
                                         serve: .taken("Port 7480 serves something else"), mode: .tailscale)
         let tsStopped = RemoteHub.preview(running: true, devices: [], offer: false, tailscale: ts(https: true, phones: [phone]), serve: .ours,
                                           mode: .tailscale, pairStopped: true)
+        let tsHook = RemoteHub.preview(running: true, devices: two, offer: false, tailscale: ts(https: true, phones: [phone]), serve: .ours,
+                                       mode: .tailscale, claudeHook: .on)
         let tsPair = RemoteHub.preview(running: true, devices: [], offer: true, tailscale: ts(https: true, phones: [phone]), serve: .ours, mode: .tailscale)
 
         step("off: nothing listens, no url", !off.enabled && !off.running && off.url == nil)
@@ -44,6 +46,10 @@ extension SnapshotRunner {
         step("tailscale: the command shown runs serve for our port only (\(tsReady.serveOnCommand))",
              tsReady.serveOnCommand.hasSuffix("serve --bg --https=7480 http://127.0.0.1:7481") && !tsReady.serveOnCommand.contains("funnel"))
         step("pairing: 6 words", pairing.offer?.words.count == 6)
+        let hookPreview = tsHook.claudeHook.preview
+        step("claude hook: the sheet shows the exact entry (matcher AskUserQuestion, our script, timeout 5)",
+             hookPreview.contains("\"matcher\" : \"AskUserQuestion\"") && hookPreview.contains("ask-user-question.sh") && hookPreview.contains("\"timeout\" : 5"))
+        step("claude hook: previews never read or write (state \(off.claudeHook.state), \(tsHook.claudeHook.state))", off.claudeHook.state == .off && tsHook.claudeHook.state == .on)
         on.setLevel(.read, device: "d1")
         step("devices: level change shows", on.deviceList.first { $0.device.id == "d1" }?.device.level == .read)
         on.setLevel(.input, device: "d1")
@@ -113,6 +119,9 @@ extension SnapshotRunner {
             ("tailscale-pair-stopped", AnyView(PairSheet(hub: tsStopped)), 380),
             ("pair", AnyView(PairSheet(hub: pairing)), 380),
             ("devices", AnyView(DevicesSheet(hub: on)), 460),
+            ("claude-hook-on", AnyView(SettingsView(remote: tsHook)), 520),
+            ("claude-hook-install", AnyView(ClaudeHookSheet(setup: off.claudeHook)), 520),
+            ("claude-hook-uninstall", AnyView(ClaudeHookSheet(setup: tsHook.claudeHook)), 520),
         ]
         for (name, view, width) in shots {
             for dark in [false, true] {

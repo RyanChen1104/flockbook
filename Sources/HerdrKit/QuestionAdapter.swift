@@ -105,6 +105,7 @@ public enum QuestionAdapter {
         case text(String)
         case keys([String])
         case waitFor(String)
+        var sendsKeys: Bool { if case .waitFor = self { false } else { true } }
     }
 
     public enum Failure: Error, Sendable, Hashable, CustomStringConvertible {
@@ -164,10 +165,13 @@ public enum QuestionAdapter {
     /// "": on it, anywhere for multiSelect; text: on it).
     public enum FieldFocus: Sendable { case auto, any, other, submit }
 
-    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil, focus: FieldFocus = .auto, row: Int? = nil) -> Bool {
+    /// `checks` (Claude multiSelect, a hooked request): the rows that must show [✔] now (the Other row is index n).
+    public static func shows(_ q: QuestionRequest, question k: Int, screen: String, other: String? = nil, focus: FieldFocus = .auto, row: Int? = nil, checks: Set<Int>? = nil) -> Bool {
         guard q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" { return codexExact(q, question: k, screen: screen, notes: other, row: row) }
+        // A request from the hook (not read from the screen) gets the exact compare; screen reads keep the parser.
+        if !q.toolUseId.hasPrefix("screen-") { return claudeExact(q, question: k, screen: screen, other: other, focus: focus, checks: checks) }
         // Exactly one focus mark: with none or two, the hub cannot know where a key lands.
         guard let s = claudeParse(screen), s.focusMarks == 1, q.headers.isEmpty || s.headers == q.headers,
               flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
@@ -300,8 +304,10 @@ public enum QuestionAdapter {
         q.questions.indices.contains { shows(q, question: $0, screen: screen) }
     }
 
-    /// Claude's review screen of `q`: the request's headers and every one of its questions listed.
-    public static func showsReview(_ q: QuestionRequest, screen: String) -> Bool {
+    /// Claude's review screen of `q`: the request's headers and every one of its questions listed. A hooked request
+    /// needs the exact review of `answers` (`claudeReviewExact`).
+    public static func showsReview(_ q: QuestionRequest, screen: String, answers: [QuestionAnswer]? = nil) -> Bool {
+        if !q.toolUseId.hasPrefix("screen-") { return answers.map { claudeReviewExact(q, answers: $0, screen: screen) } ?? false }
         guard let region = pickerRegion(agent: q.agent, screen: screen), region.contains("Review your answers") else { return false }
         return q.headers.allSatisfy { region.contains($0) } && q.questions.allSatisfy { region.contains(flat($0.text)) }
     }
@@ -518,13 +524,20 @@ extension HerdrClient {
         // `focus`: Claude multiSelect "Other": Down keys may run with focus anywhere, the text and Tab need it on the
         // row, Enter needs it on Submit (live, 2.1.296).
         // `row` (Codex): the row whose notes the hub opens; Tab and every key after it need the focus there.
-        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto, row: Int?
+        // A hooked Claude request (`ClaudeQuestionHook`): the exact rendering before every key, the [✔] rows too
+        // (`checked`: what the hub's digits toggled; the picker starts with none), and a short wait for the render
+        // of the last key before that check (read-only).
+        let hooked = q.agent == "claude" && !q.toolUseId.hasPrefix("screen-")
+        var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto, row: Int?, checked: Set<Int> = []
         for step in steps {
             if q.agent == "codex", step == .keys(["Tab"]), answers.indices.contains(at), q.questions.indices.contains(at) {
                 row = answers[at].picks.first ?? q.questions[at].options.count
             }
             let k = at, r = review, inRow = shown, f = focus, fr = row
-            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f, row: fr) }
+            let multi = q.questions.indices.contains(k) && q.questions[k].multiSelect
+            let ck: Set<Int>? = hooked && multi ? checked : nil
+            let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0, answers: answers) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f, row: fr, checks: ck) }
+            if hooked, step.sendsKeys { _ = try await waitScreen(paneId: paneId, timeout: 1.5, same) }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)
@@ -532,6 +545,10 @@ extension HerdrClient {
                 // By step purpose, not by text (the typed text may equal a digit): Claude's first text step for
                 // "Other" is its digit, which opens the row; the next text step is the typed text.
                 let typed = answers.indices.contains(k) ? QuestionAdapter.otherText(answers[k]) : nil
+                let typedText = typed != nil && otherOpen && !typedIn
+                if hooked, multi, !r, !typedText, let d = Int(s), (1...(q.questions[k].options.count + 1)).contains(d) {
+                    if checked.contains(d - 1) { checked.remove(d - 1) } else { checked.insert(d - 1) }
+                }
                 if typed != nil, !otherOpen, q.agent == "claude", q.questions.indices.contains(k), s == "\(q.questions[k].options.count + 1)" { otherOpen = true; shown = "" }
                 else if typed != nil, otherOpen, !typedIn { shown = typed; typedIn = true }
             case .keys(let k):
@@ -543,7 +560,7 @@ extension HerdrClient {
                 if q.agent == "codex", k.last == "Tab", answers.indices.contains(at), QuestionAdapter.otherText(answers[at]) != nil { otherOpen = true; shown = "" }
             case .waitFor(let s):
                 if s == "Review your answers" { review = true } else { at += 1 }
-                otherOpen = false; typedIn = false; shown = nil; focus = .auto; row = nil
+                otherOpen = false; typedIn = false; shown = nil; focus = .auto; row = nil; checked = []
                 guard try await waitScreen(paneId: paneId, timeout: 3, { QuestionAdapter.pickerRegion(agent: q.agent, screen: $0)?.contains(s) == true }) else {
                     throw QuestionAdapter.Failure.stuck(s)
                 }

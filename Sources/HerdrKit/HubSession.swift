@@ -31,6 +31,8 @@ import CryptoKit
     func approve(pane: String, prompt: String, allow: Bool, agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> Bool
     /// The question card's input. Called only after the question was checked.
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws
+    /// The newest AskUserQuestion call the Claude hook saved for this agent session (`ClaudeQuestionHook`), if any.
+    func hookedQuestion(session: String) -> QuestionRequest?
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -51,11 +53,25 @@ extension ApprovalNotice {
 }
 
 extension Hub {
+    /// The log holds this call with its result (answered or declined). Live (2.1.296 with the hook): the call
+    /// itself may be in the log while the picker is open; pending, it still stands.
+    static func answered(_ item: ConversationItem, id: String) -> Bool {
+        if case .question(let q) = item.kind { return q.toolUseId == id && q.state != .pending }
+        return false
+    }
+
     /// The question a pane waits on, as the app's question card finds it: Claude's picker on screen (blocked only),
     /// else a pending question that ends the log while the agent is not working (Codex).
-    public static func openQuestion(agent: Agent?, screen: String?, items: [ConversationItem]) -> QuestionRequest? {
+    /// `hooked`: the hook's newest call for the agent's session (`ClaudeQuestionHook`). It stands for the picker only
+    /// when the switch is on, the log has no result for its id yet (an answered or declined call is stale), and the
+    /// screen is its exact rendering (some question of it, focus anywhere); else the screen-read request (Mac only).
+    public static func openQuestion(agent: Agent?, screen: String?, items: [ConversationItem], hooked: QuestionRequest? = nil) -> QuestionRequest? {
         guard let agent else { return nil }
         if agent.kind == "claude", agent.status == .blocked, let screen, let shown = QuestionAdapter.claudeScreen(screen) {
+            if claudeHookQuestions, let h = hooked, h.agent == "claude", !screenRead(h), !items.contains(where: { Self.answered($0, id: h.toolUseId) }),
+               h.questions.indices.contains(where: { QuestionAdapter.claudeExact(h, question: $0, screen: screen, other: nil, focus: .any, checks: nil) }) {
+                return h
+            }
             return QuestionAdapter.screenRequest(headers: shown.headers, questions: [shown.question])
         }
         guard agent.status != .working, let last = items.last, case .question(let q) = last.kind, q.state == .pending else { return nil }
@@ -374,7 +390,8 @@ extension Hub {
         let ps = p.agent.map { ApprovalNotice.PaneState(agentKind: $0.kind, blocked: $0.status == .blocked, pendingToolUseId: logged?.toolUseId, screen: screen ?? "",
                                                         pendingTool: logged?.toolName, pendingCommand: logged?.command) }
         let approval = ps.flatMap { Hub.openApproval($0, logged: logged) }
-        let question = Hub.openQuestion(agent: p.agent, screen: screen, items: items)
+        let hooked = p.agent.flatMap { $0.kind == "claude" && $0.status == .blocked ? $0.sessionId : nil }.flatMap { backend.hookedQuestion(session: $0) }
+        let question = Hub.openQuestion(agent: p.agent, screen: screen, items: items, hooked: hooked)
         let unreadable = approval == nil && question == nil && p.agent?.kind == "claude"
             && Hub.unreadablePrompt(screen: screen ?? "", blocked: p.agent?.status == .blocked)
         return PaneNow(screen: screen, pane: ps, approval: approval, question: question, unreadablePrompt: unreadable)

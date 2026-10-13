@@ -22,6 +22,8 @@ Keys are typed with `pane.send_text` (no Enter). `send(text:to:)` (`pane.send_in
 
 Important: Claude Code writes the assistant line with the AskUserQuestion `tool_use` to the session JSONL **only when the question is answered** (checked: picker open for 60+ s, no line; the line and its result appear together right after the answer). So `ConversationItem.question` with `.pending` never comes from a Claude log; the card must use `pendingQuestion(paneId:)`, which reads the picker from the screen.
 
+Update 2026-10-13 (2.1.296, c9-input-test): with a PreToolUse hook on AskUserQuestion (`--settings <test file>`), the hook's stdin has `session_id` (= herdr's `agent_session`), `tool_use_id` and `tool_input` before the picker opens, and the assistant line with the `tool_use` was in the log while the picker was still open (no result yet). The hub uses the hook record, not that line (see `ClaudeQuestionHook`).
+
 Screen markers: "Chat about this" (every question screen), "Review your answers" (review screen).
 
 Keys (n = number of options):

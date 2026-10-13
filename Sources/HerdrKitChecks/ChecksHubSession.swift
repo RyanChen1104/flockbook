@@ -54,6 +54,9 @@ import Foundation
         guard allowed() else { return false }
         approved.append("\(pane) \(prompt) \(allow)"); return approveOK
     }
+    /// The hook's newest call per agent session.
+    var hooked: [String: QuestionRequest] = [:]
+    func hookedQuestion(session: String) -> QuestionRequest? { hooked[session] }
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws {
         beforeKeys?()
         allowedAtKeys.append(allowed())
