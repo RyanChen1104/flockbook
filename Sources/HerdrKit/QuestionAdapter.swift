@@ -171,7 +171,12 @@ public enum QuestionAdapter {
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" { return codexExact(q, question: k, screen: screen, notes: other, row: row) }
         // A request from the hook (not read from the screen) gets the exact compare; screen reads keep the parser.
-        if !q.toolUseId.hasPrefix("screen-") { return claudeExact(q, question: k, screen: screen, other: other, focus: focus, checks: checks) }
+        // The screen must prove question `k` only: when another question of the request also matches it (alike once
+        // whitespace is dropped), the hub cannot know which one is open, so no key.
+        if !q.toolUseId.hasPrefix("screen-") {
+            return claudeExact(q, question: k, screen: screen, other: other, focus: focus, checks: checks)
+                && !q.questions.indices.contains { $0 != k && claudeExact(q, question: $0, screen: screen, other: other, focus: .any, checks: nil) }
+        }
         // Exactly one focus mark: with none or two, the hub cannot know where a key lands.
         guard let s = claudeParse(screen), s.focusMarks == 1, q.headers.isEmpty || s.headers == q.headers,
               flat(s.question.text) == flat(want.text), s.question.multiSelect == want.multiSelect,
