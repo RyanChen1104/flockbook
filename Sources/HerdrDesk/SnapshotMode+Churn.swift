@@ -54,9 +54,13 @@ extension ContentTests {
             tv.setSelectedRange(NSRange(location: 0, length: (tv.string as NSString).length))
             let pb = NSPasteboard(name: NSPasteboard.Name("churn-test-\(UUID().uuidString)"))
             pb.clearContents()
-            _ = tv.writeSelection(to: pb, type: .string)
+            // The types Cmd-C and the menu's Copy write: plain text only, so a rich paste cannot bring back code labels or
+            // raw list markers.
+            _ = tv.writeSelection(to: pb, types: tv.writablePasteboardTypes)
             let copied = pb.string(forType: .string) ?? ""
+            let types = pb.types ?? []
             pb.releaseGlobally()
+            step("copy: plain text only (\(types.map(\.rawValue)))", !types.isEmpty && Set(types).isSubset(of: [.string, NSPasteboard.PasteboardType("NSStringPboardType")]))
             let last = tv.string.components(separatedBy: "\n").last { $0.hasPrefix("Paragraph ") }.map { String($0.prefix(13)) } ?? "?"
             step("selection: one message is one text view; all of it copies the first and the last paragraph (\(last))",
                  copied.hasPrefix("Finished step") && copied.contains(last) && copied.contains("let value = parse(line)"))

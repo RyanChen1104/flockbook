@@ -211,8 +211,11 @@ final class MessageTextView: NSTextView {
         return out
     }
 
+    /// Copy, drag and Services write plain text only: rich text would bring back code labels and raw list markers.
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
+
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        guard type == .string else { return super.writeSelection(to: pboard, type: type) }
+        guard type == .string else { return false }
         let text = selectedRanges.map { plainText($0.rangeValue) }.filter { !$0.isEmpty }.joined(separator: "\n")
         return pboard.setString(text, forType: .string)
     }
