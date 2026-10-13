@@ -173,8 +173,13 @@ extension ChromeTests {
             try? await Task.sleep(for: .milliseconds(600))
             let y1 = sv.contentView.bounds.origin.y
             step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))", sv.verticalScrollElasticity != .none && y1 > y0 + 30)
-            step("thin overlay scroll bars (page \(sv.scrollerStyle.rawValue), preferred \(NSScroller.preferredScrollerStyle.rawValue), 1 = overlay)",
-                 ScrollerStyle.installed && sv.scrollerStyle == .overlay && NSScroller.preferredScrollerStyle == .overlay)
+            // Overlay unless the owner chose "Always" (legacy); the page follows the app's answer.
+            let setting = ScrollerStyle.showScrollBars, want = ScrollerStyle.style(showScrollBars: setting)
+            step("scroll bars: setting \(setting ?? "unset"), page \(sv.scrollerStyle.rawValue), preferred \(NSScroller.preferredScrollerStyle.rawValue), want \(want.rawValue) (1 = overlay)",
+                 ScrollerStyle.installed && sv.scrollerStyle == want && NSScroller.preferredScrollerStyle == want)
+            step("scroll bar setting map: Always -> legacy; WhenScrolling, Automatic, unset -> overlay",
+                 ScrollerStyle.style(showScrollBars: "Always") == .legacy && ScrollerStyle.style(showScrollBars: "WhenScrolling") == .overlay
+                 && ScrollerStyle.style(showScrollBars: "Automatic") == .overlay && ScrollerStyle.style(showScrollBars: nil) == .overlay)
             ContentTests.capture(win, to: "\(dir)/settings-page-light-scrolled.png")
             win.appearance = NSAppearance(named: .darkAqua)
             try? await Task.sleep(for: .milliseconds(600))
