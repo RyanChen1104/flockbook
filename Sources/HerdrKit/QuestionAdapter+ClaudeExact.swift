@@ -57,10 +57,32 @@ extension QuestionAdapter {
                   let t = l.trimmingCharacters(in: .whitespaces); return t.hasPrefix("☐") || t.hasPrefix("☒") || t.hasPrefix("←")
               }),
               claudeBar(q, lines[head]) else { return false }
-        var body = Substring(bare(lines[(head + 1)..<sep].joined(separator: "\n")))
+        // The text between the bar and the separator, whitespace dropped, with where each line starts. Structure is
+        // read from lines, never from the dropped-whitespace text: a row is a line of its own in Claude's
+        // two-column focus slot ("❯ " or "  ", then "N."), Submit a line of its own; a mark or a number anywhere
+        // else is text. Every row-like line must be one of the rows read (free text cannot hide or add a row).
+        let region = Array(lines[(head + 1)..<sep])
+        var chars: [Character] = [], starts: [Int: Int] = [:]
+        for (i, l) in region.enumerated() {
+            let b = bare(l)
+            if !b.isEmpty { starts[chars.count] = i; chars += Array(b) }
+        }
+        var pos = 0, rowLines: Set<Int> = []
         func take(_ lit: String) -> Bool {
-            guard body.hasPrefix(lit) else { return false }
-            body = body.dropFirst(lit.count); return true
+            let a = Array(lit)
+            guard pos + a.count <= chars.count, Array(chars[pos..<(pos + a.count)]) == a else { return false }
+            pos += a.count; return true
+        }
+        func has(_ lit: String) -> Bool { let a = Array(lit); return pos + a.count <= chars.count && Array(chars[pos..<(pos + a.count)]) == a }
+        let rowRe = /^(❯ |  )(\d+)\.(?: |$)/, submitRe = /^(❯|\s)\s*Submit\s*$/
+        /// A row line starts here: its mark (taken) or nil when it is not row `number`'s line.
+        func row(_ number: Int) -> Bool? {
+            guard let l = starts[pos], let m = region[l].firstMatch(of: rowRe), Int(m.2) == number else { return nil }
+            rowLines.insert(l)
+            let marked = m.1 == "❯ "
+            if marked { guard take("❯") else { return nil } }
+            guard take("\(number).") else { return nil }
+            return marked
         }
         guard take(bare(want.text)) else { return false }
         var marks: [Int] = [], checked: Set<Int> = []
@@ -70,20 +92,26 @@ extension QuestionAdapter {
             return take("[]")
         }
         for (i, o) in want.options.enumerated() {
-            if take("❯") { marks.append(i) }   // a row starts with its number: a mark right before it is the focus
-            guard take("\(i + 1)."), box(i) else { return false }
-            let fits = shownLabels(o).filter { body.hasPrefix($0) }
+            guard let marked = row(i + 1), box(i) else { return false }
+            if marked { marks.append(i) }
+            let fits = shownLabels(o).filter { has($0) }
             guard fits.count == 1, take(fits[0]), take(bare(o.detail)) else { return false }
         }
-        if take("❯") { marks.append(n) }
-        guard take("\(n + 1)."), box(n) else { return false }
+        guard let otherMarked = row(n + 1), box(n) else { return false }
+        if otherMarked { marks.append(n) }
         let empty = want.multiSelect ? "Typesomething" : "Typesomething."
         guard take(other.map { $0.isEmpty ? empty : bare($0) } ?? empty) else { return false }
         if want.multiSelect {
+            guard let l = starts[pos], region[l].wholeMatch(of: submitRe) != nil else { return false }
+            rowLines.insert(l)
             if take("❯") { marks.append(n + 1) }
             guard take("Submit") else { return false }
         }
-        guard body.isEmpty, marks.count == 1, let mark = marks.first else { return false }
+        guard pos == chars.count, marks.count == 1, let mark = marks.first else { return false }
+        // No other line looks like a row, Submit or a focus mark.
+        for (i, l) in region.enumerated() where !rowLines.contains(i) {
+            if l.firstMatch(of: rowRe) != nil || l.wholeMatch(of: submitRe) != nil || l.trimmingCharacters(in: .whitespaces).hasPrefix("❯") { return false }
+        }
         if let checks, want.multiSelect, checks != checked { return false }
         // `.auto` as in `shows`: no hub text -> not on the Other row; "" -> on it (multiSelect: anywhere, Down moves
         // it there); text -> on it.
@@ -105,7 +133,7 @@ extension QuestionAdapter {
     /// answers", per question "● text" and "→ answer", "Ready to submit your answers?", then "1. Submit answers" and
     /// "2. Cancel" with one focus mark. The last key ("1") goes only here.
     static func claudeReviewExact(_ q: QuestionRequest, answers: [QuestionAnswer], screen: String) -> Bool {
-        guard q.agent == "claude", !q.toolUseId.hasPrefix("screen-"), answers.count == q.questions.count,
+        guard q.agent == "claude", !q.toolUseId.hasPrefix("screen-"), answers.count == q.questions.count, !reviewAmbiguous(q, answers: answers),
               zip(q.questions, answers).allSatisfy({ k, a in a.picks.allSatisfy { k.options.indices.contains($0) } }) else { return false }
         let lines = screen.components(separatedBy: "\n")
         guard let title = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "Review your answers" }),
@@ -131,5 +159,18 @@ extension QuestionAdapter {
         if take("❯") { marks += 1 }
         guard take("2.Cancel"), body.isEmpty, marks == 1 else { return false }
         return true
+    }
+
+    /// The review screen cannot prove the hub's answers: a shown label with a comma, two labels alike once
+    /// whitespace is dropped, or Other text with a comma or alike a label. Then two answer sets look the same
+    /// there, so the last key would go blind; the answer is refused before any key.
+    static func reviewAmbiguous(_ q: QuestionRequest, answers: [QuestionAnswer]) -> Bool {
+        for (k, question) in q.questions.enumerated() {
+            let alts = question.options.map { Set(shownLabels($0)) }
+            let all = alts.flatMap { $0 }
+            if all.contains(where: { $0.contains(",") }) || Set(all).count != all.count { return true }
+            if answers.indices.contains(k), let o = otherText(answers[k]).map(bare), o.contains(",") || all.contains(o) { return true }
+        }
+        return false
     }
 }

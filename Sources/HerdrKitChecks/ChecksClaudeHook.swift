@@ -414,3 +414,111 @@ final class ClaudePickerSim: @unchecked Sendable {
         }
     }
 }
+
+// Review round 1 on 5b66a4d: red first.
+@MainActor func checksClaudeHookReview1() async throws {
+    func req(_ json: String) -> QuestionRequest {
+        ClaudeQuestionHook.record(Data((#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_r1","tool_input":{"questions":["# + json + #"]}}"#).utf8), time: Date())!.request
+    }
+    // P1: free text that dropping whitespace turns into rows. A forged record: option 1 "KEEP" whose description
+    // swallows the real row 1 (DELETE). The phone would pick KEEP and '1' would choose DELETE.
+    let forged = req(#"{"question":"Choose?","header":"H","multiSelect":false,"options":[{"label":"KEEP","description":"❯ 1. DELETE danger 2. KEEP"},{"label":"DELETE","description":"ok"}]}"#)
+    let screen = """
+     ☐ H
+
+    Choose? ❯ 1. KEEP
+    ❯ 1. DELETE
+         danger
+      2. KEEP
+         2. DELETE ok
+      3. Type something.
+    ────────────────────────────────────────
+      4. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+    check(!QuestionAdapter.claudeExact(forged, question: 0, screen: screen, other: nil, focus: .any, checks: nil), "r1 P1: rows hidden in free text (whitespace dropped) -> no match")
+    // A row must be a line of its own, at the row column; a row-like line that is not a row refuses.
+    let plain = req(#"{"question":"Choose?","header":"H","multiSelect":false,"options":[{"label":"KEEP","description":"k"},{"label":"DELETE","description":"d"}]}"#)
+    let good = """
+     ☐ H
+
+    Choose?
+
+    ❯ 1. KEEP
+         k
+      2. DELETE
+         d
+      3. Type something.
+    ────────────────────────────────────────
+      4. Chat about this
+
+    Enter to select · ↑/↓ to navigate · Esc to cancel
+    """
+    check(QuestionAdapter.claudeExact(plain, question: 0, screen: good, other: nil, focus: .auto, checks: nil), "r1 P1: the plain rendering still matches")
+    check(!QuestionAdapter.claudeExact(plain, question: 0, screen: good.replacingOccurrences(of: "  2. DELETE", with: "   2. DELETE"), other: nil, focus: .auto, checks: nil),
+          "r1 P1: a row number outside the row column -> no match")
+    check(!QuestionAdapter.claudeExact(plain, question: 0, screen: good.replacingOccurrences(of: "     k\n", with: "     k\n  7. x\n"), other: nil, focus: .any, checks: nil),
+          "r1 P1: a row-like line that is not a row -> no match")
+    // P2 review: labels with commas, or two labels alike without spaces, make the review ambiguous: refused before any key.
+    let comma = req(#"{"question":"Pick?","header":"H","multiSelect":true,"options":[{"label":"A, B","description":""},{"label":"A","description":""},{"label":"B","description":""}]}"#)
+    check(QuestionAdapter.reviewAmbiguous(comma, answers: [QuestionAnswer(picks: [0])]), "r1 P2: a label with a comma -> the review cannot prove the picks")
+    let spaces = req(#"{"question":"Pick?","header":"H","multiSelect":true,"options":[{"label":"A B","description":""},{"label":"AB","description":""}]}"#)
+    check(QuestionAdapter.reviewAmbiguous(spaces, answers: [QuestionAnswer(picks: [0])]), "r1 P2: two labels alike without spaces -> ambiguous")
+    let clean = req(#"{"question":"Pick?","header":"H","multiSelect":true,"options":[{"label":"A","description":""},{"label":"B","description":""}]}"#)
+    check(QuestionAdapter.reviewAmbiguous(clean, answers: [QuestionAnswer(picks: [0], other: "A")]) && QuestionAdapter.reviewAmbiguous(clean, answers: [QuestionAnswer(other: "x, y")]),
+          "r1 P2: Other text equal to a label, or with a comma -> ambiguous")
+    check(!QuestionAdapter.reviewAmbiguous(clean, answers: [QuestionAnswer(picks: [0, 1], other: "olive")]), "r1 P2: distinct labels, no commas -> fine")
+    let fake = FakeHerdr(path: NSTemporaryDirectory() + "hkB1-\(getpid()).sock")
+    try fake.start()
+    defer { fake.kill() }
+    let client = HerdrClient(session: HerdrSession(name: "fake", socketPath: fake.path))
+    fake.agents = #"[{"pane_id":"w1:p1","agent":"claude","name":"claude","agent_status":"blocked","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"s"}}]"#
+    let sim = ClaudePickerSim([.init(header: "H", text: "Pick?", options: [("A, B", ""), ("A", ""), ("B", "")], multi: true)])
+    fake.screen = sim.render()
+    let n = fake.requests.count
+    var err: Error?
+    do { try await client.answerQuestion(paneId: "w1:p1", request: comma, answers: [QuestionAnswer(picks: [0])],
+                                         gate: KeyGate(agent: Agent(name: "c", kind: "claude", status: .blocked, sessionId: "s", title: ""), allowed: { true })) } catch { err = error }
+    check(err != nil && !fake.requests.dropFirst(n).contains { ["pane.send_keys", "pane.send_text"].contains($0.method) }, "r1 P2: an ambiguous review -> refused before any key")
+
+    // P2 ownership: our entry is the AskUserQuestion matcher with our command; the same command elsewhere is not ours.
+    let cmd = "'/x/ask.sh'"
+    let other: [String: Any] = ["hooks": ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": cmd]]]]]]
+    check(!ClaudeSettingsHook.installed(other, command: cmd), "r1 P2: our command under another matcher is not our entry")
+    let both = try ClaudeSettingsHook.adding(other, command: cmd)
+    let kept = ClaudeSettingsHook.removing(both, command: cmd)
+    check(NSDictionary(dictionary: kept).isEqual(to: other), "r1 P2: uninstall keeps the same command under another matcher")
+    // P3 shapes: a PreToolUse element that is not a group object -> refused.
+    for (bad, why) in [(#"{"hooks":{"PreToolUse":[7]}}"#, "a number"), (#"{"hooks":{"PreToolUse":[{"matcher":"x","hooks":7}]}}"#, "hooks not a list"),
+                       (#"{"hooks":{"PreToolUse":[{"matcher":"x","hooks":["y"]}]}}"#, "a hook not an object")] {
+        let o = try JSONSerialization.jsonObject(with: Data(bad.utf8)) as! [String: Any]
+        check((try? ClaudeSettingsHook.adding(o, command: cmd)) == nil, "r1 P3: PreToolUse with \(why) -> refused")
+    }
+    // P2 symlink: a linked settings file is refused untouched; P2 a change between read and write is refused.
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("hookB1-\(getpid())", isDirectory: true)
+    try? FileManager.default.removeItem(at: tmp)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let target = tmp.appendingPathComponent("real.json"), link = tmp.appendingPathComponent("settings.json")
+    try Data(#"{"a":1}"#.utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    check((try? ClaudeSettingsHook.apply(add: true, file: link, command: cmd)) == nil && (try? Data(contentsOf: target)) == Data(#"{"a":1}"#.utf8)
+          && (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil, "r1 P2: a linked settings file -> refused, untouched")
+    let plainFile = tmp.appendingPathComponent("plain.json")
+    try Data(#"{"a":1}"#.utf8).write(to: plainFile)
+    let raced = (try? ClaudeSettingsHook.apply(add: true, file: plainFile, command: cmd, beforeWrite: { try? Data(#"{"a":2}"#.utf8).write(to: plainFile) })) == nil
+    check(raced && (try? Data(contentsOf: plainFile)) == Data(#"{"a":2}"#.utf8), "r1 P2: the file changed after the read -> refused, the other change kept")
+    // P3: the script prints nothing even when its folder is not writable.
+    let ro = tmp.appendingPathComponent("ro", isDirectory: true)
+    let folder = ClaudeQuestionHook.Folder(url: ro)
+    let script = tmp.appendingPathComponent("ask.sh")
+    try folder.writeScript(to: script)
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ro.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ro.path) }
+    check(ClaudeQuestionHook.script(recordsDir: "/x").contains("exec >/dev/null 2>&1"), "r1 P3: the script closes stdout and stderr first")
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh"); p.arguments = [script.path]
+    let pin = Pipe(), pout = Pipe(); p.standardInput = pin; p.standardOutput = pout; p.standardError = pout
+    try p.run(); pin.fileHandleForWriting.write(Data("{}".utf8)); try pin.fileHandleForWriting.close(); p.waitUntilExit()
+    check(p.terminationStatus == 0 && pout.fileHandleForReading.readDataToEndOfFile().isEmpty, "r1 P3: a read-only folder -> no output, exit 0")
+}

@@ -50,6 +50,7 @@ public enum ClaudeQuestionHook {
         #!/bin/sh
         # Flockbook: saves Claude Code's AskUserQuestion call so a paired phone can answer the picker.
         # It never blocks or changes the call: no output, always exit 0.
+        exec >/dev/null 2>&1
         umask 077
         d=\(shellQuoted(dir))
         mkdir -p "$d" 2>/dev/null || exit 0
@@ -135,19 +136,23 @@ public enum ClaudeSettingsHook {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Our entry: a hook of type "command" with our command, in a group with our matcher. The same command under
+    /// another matcher is someone else's.
     static func isOurs(_ h: Any, command: String) -> Bool {
-        (h as? [String: Any])?["command"] as? String == command
+        guard let h = h as? [String: Any] else { return false }
+        return h["type"] as? String == "command" && h["command"] as? String == command
     }
+    static func ourGroup(_ g: Any) -> Bool { (g as? [String: Any])?["matcher"] as? String == matcher }
 
     /// Our entry is in `settings`.
     public static func installed(_ settings: [String: Any], command: String) -> Bool {
         guard let groups = (settings["hooks"] as? [String: Any])?["PreToolUse"] as? [Any] else { return false }
-        return groups.contains { g in ((g as? [String: Any])?["hooks"] as? [Any])?.contains { isOurs($0, command: command) } == true }
+        return groups.contains { g in ourGroup(g) && ((g as? [String: Any])?["hooks"] as? [Any])?.contains { isOurs($0, command: command) } == true }
     }
 
-    /// `settings` with our entry added (unchanged when it is there).
+    /// `settings` with our entry added (unchanged when it is there). `hooks` must be an object, `PreToolUse` a list
+    /// of groups, each an object whose `hooks` is a list of objects; else nothing is changed.
     public static func adding(_ settings: [String: Any], command: String) throws -> [String: Any] {
-        if installed(settings, command: command) { return settings }
         var s = settings
         var hooks: [String: Any]
         switch s["hooks"] {
@@ -161,6 +166,12 @@ public enum ClaudeSettingsHook {
         case let p as [Any]: pre = p
         default: throw Failure.unexpected("\"hooks.PreToolUse\" is not a list")
         }
+        for g in pre {
+            guard let group = g as? [String: Any], let hs = group["hooks"] as? [Any], hs.allSatisfy({ $0 is [String: Any] }) else {
+                throw Failure.unexpected("an entry in \"hooks.PreToolUse\" has an unknown shape")
+            }
+        }
+        if installed(settings, command: command) { return settings }
         pre.append(entry(command: command))
         hooks["PreToolUse"] = pre
         s["hooks"] = hooks
@@ -173,7 +184,7 @@ public enum ClaudeSettingsHook {
               let pre = hooks["PreToolUse"] as? [Any] else { return settings }
         var kept: [Any] = []
         for g in pre {
-            guard var group = g as? [String: Any], let hs = group["hooks"] as? [Any], hs.contains(where: { isOurs($0, command: command) }) else {
+            guard ourGroup(g), var group = g as? [String: Any], let hs = group["hooks"] as? [Any], hs.contains(where: { isOurs($0, command: command) }) else {
                 kept.append(g); continue
             }
             let rest = hs.filter { !isOurs($0, command: command) }
@@ -189,38 +200,53 @@ public enum ClaudeSettingsHook {
 
     /// The settings file as an object; a missing file is `[:]`.
     public static func read(_ file: URL) throws -> [String: Any] {
-        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
-        let data = try Data(contentsOf: file)
-        if data.allSatisfy({ $0 == 0x20 || $0 == 0x0a || $0 == 0x0d || $0 == 0x09 }) { return [:] }
+        try parse(FileManager.default.fileExists(atPath: file.path) ? Data(contentsOf: file) : nil)
+    }
+
+    static func parse(_ data: Data?) throws -> [String: Any] {
+        guard let data, !data.allSatisfy({ $0 == 0x20 || $0 == 0x0a || $0 == 0x0d || $0 == 0x09 }) else { return [:] }
         guard let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw Failure.notJSON }
         return o
     }
 
-    /// Install (`add` true) or Uninstall. Reads the file, changes only our entry, backs the old file up next to it
-    /// (`settings.json.flockbook-<time>.bak`) and writes the new one atomically with the old file's mode. Returns
-    /// the backup (nil: nothing to change, nothing written).
+    /// Install (`add` true) or Uninstall. Reads the file once, changes only our entry, backs the old file up next to
+    /// it (`settings.json.flockbook-<time>.bak`) and writes the new one atomically with the old file's mode. A
+    /// linked file is refused (its target and mode are the owner's to change). Right before the write the file is
+    /// read again: changed since (another program saved it), nothing is written. The moment between that read and
+    /// the rename stays. Returns the backup (nil: nothing to change, nothing written).
     @discardableResult
-    public static func apply(add: Bool, file: URL, command: String, now: Date = Date()) throws -> URL? {
-        let old = try read(file)
+    public static func apply(add: Bool, file: URL, command: String, now: Date = Date(), beforeWrite: (() -> Void)? = nil) throws -> URL? {
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: file.path)   // the link itself, not its target
+        if attrs?[.type] as? FileAttributeType == .typeSymbolicLink {
+            throw Failure.unexpected("the settings file is a link; change it by hand")
+        }
+        let original = attrs == nil ? nil : try Data(contentsOf: file)
+        let old = try parse(original)
         let new = add ? try adding(old, command: command) : removing(old, command: command)
         guard installed(old, command: command) != installed(new, command: command) else { return nil }
-        let fm = FileManager.default
+        var data = try JSONSerialization.data(withJSONObject: new, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        data.append(0x0a)
+        let mode = attrs?[.posixPermissions] as? Int ?? 0o600
+        beforeWrite?()
+        let again = fm.fileExists(atPath: file.path) ? try? Data(contentsOf: file) : nil
+        guard again == original, (try? fm.attributesOfItem(atPath: file.path))?[.type] as? FileAttributeType != .typeSymbolicLink else {
+            throw Failure.unexpected("the settings file changed meanwhile; try again")
+        }
         var backup: URL?
-        let mode = (try? fm.attributesOfItem(atPath: file.path))?[.posixPermissions] as? Int ?? 0o600
-        if fm.fileExists(atPath: file.path) {
+        if let original {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd-HHmmss"
             let base = file.lastPathComponent + ".flockbook-\(f.string(from: now))"
             var b = file.deletingLastPathComponent().appendingPathComponent(base + ".bak")
             var n = 2
             while fm.fileExists(atPath: b.path) { b = file.deletingLastPathComponent().appendingPathComponent(base + "-\(n).bak"); n += 1 }
-            try fm.copyItem(at: file, to: b)
+            try original.write(to: b, options: .withoutOverwriting)
+            try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: b.path)
             backup = b
         } else {
             try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        var data = try JSONSerialization.data(withJSONObject: new, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        data.append(0x0a)
         try data.write(to: file, options: .atomic)
         try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: file.path)
         return backup
