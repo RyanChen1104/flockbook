@@ -24,7 +24,12 @@ struct ConversationView: View {
     @State private var moreEarlier = true
     @State private var loadingEarlier = false
     @State private var spinnerDue = false
-    @State private var shown = 150
+    /// Rows shown at first; "Show earlier" adds this many again. A check may raise it (a long session read far back).
+    static var page = ConversationWindow.page
+    /// The rows shown: at most `ConversationWindow.maxRows`, the newest unless "Show earlier" went past that.
+    @State private var window = ConversationWindow(shown: ConversationView.page)
+    /// "Show earlier" read older log content; the window takes it in once those rows arrive in front.
+    @State private var earlierPending = false
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
@@ -109,27 +114,36 @@ struct ConversationView: View {
     private var list: some View {
         ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if items.count > shown || (onLoadEarlier != nil && moreEarlier) {
-                        Button {
-                            if items.count > shown { shown += 150; return }
-                            guard let load = onLoadEarlier, !loadingEarlier else { return }
-                            loadingEarlier = true
-                            Task { moreEarlier = await load(); shown += 150; loadingEarlier = false }
-                        } label: {
+                    let ids = items.map(\.id)
+                    let range = window.range(ids)
+                    if range.lowerBound > 0 || (onLoadEarlier != nil && moreEarlier) {
+                        Button { showEarlier() } label: {
                             HStack(spacing: 6) {
                                 if loadingEarlier { ProgressView().controlSize(.mini) }
-                                Text(items.count > shown ? "Show earlier (\(items.count - shown))" : "Show earlier")
+                                Text(range.lowerBound > 0 ? "Show earlier (\(range.lowerBound))" : "Show earlier")
                             }
                         }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity).padding(.bottom, 20).help("Load older messages")
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.earlier = $0 }
+                        .onAppear { ConversationProbe.pressEarlier = { showEarlier() } }
                     }
-                    let rows = Self.displayRows(items.suffix(shown))
-                    let lastReply = rows.last { if case .assistantText = $0.kind { true } else { false } }?.id
+                    let rows = Self.displayRows(items[range])
+                    let lastReply = window.detached ? nil : rows.last { if case .assistantText = $0.kind { true } else { false } }?.id
                     let entries = Self.entries(rows)
                     ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
                         entryView(e, foldable: e.item?.id != lastReply)
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
+                    }
+                    if window.detached {
+                        Button { jumpToLatest() } label: {
+                            Label("Jump to latest (\(ids.count - range.upperBound) newer)", systemImage: "arrow.down")
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .frame(maxWidth: .infinity).padding(.top, 24).help("Show the newest messages")
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.latest = $0 }
+                        .onAppear { ConversationProbe.pressLatest = { jumpToLatest() } }
+                        .onDisappear { ConversationProbe.latest = .zero; ConversationProbe.pressLatest = nil }
                     }
                 }
                 .frame(maxWidth: size.column, alignment: .leading)
@@ -155,10 +169,33 @@ struct ConversationView: View {
                     tracker.atBottom = new.offset + new.container >= new.content - 40
                 }
             }
-            .onChange(of: scrollToken) { _, _ in
-                tracker.atBottom = true
-                Task { @MainActor in position.scrollTo(edge: .bottom) }
+            .onChange(of: scrollToken) { _, _ in jumpToLatest() }
+            .onChange(of: items.first?.id) { _, _ in
+                // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
+                guard earlierPending else { return }
+                earlierPending = false
+                window.showEarlier(items.map(\.id), page: Self.page)
             }
+    }
+
+    /// A page of older rows: from the rows at hand, else read from the log (the window takes them when they arrive).
+    private func showEarlier() {
+        let ids = items.map(\.id)
+        if window.range(ids).lowerBound > 0 { window.showEarlier(ids, page: Self.page); return }
+        guard let load = onLoadEarlier, !loadingEarlier else { return }
+        loadingEarlier = true
+        earlierPending = true
+        Task {
+            moreEarlier = await load(); loadingEarlier = false
+            try? await Task.sleep(for: .seconds(3)); earlierPending = false   // nothing arrived
+        }
+    }
+
+    /// The newest page, at the bottom, following again.
+    private func jumpToLatest() {
+        window.jumpToLatest(page: Self.page)
+        tracker.atBottom = true
+        Task { @MainActor in position.scrollTo(edge: .bottom) }
     }
 
     struct ScrollMetrics: Equatable { var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat }
@@ -290,6 +327,14 @@ struct ConversationView: View {
     private func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
+}
+
+/// Where the conversation's Show earlier and Jump to latest buttons sit (window coordinates, top left), for the checks.
+/// The checks press them through the actions (a synthetic click does not reach a button in a scroll view of a window that is
+/// not key, and a headless run never has a key window).
+@MainActor enum ConversationProbe {
+    static var earlier = CGRect.zero, latest = CGRect.zero
+    static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
 }
 
 /// Gray bubble, right aligned, inline markdown only (reading.md §10).

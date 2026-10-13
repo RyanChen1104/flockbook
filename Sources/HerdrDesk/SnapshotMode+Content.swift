@@ -20,6 +20,7 @@ import SwiftUI
         if args.contains("--test-search") { Task { await search() }; return true }
         if args.contains("--test-scrolltop") { Task { await scrollTop() }; return true }
         if args.contains("--test-shortcuts") { Task { await shortcuts() }; return true }
+        if args.contains("--test-conversation-churn") { Task { await conversationChurn(args) }; return true }
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }

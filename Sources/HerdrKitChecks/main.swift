@@ -86,6 +86,7 @@ try await checksHubReview6()
 try await checksHubReview7()
 try await checksUpdater()
 try await checksLaunchGuard()
+try await checksConversationWindow()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")
 exit(failures == 0 ? 0 : 1)
