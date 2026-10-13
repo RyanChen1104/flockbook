@@ -23,6 +23,7 @@ struct HerdrDeskApp: App {
             AppDefaults.isolateForTests()   // own settings store per run: never the owner's, never another run's
         }
         AppDefaults.migrateOldSettings()   // after the test isolation: test runs skip it
+        ScrollerStyle.install()   // thin overlay scroll bars, also with a mouse attached
         headless = !headlessFlags.isDisjoint(with: args)
         // Updates: only a real launch of an installed app checks (UpdaterGate). Never a check, preview or snapshot run.
         let quiet = headless || args.contains { $0.hasPrefix("--test") || $0.hasPrefix("--preview") || $0.hasPrefix("--snapshot") || $0 == "--fuzz" }
