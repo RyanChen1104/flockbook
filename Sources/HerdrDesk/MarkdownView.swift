@@ -14,17 +14,10 @@ struct MarkdownView: View {
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
 
     var body: some View {
-        let (blocks, lines) = MarkdownCache.blocksAndLines(for: text, size: size)
+        let lines = MarkdownCache.blocksAndLines(for: text, size: size).lines
         let fold = foldable && !expanded && lines > 40
         VStack(alignment: .leading, spacing: 0) {
-            content(blocks)
-                .frame(maxHeight: fold ? size.line * 14 : nil, alignment: .top)
-                .clipped()
-                .mask {
-                    if fold {
-                        VStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 48) }
-                    } else { Color.black }
-                }
+            MessageText(content: .markdown(text, size: size), maxHeight: fold ? size.line * 14 : nil)
             if foldable && lines > 40 {
                 Button { withAnimation(.snappy(duration: 0.15)) { expanded.toggle() } } label: {
                     HStack(spacing: 4) {
@@ -38,15 +31,6 @@ struct MarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func content(_ blocks: [MBlock]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { i, b in
-                BlockView(block: b, size: size)
-                    .padding(.top, i == 0 ? 0 : Self.gap(blocks[i - 1], b, size))
-            }
-        }
     }
 
     /// Vertical gap between two neighbouring blocks (reading.md §3).
@@ -193,280 +177,189 @@ struct MBlock {
     }
 }
 
-private struct BlockView: View {
-    let block: MBlock
+/// A message's text for `MessageTextView` (TextKit 1), with the reading metrics of `size` (reading.md §2–§10).
+/// Gaps between blocks are paragraph spacing or block margins; code, quotes, rules and tables are text blocks.
+@MainActor struct MessageBuilder {
+    typealias Attrs = [NSAttributedString.Key: Any]
     let size: ReadingSize
 
-    var body: some View {
-        switch block.kind {
-        case .paragraph: prose(size.body)
+    func markdown(_ blocks: [MBlock]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for (i, b) in blocks.enumerated() {
+            let piece = block(b, gap: i == 0 ? 0 : MarkdownView.gap(blocks[i - 1], b, size))
+            out.append(piece)
+            // The break ends the piece's last paragraph, so it takes that paragraph's style.
+            if i < blocks.count - 1, piece.length > 0 {
+                let last = piece.attributes(at: piece.length - 1, effectiveRange: nil).filter { [.font, .paragraphStyle, .foregroundColor].contains($0.key) }
+                out.append(NSAttributedString(string: "\n", attributes: last))
+            }
+        }
+        return out
+    }
+
+    func bubble(_ text: String) -> NSAttributedString {
+        let a = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        return inline(a, size: size.body, para: para(spacing: max(0, size.line - 2 - size.body * 1.19)))
+    }
+
+    private func block(_ b: MBlock, gap: CGFloat) -> NSAttributedString {
+        switch b.kind {
+        case .paragraph:
+            return inline(b.text, size: size.body, para: para(spacing: size.lineSpacing, before: gap))
         case .heading(let l):
             let sz = l == 1 ? size.h1 : l == 2 ? size.h2 : l == 3 ? size.h3 : size.body - 1
-            Text(styled(block.text, size: sz, weight: l == 1 ? .bold : .semibold, color: l >= 4 ? .secondary : nil))
-                .lineSpacing(max(0, sz * 1.36 - sz * 1.19)).selectableText()
-                .frame(maxWidth: .infinity, alignment: .leading)
+            return inline(b.text, size: sz, weight: l == 1 ? .bold : .semibold, color: l >= 4 ? .secondaryLabelColor : .labelColor,
+                          para: para(spacing: max(0, sz * 1.36 - sz * 1.19), before: gap))
         case .item(let depth, let ordered, let ordinal, let task):
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                // Grows with the reading size: at XL a 24 pt column is filled by the checkbox glyph itself.
-                marker(depth: depth, ordered: ordered, ordinal: ordinal, task: task)
-                    .frame(width: markerWidth, alignment: ordered ? .trailing : .center)
-                prose(size.body, color: task == true ? .secondary : nil)
-            }
-            .padding(.leading, CGFloat(min(depth, 4) - 1) * markerWidth)
+            return item(b.text, depth: depth, ordered: ordered, ordinal: ordinal, task: task, gap: gap)
         case .quote(let depth):
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(0..<depth, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.primary.opacity(0.16)).frame(width: 3)
-                }
-                prose(size.body, color: .secondary)
-            }
-        case .code(let lang): CodeBlockView(text: String(block.text.characters), lang: lang, size: size)
-        case .table(let rows, let aligns): TableView(rows: rows, aligns: aligns, size: size)
+            let bars = (0..<max(1, depth)).map { _ in fullWidth(QuoteTextBlock()) }
+            for q in bars { q.setWidth(17, type: .absoluteValueType, for: .padding, edge: .minX) }   // 3 pt bar, 14 pt space
+            bars[0].setWidth(gap, type: .absoluteValueType, for: .margin, edge: .minY)
+            return inline(b.text, size: size.body, color: .secondaryLabelColor, para: para(spacing: size.lineSpacing, blocks: bars))
+        case .code(let lang):
+            return code(String(b.text.characters), lang: lang, gap: gap)
+        case .table(let rows, let aligns):
+            return table(rows, aligns: aligns, gap: gap)
         case .rule:
-            Rectangle().fill(ReadingColor.hairline).frame(width: 120, height: 1).frame(maxWidth: .infinity)
+            let rule = fullWidth(RuleTextBlock())
+            rule.setWidth(gap, type: .absoluteValueType, for: .margin, edge: .minY)
+            let p = para(spacing: 0, blocks: [rule])
+            p.minimumLineHeight = 1; p.maximumLineHeight = 1
+            return NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 1), .paragraphStyle: p, .messageCopy: "---"])
         }
     }
 
-    private var markerWidth: CGFloat { max(24, size.body * 1.6) }   // S 24, M 25.6, L 28.8, XL 32
-
-    private func prose(_ sz: CGFloat, color: Color? = nil) -> some View {
-        Text(styled(block.text, size: sz, weight: .regular, color: color))
-            .lineSpacing(size.lineSpacing).selectableText()
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder private func marker(depth: Int, ordered: Bool, ordinal: Int, task: Bool?) -> some View {
-        if let task {
-            Image(systemName: task ? "checkmark.square.fill" : "square").font(.system(size: size.body))
-                .foregroundStyle(task ? Color.accentColor : Color.secondary)
-        } else if ordered {
-            Text("\(ordinal).").monospacedDigit().font(.system(size: size.body)).foregroundStyle(.secondary).padding(.trailing, 6)
+    /// Marker, then the text hanging at the marker column (reading.md §5). Markers copy as markdown ("- ", "1. ", "- [ ] ").
+    private func item(_ text: AttributedString, depth: Int, ordered: Bool, ordinal: Int, task: Bool?, gap: CGFloat) -> NSAttributedString {
+        let mw = max(24, size.body * 1.6)   // S 24, M 25.6, L 28.8, XL 32
+        let base = CGFloat(min(depth, 4) - 1) * mw
+        let p = para(spacing: size.lineSpacing, before: gap)
+        p.firstLineHeadIndent = base
+        p.headIndent = base + mw
+        p.tabStops = [ordered && task == nil ? NSTextTab(textAlignment: .right, location: base + mw - 6) : NSTextTab(textAlignment: .center, location: base + mw / 2),
+                      NSTextTab(textAlignment: .left, location: base + mw)]
+        let copy = String(repeating: "  ", count: max(0, depth - 1)) + (task.map { $0 ? "- [x] " : "- [ ] " } ?? (ordered ? "\(ordinal). " : "- "))
+        let markerAttrs: Attrs = [.font: NSFont.systemFont(ofSize: size.body), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: p]
+        let out = NSMutableAttributedString(string: "\t", attributes: markerAttrs)
+        if let task, let image = NSImage(systemSymbolName: task ? "checkmark.square.fill" : "square", accessibilityDescription: task ? "Done" : "Not done")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size.body, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: task ? [.white, .controlAccentColor] : [.secondaryLabelColor]))) {
+            let att = NSTextAttachment()
+            att.image = image
+            att.bounds = NSRect(x: 0, y: NSFont.systemFont(ofSize: size.body).descender + 1, width: image.size.width, height: image.size.height)
+            out.append(NSAttributedString(attachment: att))
+            out.addAttributes(markerAttrs, range: NSRange(location: 1, length: 1))
         } else {
-            Text(["•", "◦", "▪"][min(depth, 3) - 1]).font(.system(size: size.body)).foregroundStyle(.secondary)
+            out.append(NSAttributedString(string: ordered ? "\(ordinal)." : ["•", "◦", "▪"][min(depth, 3) - 1],
+                                          attributes: markerAttrs.merging([.font: ordered ? NSFont.monospacedDigitSystemFont(ofSize: size.body, weight: .regular)
+                                                                                          : NSFont.systemFont(ofSize: size.body)]) { $1 }))
         }
+        out.append(NSAttributedString(string: "\t", attributes: markerAttrs))
+        out.addAttribute(.messageCopy, value: copy, range: NSRange(location: 0, length: out.length))
+        out.append(inline(text, size: size.body, color: task == true ? .secondaryLabelColor : .labelColor, para: p))
+        return out
     }
 
-    /// Applies body font, semibold bold, italic, inline code and link styling run by run.
-    private func styled(_ a: AttributedString, size sz: CGFloat, weight: Font.Weight, color: Color?) -> AttributedString {
-        var out = a
-        for run in a.runs {
-            let r = run.range
-            let intent = run.inlinePresentationIntent ?? []
-            if intent.contains(.code) {
-                out[r].font = .system(size: size.inlineCode, design: .monospaced)
-                out[r].backgroundColor = ReadingColor.inlineFill
-            } else {
-                var f = Font.system(size: sz, weight: intent.contains(.stronglyEmphasized) && weight == .regular ? .semibold : weight)
-                if intent.contains(.emphasized) { f = f.italic() }
-                out[r].font = f
-            }
-            if run.link != nil {
-                out[r].foregroundColor = ReadingColor.link
-                out[r].underlineStyle = .single
-            } else if let color { out[r].foregroundColor = color }
-            if intent.contains(.strikethrough) { out[r].strikethroughStyle = .single }
+    /// Rounded fill, optional language label (left out of copies), highlighted code. Long lines wrap.
+    private func code(_ text: String, lang: String?, gap: CGFloat) -> NSAttributedString {
+        let box = fullWidth(CodeTextBlock())
+        box.code = text
+        for e in [NSRectEdge.minX, .maxX] { box.setWidth(14, type: .absoluteValueType, for: .padding, edge: e) }
+        for e in [NSRectEdge.minY, .maxY] { box.setWidth(12, type: .absoluteValueType, for: .padding, edge: e) }
+        box.setWidth(gap, type: .absoluteValueType, for: .margin, edge: .minY)
+        // One paragraph style for the whole block: TextKit 1 drops the block's padding where the paragraphs in it differ.
+        let p = para(spacing: max(0, size.codeLine - size.codeBlock * 1.2), blocks: [box])
+        let out = NSMutableAttributedString()
+        if let lang, !lang.isEmpty {
+            out.append(NSAttributedString(string: lang + "\n", attributes: [
+                .font: NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .subheadline).pointSize, weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: p, .messageCopy: ""]))
         }
+        out.append(Highlight.attributed(text.isEmpty ? " " : text, lang: lang, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: size.codeBlock, weight: .regular), .foregroundColor: ReadingColor.NS.codeText, .paragraphStyle: p]))
+        return out
+    }
+
+    /// Columns follow their content and share the column width; cells wrap; rows are as tall as their tallest cell.
+    /// Cells copy tab-separated, one row per line.
+    private func table(_ rows: [[AttributedString]], aligns: [Alignment], gap: CGFloat) -> NSAttributedString {
+        let nCols = max(1, rows.map(\.count).max() ?? 1)
+        let t = RoundedTextTable()
+        t.numberOfColumns = nCols
+        t.layoutAlgorithm = .automaticLayoutAlgorithm
+        t.collapsesBorders = true
+        t.setContentWidth(100, type: .percentageValueType)
+        t.setWidth(gap, type: .absoluteValueType, for: .margin, edge: .minY)
+        let out = NSMutableAttributedString()
+        for (r, row) in rows.enumerated() {
+            for c in 0..<nCols {
+                let cell = NSTextTableBlock(table: t, startingRow: r, rowSpan: 1, startingColumn: c, columnSpan: 1)
+                for e in [NSRectEdge.minY, .maxY] { cell.setWidth(7, type: .absoluteValueType, for: .padding, edge: e) }
+                for e in [NSRectEdge.minX, .maxX] { cell.setWidth(12, type: .absoluteValueType, for: .padding, edge: e) }
+                cell.verticalAlignment = .middleAlignment
+                if r == 0 { cell.backgroundColor = ReadingColor.NS.primary(0.04) }
+                if r < rows.count - 1 {
+                    cell.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .maxY)
+                    cell.setBorderColor(ReadingColor.NS.primary(0.09), for: .maxY)
+                }
+                let p = para(spacing: 0, blocks: [cell])
+                let al = c < aligns.count ? aligns[c] : .leading
+                p.alignment = al == .trailing ? .right : al == .center ? .center : .left
+                let text = c < row.count ? row[c] : AttributedString()
+                let s = inline(text.characters.isEmpty ? AttributedString(" ") : text, size: size.table, weight: r == 0 ? .semibold : .regular,
+                               mono: size.table, para: p)
+                out.append(s)
+                let last = r == rows.count - 1 && c == nCols - 1
+                if !last {
+                    var a: Attrs = [.font: NSFont.systemFont(ofSize: size.table), .paragraphStyle: p]
+                    if c < nCols - 1 { a[.messageCopy] = "\t" }
+                    out.append(NSAttributedString(string: "\n", attributes: a))
+                }
+            }
+        }
+        return out
+    }
+
+    /// A text block without a content width is left out of the layout (no padding, no background).
+    private func fullWidth<B: NSTextBlock>(_ b: B) -> B {
+        b.setContentWidth(100, type: .percentageValueType)
+        return b
+    }
+
+    private func para(spacing: CGFloat, before: CGFloat = 0, blocks: [NSTextBlock] = []) -> NSMutableParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = spacing
+        p.paragraphSpacingBefore = before
+        p.textBlocks = blocks
+        return p
+    }
+
+    /// Body font, semibold for strong, italic, inline code (monospaced on a light fill), links, strikethrough, run by run.
+    private func inline(_ a: AttributedString, size sz: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor,
+                        mono: CGFloat? = nil, para: NSParagraphStyle) -> NSMutableAttributedString {
+        let out = NSMutableAttributedString()
+        for run in a.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            var attrs: Attrs = [.paragraphStyle: para, .foregroundColor: color]
+            if intent.contains(.code) {
+                attrs[.font] = NSFont.monospacedSystemFont(ofSize: mono ?? size.inlineCode, weight: .regular)
+                attrs[.backgroundColor] = ReadingColor.NS.inlineFill
+            } else {
+                var f = NSFont.systemFont(ofSize: sz, weight: intent.contains(.stronglyEmphasized) && weight == .regular ? .semibold : weight)
+                if intent.contains(.emphasized) { f = NSFont(descriptor: f.fontDescriptor.withSymbolicTraits(.italic), size: sz) ?? f }
+                attrs[.font] = f
+            }
+            if let url = run.link { attrs[.link] = url }
+            if intent.contains(.strikethrough) { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            out.append(NSAttributedString(string: String(a[run.range].characters), attributes: attrs))
+        }
+        if out.length == 0 { out.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: sz), .paragraphStyle: para])) }
         return out
     }
 }
 
-private struct CodeBlockView: View {
-    let text: String
-    let lang: String?
-    let size: ReadingSize
-    @State private var hover = false
-    @State private var showAll = false
-
-    var body: some View {
-        let lines = text.components(separatedBy: "\n")
-        let fold = lines.count > 24 && !showAll
-        // Estimated from the longest line (no layout measuring): wider than the column means the block scrolls.
-        let wide = Double(lines.map(\.count).max() ?? 0) * size.codeBlock * 0.6 > size.column - 28
-        let shown = fold ? lines.prefix(16).joined(separator: "\n") : text
-        VStack(alignment: .leading, spacing: 0) {
-            if lang?.isEmpty == false || hover {
-                HStack {
-                    Text(lang ?? "").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                    Spacer()
-                    if hover {
-                        Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) } label: {
-                            Image(systemName: "doc.on.doc").font(.callout)
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Copy")
-                    }
-                }
-                .frame(height: 26)
-            }
-            ScrollView(.horizontal) {
-                Text(Highlight.attributed(shown, lang: lang)).font(.system(size: size.codeBlock, design: .monospaced)).lineSpacing(max(0, size.codeLine - size.codeBlock * 1.2))
-                    .foregroundStyle(ReadingColor.codeText).fixedSize().selectableText()
-                    .padding(.trailing, wide ? 24 : 0)
-            }
-            .trailingFade(wide)
-            .scrollIndicators(hover ? .automatic : .hidden)
-            if lines.count > 24 {
-                Button { withAnimation(.snappy(duration: 0.15)) { showAll.toggle() } } label: {
-                    Text(showAll ? "Show less" : "Show all \(lines.count) lines")
-                        .font(.callout.weight(.medium)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ReadingColor.codeFill, in: RoundedRectangle(cornerRadius: Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Radius.card).stroke(ReadingColor.hairline))
-        .onHover { hover = $0 }
-    }
-}
-
-/// Column widths follow the content: each column wants its longest cell on one line (capped at 300 pt); the width
-/// on offer is shared in that proportion. Cells wrap, rows are as tall as their tallest cell, nothing is cut or overlaps.
-private struct TableGridLayout: Layout {
-    let nCols: Int
-    let naturals: [CGFloat]      // wanted width per column, capped
-    let minCol: CGFloat
-    /// true inside a horizontal ScrollView: no width on offer, so use the natural widths.
-    var scrollMode = false
-
-    private var mins: [CGFloat] { naturals.map { min($0, minCol) } }
-    private func widths(avail: CGFloat?) -> [CGFloat] {
-        guard let avail else { return scrollMode ? naturals : mins }
-        let total = naturals.reduce(0, +)
-        guard total > 0 else { return naturals }
-        if total <= avail { return naturals.map { $0 * avail / total } }   // everything fits on one line: share the room
-        // Too wide: columns that would fall below their minimum keep it; the rest share what is left, in proportion.
-        var w = naturals
-        var pinned = Set<Int>()
-        for _ in 0..<nCols {
-            let free = avail - pinned.reduce(0) { $0 + mins[$1] }
-            let freeTotal = naturals.enumerated().filter { !pinned.contains($0.offset) }.reduce(0) { $0 + $1.element }
-            guard freeTotal > 0 else { break }
-            var changed = false
-            for c in 0..<nCols where !pinned.contains(c) {
-                w[c] = naturals[c] * free / freeTotal
-                if w[c] < mins[c] { pinned.insert(c); changed = true }
-            }
-            if !changed { break }
-        }
-        for c in pinned { w[c] = mins[c] }
-        return w
-    }
-    private func rowHeights(_ subviews: Subviews, _ w: [CGFloat]) -> [CGFloat] {
-        guard nCols > 0 else { return [] }
-        return stride(from: 0, to: subviews.count, by: nCols).map { start in
-            (0..<nCols).map { c in
-                start + c < subviews.count ? subviews[start + c].sizeThatFits(ProposedViewSize(width: w[c], height: nil)).height : 0
-            }.max() ?? 0
-        }
-    }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let w = widths(avail: proposal.width)
-        return CGSize(width: w.reduce(0, +), height: rowHeights(subviews, w).reduce(0, +))
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let w = widths(avail: bounds.width)
-        let heights = rowHeights(subviews, w)
-        var y = bounds.minY
-        var probeRows: [(y: CGFloat, h: CGFloat)] = []
-        var fits = true
-        for (r, h) in heights.enumerated() {
-            var x = bounds.minX
-            for c in 0..<nCols where r * nCols + c < subviews.count {
-                let sv = subviews[r * nCols + c]
-                if sv.sizeThatFits(ProposedViewSize(width: w[c], height: nil)).height > h + 0.5 { fits = false }
-                sv.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: w[c], height: h))
-                x += w[c]
-            }
-            probeRows.append((y - bounds.minY, h))
-            y += h
-        }
-        MainActor.assumeIsolated { TableLayoutProbe.rows["\(nCols)x\(subviews.count)"] = probeRows; if !fits { TableLayoutProbe.misfit.insert("\(nCols)x\(subviews.count)") } }
-    }
-}
-
-private struct TableView: View {
-    let rows: [[AttributedString]]
-    let aligns: [Alignment]
-    let size: ReadingSize
-    @State private var showAll = false
-
-    var body: some View {
-        let nCols = rows.map(\.count).max() ?? 0
-        let fold = rows.count > 16 && !showAll
-        let visible = fold ? Array(rows.prefix(11)) : rows
-        let naturals: [CGFloat] = (0..<nCols).map { c in
-            let longest = rows.map { r in c < r.count ? Self.textWidth(r[c], size.table) : 0 }.max() ?? 0
-            return min(300, max(48, longest + 24))
-        }
-        let minCol: CGFloat = 80
-        VStack(spacing: 0) {
-            // Fits at minimum widths: shown at the full column width, wrapping as needed. Otherwise it scrolls sideways.
-            ViewThatFits(in: .horizontal) {
-                grid(visible, nCols: nCols, naturals: naturals, minCol: minCol, scroll: false)
-                    .frame(maxWidth: .infinity)
-                ScrollView(.horizontal) {
-                    grid(visible, nCols: nCols, naturals: naturals, minCol: minCol, scroll: true).padding(.trailing, 24)
-                }
-                .trailingFade(true)
-            }
-            if rows.count > 16 {
-                Divider().opacity(0.6)
-                Button { withAnimation(.snappy(duration: 0.15)) { showAll.toggle() } } label: {
-                    Text(showAll ? "Show fewer rows" : "Show \(rows.count - 11) more rows")
-                        .font(.callout.weight(.medium)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func grid(_ visible: [[AttributedString]], nCols: Int, naturals: [CGFloat], minCol: CGFloat, scroll: Bool) -> some View {
-        TableGridLayout(nCols: nCols, naturals: naturals, minCol: minCol, scrollMode: scroll) {
-            ForEach(Array(visible.enumerated()), id: \.offset) { r, row in
-                ForEach(0..<nCols, id: \.self) { c in
-                    cell(c < row.count ? row[c] : AttributedString(), header: r == 0, col: c)
-                        .background(r == 0 ? Color.primary.opacity(0.04) : .clear)
-                        .overlay(alignment: .bottom) {
-                            if r < visible.count - 1 { Rectangle().fill(Color.primary.opacity(0.09)).frame(height: 0.5) }
-                        }
-                }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Radius.card).stroke(Color.primary.opacity(0.14), lineWidth: 0.5))
-    }
-
-    /// One-line width estimate: CJK counts a full em, other characters about 0.56 em.
-    private static func textWidth(_ a: AttributedString, _ pt: CGFloat) -> CGFloat {
-        a.characters.reduce(0) { acc, ch in acc + (ch.unicodeScalars.first.map { $0.value >= 0x2E80 } == true ? pt : pt * 0.56) }
-    }
-
-    private func cell(_ a: AttributedString, header: Bool, col: Int) -> some View {
-        var s = a
-        for run in a.runs {
-            let intent = run.inlinePresentationIntent ?? []
-            if intent.contains(.code) {
-                s[run.range].font = .system(size: size.table, design: .monospaced)
-                s[run.range].backgroundColor = ReadingColor.inlineFill
-            } else {
-                s[run.range].font = .system(size: size.table, weight: header || intent.contains(.stronglyEmphasized) ? .semibold : .regular)
-            }
-            if run.link != nil { s[run.range].foregroundColor = ReadingColor.link; s[run.range].underlineStyle = .single }
-        }
-        let al = col < aligns.count ? aligns[col] : .leading
-        return Text(s).selectableText()
-            .multilineTextAlignment(al == .trailing ? .trailing : al == .center ? .center : .leading)
-            .lineLimit(nil)
-            .fixedSize(horizontal: false, vertical: true)   // wrap, never cut: the row grows
-            .padding(.vertical, 7).padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: al.horizontal, vertical: .center))
-    }
-}
-
-/// Test hook: row frames and fit of the last table layout.
+/// Test hook: row frames of each laid-out table, and tables where a cell does not hold its text.
 @MainActor enum TableLayoutProbe {
     /// Keyed "columns x cells": the app window may lay out other tables meanwhile.
     nonisolated(unsafe) static var rows: [String: [(y: CGFloat, h: CGFloat)]] = [:]

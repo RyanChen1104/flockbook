@@ -64,7 +64,7 @@ import SwiftUI
                                         context: nil, characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: code) { win.sendEvent(e) }
         }
     }
-    private static func all<T: NSView>(_ type: T.Type, in v: NSView) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { all(type, in: $0) } }
+    static func all<T: NSView>(_ type: T.Type, in v: NSView) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { all(type, in: $0) } }
 
     /// Split tab (agent + shell) on the preview store: label and composer are bars over the conversation, an unfocused
     /// pane's composer takes focus with one click, inline pane rename, the notice toast. Nothing is sent to herdr: the

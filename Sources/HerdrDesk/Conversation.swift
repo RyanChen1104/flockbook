@@ -30,9 +30,6 @@ struct ConversationView: View {
     @State private var window = ConversationWindow(shown: ConversationView.page)
     /// Which view set the probe's actions (a replaced view disappears after its successor appeared).
     @State private var probeId = UUID()
-    /// The one row whose text can be selected: the last one under the pointer.
-    @State private var selectableKey: String?
-    private func select(_ key: String) { if selectableKey != key { selectableKey = key } }
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
@@ -137,13 +134,6 @@ struct ConversationView: View {
                     let entries = Self.entries(rows)
                     ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
                         entryView(e, foldable: e.item?.id != lastReply)
-                            // Selectable only under the pointer (see `selectableText`). Leaving a row keeps it selectable,
-                            // so a selection made there stays until the pointer reaches another row.
-                            .environment(\.selectableText, selectableKey == e.key)
-                            .onHover { if $0 { select(e.key) } }
-                            // Without a pointer (VoiceOver) the same row change is an action.
-                            .accessibilityAction(named: "Select Text") { select(e.key) }
-                            .onAppear { if e.key == entries.last(where: { $0.item != nil })?.key { ConversationProbe.selectLastRow(probeId) { select(e.key) } } }
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
                     }
                     if window.detached {
@@ -346,9 +336,6 @@ struct ConversationView: View {
     static var enabled = false
     static var earlier = CGRect.zero, latest = CGRect.zero
     private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
-    /// Makes the last row selectable, as its "Select Text" action does.
-    private(set) static var selectLastRow: (() -> Void)?
-    static func selectLastRow(_ owner: UUID, _ action: @escaping () -> Void) { if enabled { selectLastRow = action } }
     private static var owners: [Button: UUID] = [:]
     enum Button { case earlier, latest }
 
@@ -371,8 +358,7 @@ struct UserBubble: View {
     let text: String
     let size: ReadingSize
     var body: some View {
-        let a = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-        Text(a).font(.system(size: size.body)).lineSpacing(max(0, size.line - 2 - size.body * 1.19)).selectableText()
+        MessageText(content: .bubble(text, size: size), fit: true)
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: Radius.bubble))
             .frame(maxWidth: size.column * 0.8, alignment: .trailing)
@@ -443,7 +429,7 @@ struct ChipGroup: View {
         if isOpen {
             VStack(alignment: .leading, spacing: 6) {
                 CodeBox(label: "Input", text: call.input)
-                if let out = call.output { CodeBox(label: call.isError ? "Error" : "Output", text: out, tint: call.isError ? .red : nil) }
+                if let out = call.output { CodeBox(label: call.isError ? "Error" : "Output", text: out, isError: call.isError) }
                 else { Text("Running…").font(.caption).foregroundStyle(.secondary) }
             }
             .padding(.leading, 22).padding(.bottom, 4)
@@ -482,14 +468,13 @@ private struct CallHeader: View {
 private struct CodeBox: View {
     let label: String
     let text: String
-    var tint: Color? = nil
+    var isError = false
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView(.vertical) {
-                Text(text.isEmpty ? "(empty)" : text)
-                    .font(.system(.subheadline, design: .monospaced)).foregroundStyle(tint ?? .primary)
-                    .selectableText()
+                MessageText(content: .plain(text.isEmpty ? "(empty)" : text, monoSize: NSFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                                            error: isError))
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8)
             }
             .frame(maxHeight: 190)
@@ -516,8 +501,7 @@ struct ApprovalCard: View {
                     .background(Color.orange, in: RoundedRectangle(cornerRadius: Radius.control))
                 Text(request.title).font(.headline)
             }
-            Text(request.command)
-                .font(.system(.callout, design: .monospaced)).selectableText()
+            MessageText(content: .plain(request.command, monoSize: NSFont.preferredFont(forTextStyle: .callout).pointSize))
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control))

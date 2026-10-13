@@ -41,23 +41,31 @@ extension ContentTests {
         try? await Task.sleep(for: .seconds(1))
 
         // Selectable text: SwiftUI puts an AppKit overlay on each selectable Text and re-sets its font on every update,
-        // which asks for another layout: with every row selectable a window could lay out forever. Only the row under
-        // the pointer is selectable. Each synthetic row starts with one "Step N" / "Finished step N" text, so the rows
-        // with overlays are counted by those.
-        func overlayTexts(_ v: NSView) -> [String] {
-            (v is NSTextField && String(describing: type(of: v)).contains("SelectionTextField") ? [(v as! NSTextField).stringValue] : [])
-                + v.subviews.flatMap(overlayTexts)
+        // which asks for another layout: with every row selectable a window could lay out forever. The conversation has
+        // no SwiftUI selectable text: each message is one text view.
+        func overlays(_ v: NSView) -> Int {
+            (String(describing: type(of: v)).contains("SelectionTextField") ? 1 : 0) + v.subviews.reduce(0) { $0 + overlays($1) }
         }
-        let texts = overlayTexts(host)
-        let rowsWithOverlays = texts.filter { $0.hasPrefix("Step ") || $0.hasPrefix("Finished step ") }.count
-        step("selectable text: \(texts.count) selection overlays in \(rowsWithOverlays) row(s) (want at most 1 row)", rowsWithOverlays <= 1)
-        // The "Select Text" action (no pointer, e.g. VoiceOver) makes one row selectable; still only that row. An offscreen
-        // window has no accessibility tree, so the check calls the same code through the probe.
-        let canSelect = ConversationProbe.selectLastRow != nil
-        ConversationProbe.selectLastRow?()
-        try? await Task.sleep(for: .milliseconds(500))
-        let selected = overlayTexts(host).filter { $0.hasPrefix("Step ") || $0.hasPrefix("Finished step ") }.count
-        step("selectable text: after Select Text on one row, \(selected) row(s) selectable (want 1)", canSelect && selected == 1)
+        let n = overlays(host)
+        step("selectable text: \(n) SwiftUI selection overlays in the conversation (want 0)", n == 0)
+        // One message is one text view: selecting all of it takes every paragraph, list and code block.
+        let multi = Self.all(NSTextView.self, in: host).first { !$0.isEditable && $0.string.hasPrefix("Finished step") && $0.string.contains("Paragraph 2:") }
+        if let tv = multi {
+            tv.setSelectedRange(NSRange(location: 0, length: (tv.string as NSString).length))
+            let pb = NSPasteboard(name: NSPasteboard.Name("churn-test-\(UUID().uuidString)"))
+            pb.clearContents()
+            _ = tv.writeSelection(to: pb, type: .string)
+            let copied = pb.string(forType: .string) ?? ""
+            pb.releaseGlobally()
+            let last = tv.string.components(separatedBy: "\n").last { $0.hasPrefix("Paragraph ") }.map { String($0.prefix(13)) } ?? "?"
+            step("selection: one message is one text view; all of it copies the first and the last paragraph (\(last))",
+                 copied.hasPrefix("Finished step") && copied.contains(last) && copied.contains("let value = parse(line)"))
+        } else { step("selection: a multi-paragraph message is one selectable text view", false) }
+        // Older long replies fold to 14 lines: the text view is cut there.
+        let line = (ReadingSize(rawValue: AppDefaults.store.string(forKey: ReadingSize.key) ?? "") ?? .m).line
+        let folded = Self.all(MessageTextView.self, in: host).filter { $0.fold != nil }
+        step("fold: \(folded.count) folded replies, each \(Int(line * 14)) pt tall (\(folded.map { Int($0.frame.height) }.prefix(4)))",
+             !folded.isEmpty && folded.allSatisfy { abs($0.frame.height - line * 14) < 1 })
 
         // Main-thread stalls: a 5 ms timer; the longest gap between two ticks, not counting the check's own captures.
         let stall = StallMeter()

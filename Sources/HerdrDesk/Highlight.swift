@@ -1,14 +1,13 @@
-import SwiftUI
 import AppKit
 
 /// Small token-based highlighter for code blocks (reading.md §7). Unknown language -> plain text.
 /// Colors are the Xcode-like set from the spec, all >= 4.5:1 on the code fill.
 enum Highlight {
-    private static func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { a in
+    private static func dyn(_ light: UInt32, _ dark: UInt32) -> NSColor {
+        NSColor(name: nil) { a in
             let h = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
             return NSColor(srgbRed: CGFloat((h >> 16) & 255) / 255, green: CGFloat((h >> 8) & 255) / 255, blue: CGFloat(h & 255) / 255, alpha: 1)
-        })
+        }
     }
     static let keyword = dyn(0xA0329A, 0xFC5FA3)
     static let string = dyn(0xC41A16, 0xFC6A5D)
@@ -40,17 +39,18 @@ enum Highlight {
         }
     }
 
-    static func attributed(_ text: String, lang hint: String?) -> AttributedString {
-        var out = AttributedString(text)
+    /// `text` with `attributes`, token colors painted over them.
+    static func attributed(_ text: String, lang hint: String?, attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
+        let out = NSMutableAttributedString(string: text, attributes: attributes)
         guard text.count < 20_000, let L = lang(hint) else { return out }
         let chars = Array(text)
-        // Map from character offset to AttributedString index, built once.
-        var idx: [AttributedString.Index] = []
+        // Map from character offset to UTF-16 offset, built once.
+        var idx: [Int] = []
         idx.reserveCapacity(chars.count + 1)
-        var i = out.startIndex
-        for _ in 0..<chars.count { idx.append(i); i = out.index(afterCharacter: i) }
-        idx.append(out.endIndex)
-        func paint(_ a: Int, _ b: Int, _ c: Color) { if a < b { out[idx[a]..<idx[b]].foregroundColor = c } }
+        var u = 0
+        for c in chars { idx.append(u); u += c.utf16.count }
+        idx.append(u)
+        func paint(_ a: Int, _ b: Int, _ c: NSColor) { if a < b { out.addAttribute(.foregroundColor, value: c, range: NSRange(location: idx[a], length: idx[b] - idx[a])) } }
         func starts(_ s: String, at p: Int) -> Bool {
             let u = Array(s); guard p + u.count <= chars.count else { return false }
             for k in 0..<u.count where chars[p + k] != u[k] { return false }
@@ -87,16 +87,5 @@ enum Highlight {
             p += 1
         }
         return out
-    }
-}
-
-/// Fades the trailing edge so the reader sees there is more to scroll to.
-extension View {
-    func trailingFade(_ on: Bool, width: CGFloat = 24) -> some View {
-        mask {
-            if on {
-                HStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: width) }
-            } else { Color.black }
-        }
     }
 }

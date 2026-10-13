@@ -38,18 +38,30 @@ enum Radius {
 }
 
 enum ReadingColor {
-    private static func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { a in
-            let isDark = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let h = isDark ? dark : light
-            return NSColor(srgbRed: CGFloat((h >> 16) & 255) / 255, green: CGFloat((h >> 8) & 255) / 255, blue: CGFloat(h & 255) / 255, alpha: 1)
-        })
-    }
-    static let link = dyn(0x0060C8, 0x5AA9FF)
-    static let codeFill = dyn(0xF4F4F6, 0x232326)
-    static let codeText = dyn(0x1D1D1F, 0xE8E8EA)
     static let hairline = Color.primary.opacity(0.09)
-    static let inlineFill = Color.primary.opacity(0.08)
+
+    /// The same colors for the message text views (AppKit), following light and dark at draw time.
+    enum NS {
+        private static func dyn(_ light: UInt32, _ dark: UInt32) -> NSColor {
+            NSColor(name: nil) { a in
+                let h = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+                return NSColor(srgbRed: CGFloat((h >> 16) & 255) / 255, green: CGFloat((h >> 8) & 255) / 255, blue: CGFloat(h & 255) / 255, alpha: 1)
+            }
+        }
+        /// `Color.primary.opacity(a)`.
+        static func primary(_ alpha: CGFloat) -> NSColor {
+            NSColor(name: nil) { a in
+                var label = NSColor.labelColor
+                a.performAsCurrentDrawingAppearance { label = NSColor.labelColor.usingColorSpace(.sRGB) ?? .black }
+                return label.withAlphaComponent(label.alphaComponent * alpha)
+            }
+        }
+        static let link = dyn(0x0060C8, 0x5AA9FF)
+        static let codeFill = dyn(0xF4F4F6, 0x232326)
+        static let codeText = dyn(0x1D1D1F, 0xE8E8EA)
+        static let hairline = primary(0.09)
+        static let inlineFill = primary(0.08)
+    }
 }
 
 /// Reading column width setting (Settings -> Reading width). Medium is the default.
