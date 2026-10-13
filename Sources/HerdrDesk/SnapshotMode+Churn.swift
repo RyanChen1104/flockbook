@@ -58,7 +58,7 @@ extension ContentTests {
 
         /// Ink in the viewport between the bars: pixels away from their row's median tone, on a 3 px grid.
         func ink() -> Int {
-            defer { stall.skip() }   // the check's own work (capture, pixel scan) is not an app stall
+            stall.pause(); defer { stall.resume() }   // the check's own work (capture, pixel scan) is not an app stall
             typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
             guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
                   let img = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue(),
@@ -79,6 +79,22 @@ extension ContentTests {
             }
             return n
         }
+        // The meter: a stall just before a capture counts; the capture itself does not.
+        try? await Task.sleep(for: .milliseconds(100))
+        _ = stall.take()
+        usleep(300_000)   // an app stall, then a capture before the timer ticks again
+        _ = ink()
+        let before = stall.take()
+        step("stall meter: a stall before a capture counts (\(Int(before * 1000)) ms)", before >= 0.29)
+        try? await Task.sleep(for: .milliseconds(100))
+        _ = stall.take()
+        let c0 = Date()
+        _ = ink()
+        let span = Date().timeIntervalSince(c0)
+        try? await Task.sleep(for: .milliseconds(50))
+        let own = stall.take()
+        step("stall meter: the capture's own \(Int(span * 1000)) ms does not count (\(Int(own * 1000)) ms)", own < 0.05)
+
         func atBottom() -> Bool {
             let b = sv.contentView.bounds, doc = sv.documentView?.frame.height ?? 0
             return doc - b.maxY <= 40 + sv.contentInsets.bottom
@@ -104,7 +120,7 @@ extension ContentTests {
             step("\(name): comes to rest (\(moves) scroll moves in 1.5 s, y \(Int(before)) -> \(Int(sv.contentView.bounds.origin.y)))", moves == 0)
             let n = ink()
             step("\(name): viewport drawn at rest (\(n) ink)", n >= 40)
-            if n < 40 { capture(win, to: "\(dir)/churn-\(ConversationView.page)-\(name)-blank.png"); stall.skip() }
+            if n < 40 { stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-\(name)-blank.png"); stall.resume() }
             let worst = stall.take() * 1000, p = (passes[name] ?? []).sorted()
             let p95 = p.isEmpty ? 0 : p[min(p.count - 1, p.count * 95 / 100)]
             print("churn-test: \(name): at \(Int(Date().timeIntervalSince(t0))) s; layout pass after a change: median \(Int(p.isEmpty ? 0 : p[p.count / 2])) ms, p95 \(Int(p95)) ms")
@@ -251,8 +267,9 @@ private struct ProbeView: View {
         RunLoop.main.add(timer!, forMode: .common)
     }
     func take() -> TimeInterval { defer { worst = 0 }; return worst }
-    /// Restarts the gap: time the check spent on its own work does not count.
-    func skip() { last = Date() }
+    /// The check's own work starts: the gap so far (an app stall before it) counts, the work's own span does not.
+    func pause() { worst = max(worst, Date().timeIntervalSince(last)) }
+    func resume() { last = Date() }
     func stop() { timer?.invalidate() }
 }
 
