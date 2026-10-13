@@ -184,6 +184,12 @@ final class MessageTextView: NSTextView {
         contentID = content.id
     }
 
+    // Never scroll the conversation from here. On a resize NSTextView shows a rect of itself through the enclosing scroll
+    // view; SwiftUI does not see that scroll, can keep the rows of the old range and leave the viewport blank.
+    // (Drag-selection autoscroll goes through autoscroll(with:), not these.)
+    override func scrollToVisible(_ rect: NSRect) -> Bool { false }
+    override func scrollRangeToVisible(_ range: NSRange) {}
+
     override func layout() {
         super.layout()
         guard let fold, bounds.height >= fold - 0.5 else { if layer?.mask != nil { layer?.mask = nil }; return }

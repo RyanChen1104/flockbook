@@ -79,6 +79,17 @@ extension ContentTests {
             return views(host).compactMap { $0 as? NSScrollView }.max { $0.bounds.height < $1.bounds.height }
         }
         guard let sv = scrollView() else { step("scroll view found", false); exit(1) }
+        // A text view never scrolls the conversation itself. When SwiftUI resizes a text view, NSTextView's setFrameSize
+        // asks the enclosing scroll view to show a rect of it (scrollToVisible). SwiftUI does not see that scroll: the lazy
+        // stack can keep the rows of the old range and leave the viewport blank until the next change.
+        let clip = sv.contentView.bounds
+        if let tv = Self.all(MessageTextView.self, in: host).last, clip.minY > 2000 {
+            // A rect well above the viewport, in the text view's coordinates.
+            let asked = tv.scrollToVisible(tv.convert(NSRect(x: 0, y: clip.minY - 2000, width: 10, height: 10), from: sv.contentView))
+            let moved = sv.contentView.bounds.origin.y - clip.origin.y
+            if abs(moved) > 0.5 { sv.contentView.scroll(to: clip.origin); sv.reflectScrolledClipView(sv.contentView) }
+            step("text view: does not scroll the conversation (moved \(Int(moved)) pt, scrolled \(asked))", abs(moved) < 0.5 && !asked)
+        } else { step("text view: one in the conversation, scrolled down", false) }
         // Scroll moves: the clip view's bounds origin. Counted to see whether the view comes to rest.
         var moves = 0
         sv.contentView.postsBoundsChangedNotifications = true
