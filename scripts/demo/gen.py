@@ -386,7 +386,10 @@ def claude_screen(agent, cwd_label, state, cursor=0):
         osc = f"⠂ {title}"
     elif state == "approval":
         cmd = agent["turns"][-1][1]
-        foot = [RULE, f" {BOLD}Bash command{RESET}", "", f"   {cmd}", f"   {DIM}{agent.get('approval_why', describe(cmd))}{RESET}", "",
+        # Claude Code 2.1.296 layout: description, then the command between dashed rules (the app matches the log's call
+        # with the command it reads there; the older layout puts the description under the command and never matches).
+        foot = [RULE, f" {BOLD}Bash command{RESET}", f" {DIM}{agent.get('approval_why', describe(cmd))}{RESET}",
+                GRAY + "╌" * W + RESET, f" {cmd}", GRAY + "╌" * W + RESET,
                 " Do you want to proceed?", f" {ORANGE}❯{RESET} 1. Yes",
                 f"   2. Yes, and don't ask again for {cmd.split()[0]} commands in {cwd_label}", "   3. No, and tell Claude what to do differently (esc)", "", " Esc to cancel · Tab to amend"]
         osc = f"✳ {title}"
