@@ -84,6 +84,7 @@ enum HubLiveTest {
                 let screen = (try? await model.store.client.visibleText(paneId: paneId)) ?? ""
                 step("picker still open, nothing chosen", QuestionAdapter.claudeScreen(screen)?.question.text == q.questions.first?.text)
             } else {
+                if case .reply(let rr)? = r, let e = rr.error { print("test-hub: answer error: \(e.code) \(e.message)") }
                 step("answer with the open id -> \(r.map { isOK($0) ? "ok" : "\(String(describing: errorCode($0)))" } ?? "nothing")", r.map(isOK) == true)
                 var cleared = false
                 for _ in 0..<20 {
