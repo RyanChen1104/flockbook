@@ -19,6 +19,11 @@ enum ScrollerStyle {
         NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main) { _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { applyToOpenWindows() } }
         }
+        // With a mouse attached, Always <-> Automatically keeps the system's style (legacy), so no notice above: listen to
+        // the setting itself too.
+        DistributedNotificationCenter.default().addObserver(forName: .init("AppleShowScrollBarsSettingChanged"), object: nil, queue: .main) { _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { applyToOpenWindows() } }
+        }
     }
 
     static func applyToOpenWindows() {
