@@ -203,7 +203,7 @@ private struct BlockView: View {
         case .heading(let l):
             let sz = l == 1 ? size.h1 : l == 2 ? size.h2 : l == 3 ? size.h3 : size.body - 1
             Text(styled(block.text, size: sz, weight: l == 1 ? .bold : .semibold, color: l >= 4 ? .secondary : nil))
-                .lineSpacing(max(0, sz * 1.36 - sz * 1.19)).textSelection(.enabled)
+                .lineSpacing(max(0, sz * 1.36 - sz * 1.19)).selectableText()
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .item(let depth, let ordered, let ordinal, let task):
             HStack(alignment: .firstTextBaseline, spacing: 0) {
@@ -231,7 +231,7 @@ private struct BlockView: View {
 
     private func prose(_ sz: CGFloat, color: Color? = nil) -> some View {
         Text(styled(block.text, size: sz, weight: .regular, color: color))
-            .lineSpacing(size.lineSpacing).textSelection(.enabled)
+            .lineSpacing(size.lineSpacing).selectableText()
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -299,7 +299,7 @@ private struct CodeBlockView: View {
             }
             ScrollView(.horizontal) {
                 Text(Highlight.attributed(shown, lang: lang)).font(.system(size: size.codeBlock, design: .monospaced)).lineSpacing(max(0, size.codeLine - size.codeBlock * 1.2))
-                    .foregroundStyle(ReadingColor.codeText).fixedSize().textSelection(.enabled)
+                    .foregroundStyle(ReadingColor.codeText).fixedSize().selectableText()
                     .padding(.trailing, wide ? 24 : 0)
             }
             .trailingFade(wide)
@@ -457,7 +457,7 @@ private struct TableView: View {
             if run.link != nil { s[run.range].foregroundColor = ReadingColor.link; s[run.range].underlineStyle = .single }
         }
         let al = col < aligns.count ? aligns[col] : .leading
-        return Text(s).textSelection(.enabled)
+        return Text(s).selectableText()
             .multilineTextAlignment(al == .trailing ? .trailing : al == .center ? .center : .leading)
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)   // wrap, never cut: the row grows

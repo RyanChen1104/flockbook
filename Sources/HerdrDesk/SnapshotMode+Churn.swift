@@ -40,6 +40,18 @@ extension ContentTests {
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1))
 
+        // Selectable text: SwiftUI puts an AppKit overlay on each selectable Text and re-sets its font on every update,
+        // which asks for another layout: with every row selectable a window could lay out forever. Only the row under
+        // the pointer is selectable. Each synthetic row starts with one "Step N" / "Finished step N" text, so the rows
+        // with overlays are counted by those.
+        func overlayTexts(_ v: NSView) -> [String] {
+            (v is NSTextField && String(describing: type(of: v)).contains("SelectionTextField") ? [(v as! NSTextField).stringValue] : [])
+                + v.subviews.flatMap(overlayTexts)
+        }
+        let texts = overlayTexts(host)
+        let rowsWithOverlays = texts.filter { $0.hasPrefix("Step ") || $0.hasPrefix("Finished step ") }.count
+        step("selectable text: \(texts.count) selection overlays in \(rowsWithOverlays) row(s) (want at most 1 row)", rowsWithOverlays <= 1)
+
         // Main-thread stalls: a 5 ms timer; the longest gap between two ticks, not counting the check's own captures.
         let stall = StallMeter()
         stall.start()

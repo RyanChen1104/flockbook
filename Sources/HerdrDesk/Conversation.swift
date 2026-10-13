@@ -30,6 +30,8 @@ struct ConversationView: View {
     @State private var window = ConversationWindow(shown: ConversationView.page)
     /// Which view set the probe's actions (a replaced view disappears after its successor appeared).
     @State private var probeId = UUID()
+    /// The one row whose text can be selected: the last one under the pointer.
+    @State private var selectableKey: String?
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
@@ -134,6 +136,10 @@ struct ConversationView: View {
                     let entries = Self.entries(rows)
                     ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
                         entryView(e, foldable: e.item?.id != lastReply)
+                            // Selectable only under the pointer (see `selectableText`). Leaving a row keeps it selectable,
+                            // so a selection made there stays until the pointer reaches another row.
+                            .environment(\.selectableText, selectableKey == e.key)
+                            .onHover { if $0, selectableKey != e.key { selectableKey = e.key } }
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
                     }
                     if window.detached {
@@ -359,7 +365,7 @@ struct UserBubble: View {
     let size: ReadingSize
     var body: some View {
         let a = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-        Text(a).font(.system(size: size.body)).lineSpacing(max(0, size.line - 2 - size.body * 1.19)).textSelection(.enabled)
+        Text(a).font(.system(size: size.body)).lineSpacing(max(0, size.line - 2 - size.body * 1.19)).selectableText()
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: Radius.bubble))
             .frame(maxWidth: size.column * 0.8, alignment: .trailing)
@@ -476,7 +482,7 @@ private struct CodeBox: View {
             ScrollView(.vertical) {
                 Text(text.isEmpty ? "(empty)" : text)
                     .font(.system(.subheadline, design: .monospaced)).foregroundStyle(tint ?? .primary)
-                    .textSelection(.enabled)
+                    .selectableText()
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8)
             }
             .frame(maxHeight: 190)
@@ -504,7 +510,7 @@ struct ApprovalCard: View {
                 Text(request.title).font(.headline)
             }
             Text(request.command)
-                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                .font(.system(.callout, design: .monospaced)).selectableText()
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control))
