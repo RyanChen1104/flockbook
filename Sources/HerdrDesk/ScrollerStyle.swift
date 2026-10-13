@@ -14,6 +14,20 @@ enum ScrollerStyle {
               let ours = class_getClassMethod(NSScroller.self, #selector(NSScroller.flockbookPreferredScrollerStyle)) else { return }
         method_exchangeImplementations(system, ours)
         installed = true
+        // A mouse plugged in or the setting changed: AppKit then sets the system's style on every existing scroll view
+        // without asking the getter above. Set ours again after it.
+        NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { applyToOpenWindows() } }
+        }
+    }
+
+    static func applyToOpenWindows() {
+        let want = style(showScrollBars: showScrollBars)
+        func visit(_ v: NSView) {
+            if let sv = v as? NSScrollView, sv.scrollerStyle != want { sv.scrollerStyle = want }
+            v.subviews.forEach(visit)
+        }
+        for w in NSApp.windows { (w.contentView?.superview ?? w.contentView).map(visit) }
     }
 
     /// The style for a value of the global AppleShowScrollBars ("Always", "WhenScrolling", "Automatic" or unset).

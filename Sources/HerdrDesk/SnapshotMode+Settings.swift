@@ -177,6 +177,11 @@ extension ChromeTests {
             let setting = ScrollerStyle.showScrollBars, want = ScrollerStyle.style(showScrollBars: setting)
             step("scroll bars: setting \(setting ?? "unset"), page \(sv.scrollerStyle.rawValue), preferred \(NSScroller.preferredScrollerStyle.rawValue), want \(want.rawValue) (1 = overlay)",
                  ScrollerStyle.installed && sv.scrollerStyle == want && NSScroller.preferredScrollerStyle == want)
+            // A mouse plugged in or the setting changed: AppKit sets the system style on every scroll view; ours wins again.
+            sv.scrollerStyle = want == .overlay ? .legacy : .overlay
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+            try? await Task.sleep(for: .milliseconds(300))
+            step("scroll bars after a style change notice: page \(sv.scrollerStyle.rawValue), want \(want.rawValue)", sv.scrollerStyle == want)
             step("scroll bar setting map: Always -> legacy; WhenScrolling, Automatic, unset -> overlay",
                  ScrollerStyle.style(showScrollBars: "Always") == .legacy && ScrollerStyle.style(showScrollBars: "WhenScrolling") == .overlay
                  && ScrollerStyle.style(showScrollBars: "Automatic") == .overlay && ScrollerStyle.style(showScrollBars: nil) == .overlay)
