@@ -75,10 +75,13 @@ extension QuestionAdapter {
         }
         func has(_ lit: String) -> Bool { let a = Array(lit); return pos + a.count <= chars.count && Array(chars[pos..<(pos + a.count)]) == a }
         let rowRe = /^(❯ |  )(\d+)\.(?: |$)/, submitRe = /^(❯|\s)\s*Submit\s*$/
-        /// A row line starts here: its mark (taken) or nil when it is not row `number`'s line.
+        /// A row line starts here: its mark (taken) or nil when it is not row `number`'s line. `lineEnd`: where
+        /// that line ends (the label must end there: the label/description boundary is a line break, never dropped).
+        var lineEnd = 0
         func row(_ number: Int) -> Bool? {
             guard let l = starts[pos], let m = region[l].firstMatch(of: rowRe), Int(m.2) == number else { return nil }
             rowLines.insert(l)
+            lineEnd = pos + bare(region[l]).count
             let marked = m.1 == "❯ "
             if marked { guard take("❯") else { return nil } }
             guard take("\(number).") else { return nil }
@@ -95,7 +98,8 @@ extension QuestionAdapter {
             guard let marked = row(i + 1), box(i) else { return false }
             if marked { marks.append(i) }
             let fits = shownLabels(o).filter { has($0) }
-            guard fits.count == 1, take(fits[0]), take(bare(o.detail)) else { return false }
+            // The label is the rest of the row line, the description starts a line (a wrapped label refuses).
+            guard fits.count == 1, take(fits[0]), pos == lineEnd, take(bare(o.detail)) else { return false }
         }
         guard let otherMarked = row(n + 1), box(n) else { return false }
         if otherMarked { marks.append(n) }
@@ -139,37 +143,47 @@ extension QuestionAdapter {
         guard let title = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "Review your answers" }),
               let head = lines[..<title].lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
               claudeBar(q, lines[head]) else { return false }
-        var body = Substring(bare(lines[(title + 1)...].joined(separator: "\n")))
-        func take(_ lit: String) -> Bool {
-            guard body.hasPrefix(lit) else { return false }
-            body = body.dropFirst(lit.count); return true
+        // Whitespace dropped, with where each line starts: "●", "→", "Ready…" and the two rows must each start a
+        // line (a mark inside a label is text).
+        var chars: [Character] = [], starts: Set<Int> = []
+        for l in lines[(title + 1)...] {
+            let b = bare(l)
+            if !b.isEmpty { starts.insert(chars.count); chars += Array(b) }
         }
+        var pos = 0
+        func has(_ lit: String) -> Bool { let a = Array(lit); return pos + a.count <= chars.count && Array(chars[pos..<(pos + a.count)]) == a }
+        func take(_ lit: String) -> Bool { guard has(lit) else { return false }; pos += lit.count; return true }
+        func line(_ lit: String) -> Bool { starts.contains(pos) && take(lit) }
         for (k, a) in zip(q.questions, answers) {
-            guard take("●" + bare(k.text) + "→") else { return false }
+            guard line("●"), take(bare(k.text)), line("→") else { return false }
             for (j, alts) in reviewParts(k, a).enumerated() {
                 if j > 0 { guard take(",") else { return false } }
-                let fits = alts.filter { body.hasPrefix($0) }
+                let fits = alts.filter { has($0) }
                 guard fits.count == 1, take(fits[0]) else { return false }
             }
         }
-        guard take("Readytosubmityouranswers?") else { return false }
+        guard line("Readytosubmityouranswers?") else { return false }
         var marks = 0
+        let first = starts.contains(pos)
         if take("❯") { marks += 1 }
-        guard take("1.Submitanswers") else { return false }
+        guard first, take("1.Submitanswers") else { return false }
+        let second = starts.contains(pos)
         if take("❯") { marks += 1 }
-        guard take("2.Cancel"), body.isEmpty, marks == 1 else { return false }
+        guard second, take("2.Cancel"), pos == chars.count, marks == 1 else { return false }
         return true
     }
 
-    /// The review screen cannot prove the hub's answers: a shown label with a comma, two labels alike once
-    /// whitespace is dropped, or Other text with a comma or alike a label. Then two answer sets look the same
-    /// there, so the last key would go blind; the answer is refused before any key.
+    /// The review screen cannot prove the hub's answers: a shown label with a comma or a review mark (● →), two
+    /// labels alike once whitespace is dropped, a question text with a review mark, or Other text with a comma, a
+    /// review mark or alike a label. Then two answer sets look the same there, so the last key would go blind; the
+    /// answer is refused before any key.
     static func reviewAmbiguous(_ q: QuestionRequest, answers: [QuestionAnswer]) -> Bool {
+        let marks: (String) -> Bool = { $0.contains("●") || $0.contains("→") }
         for (k, question) in q.questions.enumerated() {
             let alts = question.options.map { Set(shownLabels($0)) }
             let all = alts.flatMap { $0 }
-            if all.contains(where: { $0.contains(",") }) || Set(all).count != all.count { return true }
-            if answers.indices.contains(k), let o = otherText(answers[k]).map(bare), o.contains(",") || all.contains(o) { return true }
+            if marks(question.text) || all.contains(where: { $0.contains(",") || marks($0) }) || Set(all).count != all.count { return true }
+            if answers.indices.contains(k), let o = otherText(answers[k]).map(bare), o.contains(",") || marks(o) || all.contains(o) { return true }
         }
         return false
     }

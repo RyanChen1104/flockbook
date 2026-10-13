@@ -510,6 +510,11 @@ extension HerdrClient {
         // `gate` (a remote device): before every key, the same agent, the exact question the key is for on screen
         // (its text, options, the request's headers; the review screen for the last key), input allowed.
         let any: @Sendable (String) -> Bool = { QuestionAdapter.showsAny(q, screen: $0) }
+        // A hooked request whose review cannot prove the answers: refused before any key (the Left below too).
+        let hooked = q.agent == "claude" && !q.toolUseId.hasPrefix("screen-")
+        if hooked, q.questions.count > 1 || q.questions.last?.multiSelect == true, QuestionAdapter.reviewAmbiguous(q, answers: answers) {
+            throw QuestionAdapter.Failure.unsupported("the review screen could not show which options were picked (a label with a comma or a review mark, or two alike)")
+        }
         let screen = try await visibleText(paneId: paneId)
         if !QuestionAdapter.screenShows(q, screen: screen) {
             // Claude: the user may have moved the picker to a later question of THIS request; go back to question 1.
@@ -527,10 +532,6 @@ extension HerdrClient {
         // A hooked Claude request (`ClaudeQuestionHook`): the exact rendering before every key, the [✔] rows too
         // (`checked`: what the hub's digits toggled; the picker starts with none), and a short wait for the render
         // of the last key before that check (read-only).
-        let hooked = q.agent == "claude" && !q.toolUseId.hasPrefix("screen-")
-        if hooked, q.questions.count > 1 || q.questions.last?.multiSelect == true, QuestionAdapter.reviewAmbiguous(q, answers: answers) {
-            throw QuestionAdapter.Failure.unsupported("the review screen could not show which options were picked (a label with a comma, or two alike)")
-        }
         var at = 0, review = false, otherOpen = false, typedIn = false, shown: String?, focus = QuestionAdapter.FieldFocus.auto, row: Int?, checked: Set<Int> = []
         for step in steps {
             if q.agent == "codex", step == .keys(["Tab"]), answers.indices.contains(at), q.questions.indices.contains(at) {

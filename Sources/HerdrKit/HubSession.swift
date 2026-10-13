@@ -260,8 +260,18 @@ extension Hub {
             guard let q = st.question, Hub.questionID(q) == question else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
             guard q.delivery == .picker else { return [fail(m.id, .failed, "Answer this question in the terminal.")] }
             guard !Hub.answerOnMac(q, agent: p.agent) else { return [fail(m.id, .failed, "Answer this question on the Mac. Nothing was sent.")] }
+            // A hooked request: before every key, still the session's newest hook record and not answered in the log
+            // (another request with the same picker must not get this answer).
+            var keysAllowed = allowed
+            if q.agent == "claude", !Hub.screenRead(q) {
+                guard let sid = p.agent?.sessionId else { return [fail(m.id, .stale, "The question changed. Nothing was sent.")] }
+                keysAllowed = { [weak self] in
+                    guard let self, allowed(), self.backend.hookedQuestion(session: sid)?.toolUseId == q.toolUseId else { return false }
+                    return !self.backend.conversation(session: sid).contains { Hub.answered($0, id: q.toolUseId) }
+                }
+            }
             do {
-                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: allowed)
+                try await backend.answer(pane: id, question: q, answers: answers.map { QuestionAnswer(picks: $0.picks, other: $0.other) }, agent: p.agent ?? Agent(name: "", kind: "", status: .idle, sessionId: nil, title: ""), allowed: keysAllowed)
                 return [ok(m.id)]
             } catch {
                 if !inputAllowed { return [readOnly(m.id)] }
