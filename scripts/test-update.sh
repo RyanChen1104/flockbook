@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 DIR="${1:?usage: scripts/test-update.sh <new-empty-dir>}"
 mkdir "$DIR" || { echo "$DIR exists: pass a new folder"; exit 1; }
 DIR="$(cd "$DIR" && pwd)"
-if ioreg -n Root -d1 | grep -q CGSSessionScreenIsLocked; then echo "screen locked: not launching the app"; exit 1; fi
+if ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked | grep -q '<true/>'; then echo "screen locked: not launching the app"; exit 1; fi
 OPENSSL="$(command -v /opt/homebrew/opt/openssl@3/bin/openssl || command -v openssl)"
 PORT="${PORT:-8765}"
 

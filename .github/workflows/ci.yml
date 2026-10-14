@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'ci/**']
   pull_request:
     branches: [main]
+  # Manual run: the offline checks and the two checks with a real window.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,3 +39,51 @@ jobs:
       # Headless checks only: they use a fake herdr socket and fixtures, no herdr server, no window.
       - name: HerdrKitChecks
         run: swift run HerdrKitChecks
+
+  ui:
+    name: UI checks
+    needs: build
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
+
+      - name: Build
+        timeout-minutes: 30
+        run: swift build --product HerdrDesk
+
+      # Preview stores and offscreen windows: no herdr server. Each check has its own time limit (UI_CHECK_TIMEOUT).
+      - name: Offline UI checks
+        timeout-minutes: 30
+        env:
+          UI_CHECK_TIMEOUT: '180'
+        run: scripts/ui-checks.sh offline build/ui-checks
+
+      # The two checks with a real window and full screen: manual runs only, also when an offline check failed.
+      - name: Real-window checks
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+        timeout-minutes: 10
+        env:
+          FLOCKBOOK_VISIBLE_OK: '1'
+          UI_CHECK_TIMEOUT: '60'
+        run: scripts/ui-checks.sh real build/ui-checks-real
+
+      - name: Upload screenshots
+        if: always()
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-checks-${{ github.run_number }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/ui-checks
+            build/ui-checks-real
+            build/snapshots-*
