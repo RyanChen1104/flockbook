@@ -13,7 +13,7 @@ import SwiftUI
         let size = NSSize(width: 1200, height: 800)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -209,7 +209,7 @@ import SwiftUI
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         let t0 = Date()
@@ -282,7 +282,7 @@ import SwiftUI
             var p = CGRect.zero
             let host = NSHostingView(rootView: RootView(flat: false).environment(model).shortcutsPanelHost(report: { p = $0 }).frame(width: size.width, height: size.height))
             host.frame = NSRect(origin: .zero, size: size)
-            let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             WindowChrome.apply(win)
             win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
             try? await Task.sleep(for: .seconds(1.5))
@@ -347,7 +347,7 @@ import SwiftUI
         let size = NSSize(width: 1200, height: 800)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -434,7 +434,7 @@ import SwiftUI
         let size = NSSize(width: 1200, height: 800)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win); win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))
@@ -463,7 +463,7 @@ import SwiftUI
         // Settings: grouped form picture.
         let settings = NSHostingView(rootView: SettingsView().frame(width: 500))
         settings.frame = NSRect(x: 0, y: 0, width: 500, height: settings.fittingSize.height)
-        let sw = NSWindow(contentRect: settings.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let sw = OffscreenWindow(contentRect: settings.frame, styleMask: [.titled], backing: .buffered, defer: false)
         sw.contentView = settings; sw.setFrameOrigin(NSPoint(x: -4000, y: -3000)); sw.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1))
         if let rep = settings.bitmapImageRepForCachingDisplay(in: settings.bounds) {

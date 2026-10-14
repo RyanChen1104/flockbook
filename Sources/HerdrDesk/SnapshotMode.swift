@@ -42,7 +42,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -81,7 +81,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -242,7 +242,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -331,7 +331,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -418,7 +418,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         // Wait for the first layout (island, sidebar panel, traffic lights measured), not a fixed time: under load it can
@@ -625,7 +625,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -762,7 +762,7 @@ enum SnapshotRunner {
         let box = StressBox(); box.items = items
         let host = NSHostingView(rootView: StressView(box: box).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         _ = model
         for k in 0..<60 {
@@ -821,7 +821,7 @@ enum SnapshotRunner {
         let host = NSHostingView(rootView: ObservedTerminal(client: store.client, paneId: pane.id, terminalId: pane.terminalId, writable: true, focused: true)
             .frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))
         func find(_ v: NSView) -> TerminalView? { if let t = v as? TerminalView { return t }; for c in v.subviews { if let t = find(c) { return t } }; return nil }
@@ -852,7 +852,7 @@ enum SnapshotRunner {
         let width: CGFloat = 520
         let host = NSHostingView(rootView: ZStack { Color(nsColor: .textBackgroundColor); MarkdownView(text: md).padding(.vertical, 4) }.frame(width: width).environment(\.flatGlass, true))
         host.frame = NSRect(x: 0, y: 0, width: width, height: 800)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1))
         host.layoutSubtreeIfNeeded()
@@ -899,7 +899,7 @@ enum SnapshotRunner {
         func host(_ writable: Bool, _ h: TerminalHandle) -> NSWindow {
             let v = NSHostingView(rootView: ObservedTerminal(client: client, paneId: pane.id, terminalId: pane.terminalId, writable: writable, focused: writable, handle: h).frame(width: size.width, height: size.height))
             v.frame = NSRect(origin: .zero, size: size)
-            let w = NSWindow(contentRect: v.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            let w = OffscreenWindow(contentRect: v.frame, styleMask: [.titled], backing: .buffered, defer: false)
             w.contentView = v; w.setFrameOrigin(NSPoint(x: -3000, y: -3000)); w.orderFrontRegardless()
             return w
         }
@@ -1017,7 +1017,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1200, height: 270)   // short window: the preview conversation overflows
         let host = NSHostingView(rootView: RootView(flat: true).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         func scrolls(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrolls) }
         // The conversation runs under the label and composer bars; its scroll view reserves them as content insets.
@@ -1077,7 +1077,7 @@ enum SnapshotRunner {
         let host = NSHostingView(rootView: ObservedTerminal(client: store.client, paneId: pane.id, terminalId: pane.terminalId, writable: true, focused: true, handle: handle)
             .frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))
         func find<T: NSView>(_ v: NSView, _ t: T.Type) -> T? { if let x = v as? T { return x }; for c in v.subviews { if let x = find(c, t) { return x } }; return nil }
@@ -1136,7 +1136,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 700, height: 200)
         let host = NSHostingView(rootView: ComposerView(agentName: "testagent", onSend: { _ in }, probe: probe).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         func find(_ v: NSView) -> NSTextView? { if let t = v as? NSTextView { return t }; for c in v.subviews { if let t = find(c) { return t } }; return nil }
         func placeholderShown() -> Bool { probe.shown }
@@ -1295,7 +1295,7 @@ enum SnapshotRunner {
                 .environment(\.flatGlass, true).frame(width: size.width, height: size.height)
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(origin: .zero, size: size)
-            let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
             win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
             for _ in 0..<12 { RunLoop.current.run(until: Date().addingTimeInterval(0.15)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
@@ -1321,7 +1321,7 @@ enum SnapshotRunner {
         let size = NSSize(width: 1440, height: 900)
         let host = NSHostingView(rootView: RootView(flat: !c.real, flatSidebarWidth: c.sidebarW).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: c.real ? [.titled, .closable, .resizable] : [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: c.real ? [.titled, .closable, .resizable] : [.titled], backing: .buffered, defer: false)
         if c.real { win.titleVisibility = .hidden }
         win.appearance = NSAppearance(named: c.dark ? .darkAqua : .aqua)
         win.contentView = host

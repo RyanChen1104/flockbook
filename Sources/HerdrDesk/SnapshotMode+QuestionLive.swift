@@ -60,7 +60,7 @@ extension ContentTests {
         let size = NSSize(width: 1200, height: 800)
         let host = NSHostingView(rootView: LiveQuestionPane(paneId: paneId).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         while request == nil, Date().timeIntervalSince(started) < 45 { try? await Task.sleep(for: .milliseconds(200)) }
         guard let q = request else { step("card appears (PaneView: \(agent.kind == "claude" ? "pendingQuestion" : "log item"))", false); done() }

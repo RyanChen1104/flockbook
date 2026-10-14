@@ -96,7 +96,7 @@ extension SnapshotRunner {
         // (the Pair a Device row ran off the bottom). The scroll view's content is taller than what it shows.
         do {
             let host = NSHostingView(rootView: SettingsView(remote: tsOn, scrolls: true))
-            let win = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+            let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
             win.contentView = host
             win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
             try? await Task.sleep(for: .milliseconds(700))
@@ -127,7 +127,7 @@ extension SnapshotRunner {
             for dark in [false, true] {
                 let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
                 let size = host.fittingSize
-                let win = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+                let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
                 win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 win.contentView = host
                 win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -154,7 +154,7 @@ extension SnapshotRunner {
     @MainActor static func render(_ view: some View, dark: Bool) -> CGImage? {
         let host = NSHostingView(rootView: view.padding(8).background(Color(nsColor: .windowBackgroundColor)))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         win.contentView = host
         host.layoutSubtreeIfNeeded()

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// The app's flags, and the launch guard that refuses a -- argument it does not know. A flag the app does not match
 /// starts a normal launch: a real window, a Dock icon, a focus change. A misspelt flag, or a flag and its value passed as
@@ -41,6 +42,20 @@ public enum LaunchGuard {
             }
         }
         return nil
+    }
+
+    /// The real-window checks take the owner's screen and focus: refused unless FLOCKBOOK_VISIBLE_OK=1 (the owner's leave).
+    public static func realWindowRefused(_ arguments: [String], environment: [String: String]) -> String? {
+        guard let flag = arguments.first(where: realWindow.contains), environment["FLOCKBOOK_VISIBLE_OK"] != "1" else { return nil }
+        return "\(flag) opens a real window on the owner's screen: run it only with the owner's leave, FLOCKBOOK_VISIBLE_OK=1. Nothing was opened."
+    }
+
+    /// Where a check's window may be: a frame that touches a screen moves left of every screen (size kept), so no check
+    /// window ever shows over what the owner is looking at.
+    public static func offscreen(_ r: CGRect, screens: [CGRect]) -> CGRect {
+        guard screens.contains(where: { $0.intersects(r) }) else { return r }
+        let left = screens.map(\.minX).min() ?? 0
+        return CGRect(x: left - r.width - 3000, y: -3000, width: r.width, height: r.height)
     }
 
     private static func usage(_ what: String) -> String {

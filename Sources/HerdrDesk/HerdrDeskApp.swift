@@ -12,7 +12,7 @@ struct HerdrDeskApp: App {
     init() {
         let args = CommandLine.arguments
         // A check flag the app does not know would start a normal launch (real window, Dock icon): stop before any of it.
-        if let usage = LaunchGuard.problem(args) {
+        if let usage = LaunchGuard.problem(args) ?? LaunchGuard.realWindowRefused(args, environment: ProcessInfo.processInfo.environment) {
             FileHandle.standardError.write(Data((usage + "\n").utf8))
             exit(2)
         }
@@ -187,6 +187,8 @@ struct HerdrDeskApp: App {
         }
         .windowToolbarStyle(.unified)
         .defaultSize(width: 1280, height: 820)
+        // A check opens no main window: even empty, it would cover what the owner is looking at.
+        .defaultLaunchBehavior(headless ? .suppressed : .automatic)
         .commands {
             DeskCommands(model: model)
             UpdateCommands(updater: AppUpdater.shared)

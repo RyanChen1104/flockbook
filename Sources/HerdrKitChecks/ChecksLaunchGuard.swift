@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 @testable import HerdrKit
 
 /// The launch guard: a check flag the app does not know, or a flag with its value in one argument, never reaches a normal
@@ -13,6 +14,22 @@ func checksLaunchGuard() async throws {
           "launch guard: known check flags")
     check(ok(["--test-screencolumn", "--light"]), "launch guard: a content check (ContentTests)")
     check(ok(["--test-fullscreen-real"]) && ok(["--test-scroll-real"]), "launch guard: the real-window checks are known")
+    // No check window on the owner's screen: the real-window checks need the owner's leave; frames stay off every screen.
+    check(LaunchGuard.realWindowRefused([app, "--test-fullscreen-real"], environment: [:]) != nil
+          && LaunchGuard.realWindowRefused([app, "--test-scroll-real"], environment: ["FLOCKBOOK_VISIBLE_OK": "0"]) != nil,
+          "launch guard: a real-window check without the owner's leave is refused")
+    check(LaunchGuard.realWindowRefused([app, "--test-scroll-real"], environment: ["FLOCKBOOK_VISIBLE_OK": "1"]) == nil
+          && LaunchGuard.realWindowRefused([app, "--test-chrome"], environment: [:]) == nil,
+          "launch guard: with leave, and other checks, run")
+    let screens = [CGRect(x: 0, y: 0, width: 1470, height: 956), CGRect(x: -1920, y: 0, width: 1920, height: 1080)]
+    let away = LaunchGuard.offscreen(CGRect(x: -3000, y: -3000, width: 1440, height: 952), screens: screens)
+    check(away == CGRect(x: -3000, y: -3000, width: 1440, height: 952), "offscreen: a frame off every screen stays")
+    let moved = LaunchGuard.offscreen(CGRect(x: 221, y: 63, width: 1249, height: 820), screens: screens)
+    check(!screens.contains(where: { $0.intersects(moved) }) && moved.size == CGSize(width: 1249, height: 820),
+          "offscreen: a frame on a screen moves off all screens, size kept (\(moved))")
+    let left = LaunchGuard.offscreen(CGRect(x: -1500, y: 10, width: 400, height: 300), screens: screens)
+    check(!screens.contains(where: { $0.intersects(left) }),
+          "offscreen: also off a screen left of the main one")
     check(ok(["-NSDocumentRevisionsDebugMode", "YES"]) && ok(["-psn_0_12345"]), "launch guard: system arguments (one dash)")
     check(!ok(["--snapshot-settings /tmp/dir"]), "launch guard: flag and value in one argument (zsh, unquoted variable)")
     check(!ok(["--test-sidebar "]), "launch guard: trailing space")

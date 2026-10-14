@@ -103,7 +103,7 @@ extension ContentTests {
     private static func window(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         return (win, host)
     }
@@ -169,7 +169,7 @@ extension ContentTests {
                    let t = ws.tabs.first(where: { $0.status == .blocked }) { model.select(tab: t, in: ws) }
                 let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
                 host.frame = NSRect(origin: .zero, size: size)
-                let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+                let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
                 WindowChrome.apply(win)
                 win.contentView = host; win.setFrameOrigin(NSPoint(x: -4000, y: -3000)); win.orderFrontRegardless()
                 if full { ChromeTests.emulateFullScreen(win, model, true) }

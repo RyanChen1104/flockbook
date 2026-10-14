@@ -27,7 +27,7 @@ extension SnapshotRunner {
                     SettingsView(reduceTransparency: reduce ? true : nil)
                 })
                 let size = host.fittingSize
-                let win = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+                let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
                 win.title = "Flockbook Settings"
                 win.titlebarAppearsTransparent = true
                 win.isOpaque = false; win.backgroundColor = .clear
@@ -117,7 +117,7 @@ extension ChromeTests {
         let size = NSSize(width: 1200, height: 680)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()

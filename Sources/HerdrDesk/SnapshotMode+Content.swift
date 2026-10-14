@@ -37,7 +37,7 @@ import SwiftUI
     private static func offscreen(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         return (win, host)
     }
@@ -186,7 +186,7 @@ import SwiftUI
         let surface = NSHostingView(rootView: WindowSurface(glass: .off)); surface.frame = container.bounds
         let tv = PasteTerminalView(frame: NSRect(x: 14, y: 8, width: 472, height: 284))
         container.addSubview(surface); container.addSubview(tv)
-        let tw = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let tw = OffscreenWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
         tw.contentView = container; tw.setFrameOrigin(NSPoint(x: -3000, y: -3000)); tw.orderFrontRegardless()
         let dark = tw.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         TerminalNSView.applyColors(tv, dark ? .dark : .light)
@@ -233,7 +233,7 @@ import SwiftUI
         let size = NSSize(width: 1200, height: 700)
         let host = NSHostingView(rootView: RootView(flat: true).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1.5))
@@ -525,7 +525,7 @@ import SwiftUI
         let size = NSSize(width: 1200, height: 400)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(1.5))

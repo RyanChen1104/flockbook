@@ -62,7 +62,7 @@ enum FuzzRunner {
         let size = NSSize(width: 1280, height: 820)
         let host = NSHostingView(rootView: RootView().environment(model).frame(minWidth: 960, minHeight: 600))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.titleVisibility = .hidden
         WindowChrome.apply(win)
         win.contentView = host

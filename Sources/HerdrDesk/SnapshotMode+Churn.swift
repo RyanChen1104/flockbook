@@ -17,7 +17,7 @@ extension ContentTests {
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("churn-test: \(n) \(ok ? "ok" : "FAIL")") }
         // The probe actions: none outside the checks, and none after the view left.
         let probe = ProbeHolder()
-        let probeWin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        let probeWin = OffscreenWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         probeWin.contentView = NSHostingView(rootView: ProbeView(holder: probe)); probeWin.setFrameOrigin(NSPoint(x: -3000, y: -3000))
         probeWin.orderFrontRegardless()
         try? await Task.sleep(for: .milliseconds(500))
@@ -37,7 +37,7 @@ extension ContentTests {
         let opened = Date()
         let host = NSHostingView(rootView: ChurnView(holder: holder))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
         print("churn-test: first view: laid out and drawn in \(Int(Date().timeIntervalSince(opened) * 1000)) ms (\(ConversationView.page) rows)")

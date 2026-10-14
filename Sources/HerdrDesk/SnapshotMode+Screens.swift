@@ -17,7 +17,7 @@ extension ContentTests {
             let model = AppModel(store: .preview)
             let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
             host.frame = NSRect(origin: .zero, size: size)
-            let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             WindowChrome.apply(win)
             win.contentView = host; win.setFrameOrigin(NSPoint(x: -4000, y: -3000)); win.orderFrontRegardless()
             if full { ChromeTests.emulateFullScreen(win, model, true) }
@@ -46,7 +46,7 @@ extension ContentTests {
         let size = NSSize(width: 1440, height: 760)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -4000, y: -3000)); win.orderFrontRegardless()
         for (screen, name) in screens {
@@ -79,7 +79,7 @@ extension ContentTests {
         let cmodel = AppModel(store: .preview)
         let chost = NSHostingView(rootView: RootView(flat: false).environment(cmodel).frame(width: size.width, height: size.height))
         chost.frame = NSRect(origin: .zero, size: size)
-        let cwin = NSWindow(contentRect: chost.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let cwin = OffscreenWindow(contentRect: chost.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(cwin)
         cwin.contentView = chost; cwin.setFrameOrigin(NSPoint(x: -4000, y: -3000)); cwin.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))

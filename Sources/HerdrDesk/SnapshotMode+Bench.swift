@@ -65,7 +65,7 @@ extension ContentTests {
         let t1 = clock.now
         let host = NSHostingView(rootView: BenchConversation(holder: holder).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
         print("bench: ui first layout \(ms(clock.now - t1)) (\(holder.items.count) items, ConversationView shows the last 150)")
