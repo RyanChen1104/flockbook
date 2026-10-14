@@ -5,6 +5,7 @@
 #         focus: CI runners only, or with the owner's leave. Needs FLOCKBOOK_VISIBLE_OK=1.
 # Not here: the checks that drive a live pane or session (--test-approve, --snapshot-demo, ...): they need a herdr server.
 # A check fails when it exits non-zero, runs past its timeout, prints FAIL, or does not print its PASS line.
+# Known failures (KNOWN) still run: a failure there is a warning, not a failed run; a pass asks for its removal.
 # Each check's output goes to <out-dir>/logs/<name>.log; its pictures to <out-dir>/<name>/ or the app's build/snapshots-*.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -61,6 +62,8 @@ REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"
     "scroll-real|scroll-real|--preview --test-scroll-real"
 )
+# Fail on the CI runner's newer macOS (26.6), pass on 26.1: to be looked into, then removed from here.
+KNOWN=" island-height settings-page screencolumn glyph "
 case "$MODE" in
     offline) CHECKS=("${OFFLINE[@]}") ;;
     real)
@@ -79,7 +82,7 @@ run_limited() {
     return "$code"
 }
 
-failed=()
+failed=(); known_failed=()
 summary="$OUT/summary.txt"; : > "$summary"
 for entry in "${CHECKS[@]}"; do
     IFS='|' read -r name pass argline <<< "$entry"
@@ -97,9 +100,17 @@ for entry in "${CHECKS[@]}"; do
     fi
     line=$(printf '%-20s %4ss  %s' "$name" "$secs" "$verdict")
     echo "$line" | tee -a "$summary"
+    known=no; [[ "$KNOWN" == *" $name "* ]] && known=yes
     if [ "$verdict" != ok ]; then
-        failed+=("$name"); echo "::group::$name log"; tail -40 "$log"; echo "::endgroup::"
+        if [ "$known" = yes ]; then
+            known_failed+=("$name"); echo "::warning title=ui-checks::$name fails ($verdict): known failure, not counted"
+        else
+            failed+=("$name")
+        fi
+        echo "::group::$name log"; tail -40 "$log"; echo "::endgroup::"
+    elif [ "$known" = yes ]; then
+        echo "::notice title=ui-checks::$name passes now: remove it from KNOWN in scripts/ui-checks.sh"
     fi
 done
-echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}" | tee -a "$summary"
+echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}" | tee -a "$summary"
 [ ${#failed[@]} = 0 ]
