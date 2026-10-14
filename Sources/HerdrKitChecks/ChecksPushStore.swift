@@ -68,6 +68,22 @@ import Foundation
     chmod(flakyDir.path, 0o700)
     check(flaky.remove(device: "d2") && flaky.pendingRemoval.isEmpty, "push store: remove again once the disk works -> saved, true")
     check(flaky.retrySave(), "push store: retry with nothing pending -> true")
+
+    // The store retries by itself (no hub running): every `retryEvery` until the save works, then it stops.
+    let selfDir = dir.appending(path: "self")
+    let selfURL = selfDir.appending(path: "push.json")
+    let own = FilePushStore(url: selfURL, retryEvery: .milliseconds(100))
+    own.add(PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth))
+    check(!own.retrying, "push store: nothing pending -> no retry timer")
+    chmod(selfDir.path, 0o500)
+    _ = own.remove(device: "d1")
+    check(own.retrying, "push store: failed remove -> retry timer on")
+    try? await Task.sleep(for: .milliseconds(300))
+    check(own.retrying && !own.pendingRemoval.isEmpty, "push store: disk still refuses -> still retrying")
+    chmod(selfDir.path, 0o700)
+    try? await Task.sleep(for: .milliseconds(400))
+    check(own.pendingRemoval.isEmpty && own.saveError == nil && !own.retrying && FilePushStore(url: selfURL).all.isEmpty,
+          "push store: disk works again -> saved by the timer, timer off (\(own.pendingRemoval), retrying \(own.retrying))")
     check(store.saveError == nil, "push store: no error when saves work")
 
     // Over the protocol: welcome carries the key, subscribe binds to the device, a bad endpoint is refused.

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import CryptoKit
 import HerdrKit
@@ -82,14 +83,21 @@ final class RemoteHub {
         pairing = HubPairing(devices: devices)
         deviceList = devices.all
         addresses = HubBind.local()
+        pushes.onRetry = { [weak self] in self?.refreshPushes() }
     }
 
     /// The app's hub: files in Application Support.
     static func live(model: AppModel) -> RemoteHub {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = support.appendingPathComponent("Flockbook/hub", isDirectory: true)
-        return RemoteHub(model: model, devices: FileDeviceStore(url: dir.appendingPathComponent("devices.json")), dir: dir)
+        let hub = RemoteHub(model: model, devices: FileDeviceStore(url: dir.appendingPathComponent("devices.json")), dir: dir)
+        // A removal still waiting for its save: one more try before the app quits.
+        hub.quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak hub] _ in
+            MainActor.assumeIsolated { _ = hub?.pushes.retrySave() }
+        }
+        return hub
     }
+    @ObservationIgnored private var quitObserver: NSObjectProtocol?
 
     // MARK: Settings
 
@@ -187,7 +195,6 @@ final class RemoteHub {
                     self.connections = s.connectionCount
                     if let o = self.offer, self.pairing.open != o { self.offer = nil; self.pairingEndedByWrongTries = self.pairing.endedByWrongTries }
                     if self.deviceList != self.devices.all { self.deviceList = self.devices.all }
-                    self.pushes.retrySave()   // a removal whose save failed: try again until the file has it
                     if self.pushList != self.pushes.all || self.pushSaveError != self.pushes.saveError { self.refreshPushes() }
                     self.pushTick()
                 }
@@ -203,6 +210,7 @@ final class RemoteHub {
         server?.stop(); server = nil
         pushCenter?.stop(); pushCenter = nil; pushTask?.cancel(); pushTask = nil
         notifyDoor?.stop(); notifyDoor = nil
+        pushes.retrySave(); refreshPushes()   // a pending removal: one more try now (the store's timer keeps trying)
         running = false; port = nil; connections = 0; servedName = nil; fingerprint = nil
         cancelPairing()
     }

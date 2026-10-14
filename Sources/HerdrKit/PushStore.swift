@@ -37,12 +37,32 @@ import Foundation
     /// Endpoints removed here but still in the file (its save failed). Never sent to. Lost if the app quits before a
     /// save works: the file brings them back on the next start.
     public private(set) var pendingRemoval: Set<String> = []
-    /// Saves again when a removal is pending or the last save failed (the hub's poll calls it). True: the file matches.
+    /// Saves again when a removal is pending or the last save failed. True: the file matches. While a removal is
+    /// pending, the store's own timer calls it every `retryEvery` (with or without the hub running).
     @discardableResult public func retrySave() -> Bool {
         guard !pendingRemoval.isEmpty || saveError != nil else { return true }
-        guard changed() else { return false }
+        guard changed() else { scheduleRetry(); return false }
         pendingRemoval = []
+        retryTask?.cancel(); retryTask = nil
         return true
+    }
+    /// The retry timer is on (a removal is pending).
+    public var retrying: Bool { retryTask != nil }
+    /// After each timer retry (the app refreshes Settings).
+    public var onRetry: (@MainActor () -> Void)?
+    var retryEvery: Duration = .seconds(2)
+    private var retryTask: Task<Void, Never>?
+    private func scheduleRetry() {
+        guard retryTask == nil, !pendingRemoval.isEmpty else { return }
+        let every = retryEvery
+        retryTask = Task { @MainActor [weak self] in
+            while (try? await Task.sleep(for: every)) != nil {
+                guard let self else { return }
+                let saved = self.retrySave()
+                self.onRetry?()
+                if saved { return }
+            }
+        }
     }
     func load(_ subs: [PushSubscription]) { all = subs }
     /// Saves; false when that failed.
@@ -52,9 +72,10 @@ import Foundation
 /// Subscriptions in a JSON file, mode 600 (an endpoint is a capability to push to the phone).
 @MainActor public final class FilePushStore: MemoryPushStore {
     public let url: URL
-    public init(url: URL) {
+    public init(url: URL, retryEvery: Duration = .seconds(2)) {
         self.url = url
         super.init()
+        self.retryEvery = retryEvery
         if let data = try? Data(contentsOf: url) {
             let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
             load((try? d.decode([PushSubscription].self, from: data)) ?? [])
