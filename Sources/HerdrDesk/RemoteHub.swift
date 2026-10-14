@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import HerdrKit
 import Foundation
@@ -30,6 +31,11 @@ final class RemoteHub {
     /// The VAPID key (`vapid.key` in `dir`), loaded or made when the hub starts. Nil: no Web Push (no `dir`, or the
     /// file is broken; it is never replaced, since a new key would break every phone's subscription).
     @ObservationIgnored private(set) var vapid: P256.Signing.PrivateKey?
+    /// Sends to the phones while the hub runs with a key; the trigger turns status changes into pushes.
+    @ObservationIgnored private var pushCenter: PushCenter?
+    @ObservationIgnored private var pushTrigger = PushTrigger()
+    /// The subscriptions, for Settings (refreshed by the poll and after each change here).
+    private(set) var pushList: [PushSubscription] = []
     @ObservationIgnored private var server: HubServer?
     @ObservationIgnored private let pairing: HubPairing
     @ObservationIgnored private var poll: Task<Void, Never>?
@@ -66,6 +72,7 @@ final class RemoteHub {
     init(model: AppModel?, devices: HubDeviceStore, dir: URL?) {
         self.model = model; self.devices = devices; self.dir = dir
         pushes = dir.map { FilePushStore(url: $0.appendingPathComponent("push.json")) } ?? MemoryPushStore()
+        pushList = pushes.all
         pairing = HubPairing(devices: devices)
         deviceList = devices.all
         addresses = HubBind.local()
@@ -158,6 +165,8 @@ final class RemoteHub {
                 fingerprint = id.fingerprint
             }
             server = s; running = true; problem = nil
+            pushTrigger = PushTrigger()
+            pushCenter = vapid.map { PushCenter(store: pushes, key: $0, subject: pushSubject) }
             remoteLog.info("hub on \(self.mode.rawValue, privacy: .public) port \(self.port ?? 0)")
             poll = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -166,6 +175,8 @@ final class RemoteHub {
                     self.connections = s.connectionCount
                     if let o = self.offer, self.pairing.open != o { self.offer = nil; self.pairingEndedByWrongTries = self.pairing.endedByWrongTries }
                     if self.deviceList != self.devices.all { self.deviceList = self.devices.all }
+                    if self.pushList != self.pushes.all { self.pushList = self.pushes.all }
+                    self.pushTick()
                 }
             }
         } catch {
@@ -176,10 +187,60 @@ final class RemoteHub {
 
     func stop() {
         poll?.cancel(); poll = nil
-        server?.stop(); server = nil
+        server?.stop(); server = nil; pushCenter = nil
         running = false; port = nil; connections = 0; servedName = nil; fingerprint = nil
         cancelPairing()
     }
+
+    // MARK: Web Push
+
+    /// Settings: push when an agent is done (default on); push only while the owner is away from the Mac (default on).
+    var pushDone: Bool {
+        get { access(keyPath: \.pushDone); return AppDefaults.store.object(forKey: Self.pushDoneKey) as? Bool ?? true }
+        set { withMutation(keyPath: \.pushDone) { AppDefaults.store.set(newValue, forKey: Self.pushDoneKey) } }
+    }
+    var pushOnlyAway: Bool {
+        get { access(keyPath: \.pushOnlyAway); return AppDefaults.store.object(forKey: Self.pushAwayKey) as? Bool ?? true }
+        set { withMutation(keyPath: \.pushOnlyAway) { AppDefaults.store.set(newValue, forKey: Self.pushAwayKey) } }
+    }
+    static let pushDoneKey = "remote.push.done", pushAwayKey = "remote.push.onlyAway"
+
+    /// The VAPID contact the push services see: the hub's page when it has a DNS name (Tailscale), else a placeholder
+    /// (Apple refuses localhost and bare addresses).
+    private var pushSubject: String {
+        if let u = url, let h = URL(string: u)?.host, h.contains(where: \.isLetter), !h.contains(":") { return u }
+        return "mailto:flockbook@example.com"
+    }
+
+    /// Every poll: status changes become pushes (needs you, done) when the policy allows; held pushes go out.
+    private func pushTick() {
+        guard let model else { return }
+        let events = pushTrigger.update(model.store.workspaces)
+        guard let c = pushCenter, !pushes.all.isEmpty else { return }
+        let policy = PushPolicy(doneEnabled: pushDone, onlyWhenAway: pushOnlyAway)
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        let due = events.filter { policy.allows($0.kind, idle: idle, locked: locked) }
+        Task { @MainActor in
+            for e in due { await c.notify(e.notice, kind: e.kind) }
+            await c.flush()
+        }
+    }
+
+    /// Settings > Send Test: what happened, in a line.
+    func sendTestPush(device id: String) async -> String {
+        guard let c = pushCenter else { return "Turn on remote access first." }
+        let r = await c.test(device: id)
+        pushList = pushes.all
+        switch r {
+        case .sent?: return "Sent. Check the phone."
+        case .gone?: return "The phone turned notifications off. Turn them on again on the phone."
+        case .failed(let status)?: return status == 0 ? "Could not reach the push service." : "The push service refused it (\(status))."
+        case nil: return "This device has no notifications."
+        }
+    }
+
+    func removePush(device id: String) { pushes.remove(device: id); pushList = pushes.all }
 
     static func describe(_ e: Error) -> String {
         switch e as? HubServer.StartError {
@@ -271,7 +332,7 @@ final class RemoteHub {
     func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); server?.dropRevoked(); deviceList = devices.all }
     /// Removes the device and closes its open connections at once.
     func revoke(device id: String) {
-        devices.revoke(device: id); pushes.remove(device: id); server?.dropRevoked(); deviceList = devices.all
+        devices.revoke(device: id); pushes.remove(device: id); pushList = pushes.all; server?.dropRevoked(); deviceList = devices.all
     }
 
     // MARK: Snapshots
@@ -279,7 +340,7 @@ final class RemoteHub {
     /// A hub that shows a state without listening (Settings snapshots).
     static func preview(running: Bool, devices: [(HubDevice, Date)], offer: Bool,
                         tailscale: TailscaleSetup.Status? = nil, serve: TailscaleSetup.Serve? = nil, mode: Mode = .direct,
-                        pairStopped: Bool = false, claudeHook: ClaudeHookSetup.State = .off) -> RemoteHub {
+                        pairStopped: Bool = false, claudeHook: ClaudeHookSetup.State = .off, pushes: [PushSubscription] = []) -> RemoteHub {
         let store = MemoryDeviceStore()
         for (i, d) in devices.enumerated() { store.add(token: "preview-\(i)", device: d.0, paired: d.1) }
         let hub = RemoteHub(model: nil, devices: store, dir: nil)
@@ -299,6 +360,8 @@ final class RemoteHub {
         if offer { hub.startPairing() }
         hub.pairingEndedByWrongTries = pairStopped
         hub.claudeHook = .preview(claudeHook)
+        for s in pushes { hub.pushes.add(s) }
+        hub.pushList = hub.pushes.all
         return hub
     }
 }

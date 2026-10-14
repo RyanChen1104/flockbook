@@ -13,7 +13,11 @@ extension SnapshotRunner {
         let day = Date(timeIntervalSince1970: 1_790_000_000)
         let two: [(HubDevice, Date)] = [(HubDevice(id: "d1", name: "Phone", level: .input), day), (HubDevice(id: "d2", name: "Tablet", level: .read), day)]
         let off = RemoteHub.preview(running: false, devices: [], offer: false)
-        let on = RemoteHub.preview(running: true, devices: two, offer: false)
+        // Synthetic subscriptions (the RFC 8291 example key): an Android phone and an iPad.
+        let p256 = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4", auth = "AAECAwQFBgcICQoLDA0ODw"
+        let subs = [PushSubscription(device: "d1", endpoint: "https://fcm.googleapis.com/fcm/send/preview", p256dh: p256, auth: auth, added: day),
+                    PushSubscription(device: "d2", endpoint: "https://web.push.apple.com/preview", p256dh: p256, auth: auth, added: day)]
+        let on = RemoteHub.preview(running: true, devices: two, offer: false, pushes: subs)
         let pairing = RemoteHub.preview(running: true, devices: [], offer: true)
         // Tailscale mode (synthetic tailnet): halfway (MagicDNS off, no phone), ready to turn Serve on, on, port taken.
         let phone = TailscaleSetup.Peer(name: "pixel", os: "android", online: true)
@@ -53,6 +57,14 @@ extension SnapshotRunner {
         on.setLevel(.read, device: "d1")
         step("devices: level change shows", on.deviceList.first { $0.device.id == "d1" }?.device.level == .read)
         on.setLevel(.input, device: "d1")
+        step("push: two phones listed, Chrome and Safari (\(on.pushList.map { PushSheet.service($0.endpoint) }))",
+             on.pushList.map { PushSheet.service($0.endpoint) } == ["Chrome", "Safari"])
+        let pushOff = RemoteHub.preview(running: true, devices: two, offer: false, pushes: subs)
+        pushOff.removePush(device: "d2")
+        step("push: Remove drops that phone only", pushOff.pushList.map(\.device) == ["d1"])
+        pushOff.revoke(device: "d1")
+        step("push: removing a device drops its notifications", pushOff.pushList.isEmpty)
+        step("push: done and only-when-away are on by default", on.pushDone && on.pushOnlyAway)
 
         // The blank guard itself: a one-colour image has no ink, so a blank capture fails.
         let blankCtx = CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
@@ -119,6 +131,8 @@ extension SnapshotRunner {
             ("tailscale-pair-stopped", AnyView(PairSheet(hub: tsStopped)), 380),
             ("pair", AnyView(PairSheet(hub: pairing)), 380),
             ("devices", AnyView(DevicesSheet(hub: on)), 460),
+            ("push", AnyView(PushSheet(hub: on)), 480),
+            ("push-none", AnyView(PushSheet(hub: off)), 480),
             ("claude-hook-on", AnyView(SettingsView(remote: tsHook)), 520),
             ("claude-hook-install", AnyView(ClaudeHookSheet(setup: off.claudeHook)), 520),
             ("claude-hook-uninstall", AnyView(ClaudeHookSheet(setup: tsHook.claudeHook)), 520),

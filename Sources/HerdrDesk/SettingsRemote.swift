@@ -8,6 +8,7 @@ struct RemoteAccessSection: View {
     @Bindable var hub: RemoteHub
     @State private var pairing = false
     @State private var showDevices = false
+    @State private var showPushes = false
 
     var body: some View {
         Section {
@@ -35,6 +36,13 @@ struct RemoteAccessSection: View {
                     Text("Devices")
                     Text(hub.deviceList.isEmpty ? "None paired." : "\(hub.deviceList.count) paired, \(hub.deviceList.filter { $0.device.level == .input }.count) with input.")
                 }
+                LabeledContent {
+                    Button("Notifications…") { showPushes = true }
+                } label: {
+                    Text("Phone notifications")
+                    Text(hub.pushList.isEmpty ? "No phone has them on. Tap Notify me in Flockbook on the phone."
+                                              : "On for \(hub.pushList.count) \(hub.pushList.count == 1 ? "device" : "devices").")
+                }
                 ClaudeHookRow(setup: hub.claudeHook)
             }
         } header: {
@@ -52,6 +60,7 @@ struct RemoteAccessSection: View {
         }
         .sheet(isPresented: $pairing, onDismiss: { hub.cancelPairing() }) { PairSheet(hub: hub) }
         .sheet(isPresented: $showDevices) { DevicesSheet(hub: hub) }
+        .sheet(isPresented: $showPushes) { PushSheet(hub: hub) }
         .onAppear { hub.refreshAddresses(); Task { await hub.checkTailscale() } }
     }
 
@@ -296,5 +305,71 @@ struct DevicesSheet: View {
         }
         .padding(24)
         .frame(width: 460)
+    }
+}
+
+/// Phones that get notifications (Web Push), a test per phone, and when to push.
+struct PushSheet: View {
+    @Bindable var hub: RemoteHub
+    @Environment(\.dismiss) private var dismiss
+    @State private var result: [String: String] = [:]
+    @State private var sending: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Phone Notifications").font(.title3.weight(.semibold))
+            Form {
+                Section {
+                    if hub.pushList.isEmpty {
+                        Text("No phone has notifications on. Open Flockbook on the phone and tap Notify me.").foregroundStyle(.secondary)
+                    }
+                    ForEach(hub.pushList, id: \.device) { s in
+                        LabeledContent {
+                            HStack {
+                                Button(sending == s.device ? "Sending…" : "Send Test") {
+                                    sending = s.device
+                                    Task { result[s.device] = await hub.sendTestPush(device: s.device); sending = nil }
+                                }
+                                .disabled(sending != nil || !hub.running)
+                                Button(role: .destructive) { hub.removePush(device: s.device) } label: { Text("Remove") }
+                            }
+                        } label: {
+                            Text(name(s.device))
+                            Text(result[s.device] ?? "\(Self.service(s.endpoint)) · since \(s.added.formatted(date: .abbreviated, time: .omitted))")
+                        }
+                    }
+                }
+                Section {
+                    Toggle(isOn: $hub.pushDone) {
+                        Text("When an agent is done")
+                        Text("Agents that need you are sent either way.")
+                    }
+                    Toggle(isOn: $hub.pushOnlyAway) {
+                        Text("Only when I am away from this Mac")
+                        Text("Away: no keyboard or mouse for 2 minutes, or the screen is locked.")
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .fixedSize(horizontal: false, vertical: true)
+            Text("A notification says which agent needs you or is done. It never holds conversation text. Removing a device also turns its notifications off.")
+                .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private func name(_ device: String) -> String { hub.deviceList.first { $0.device.id == device }?.device.name ?? "Removed device" }
+
+    /// The browser behind a push service.
+    static func service(_ endpoint: String) -> String {
+        let host = URL(string: endpoint)?.host ?? ""
+        if host.hasSuffix("push.apple.com") { return "Safari" }
+        if host.hasSuffix("googleapis.com") { return "Chrome" }
+        if host.hasSuffix("mozilla.com") { return "Firefox" }
+        if host.hasSuffix("notify.windows.com") { return "Edge" }
+        return host
     }
 }
