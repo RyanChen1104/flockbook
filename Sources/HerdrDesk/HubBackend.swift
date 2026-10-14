@@ -1,3 +1,4 @@
+import CryptoKit
 import HerdrKit
 import Foundation
 
@@ -5,7 +6,12 @@ import Foundation
 /// and the composer. `HubSession` checks the prompt and the level before it calls a write here.
 @MainActor final class AppHubBackend: HubBackend {
     let model: AppModel
-    init(model: AppModel) { self.model = model }
+    /// Web Push: the phones' subscriptions and the hub's VAPID key. No key: the hub offers no push.
+    let pushes: MemoryPushStore?
+    let vapid: P256.Signing.PrivateKey?
+    init(model: AppModel, pushes: MemoryPushStore? = nil, vapid: P256.Signing.PrivateKey? = nil) {
+        self.model = model; self.pushes = pushes; self.vapid = vapid
+    }
 
     private var store: HerdrStore { model.store }
     private func pane(_ id: String) -> Pane? { store.workspaces.lazy.flatMap(\.tabs).flatMap(\.panes).first { $0.id == id } }
@@ -59,6 +65,9 @@ import Foundation
 
     /// The hook's newest AskUserQuestion call for this session (the files the hook wrote, read-only).
     func hookedQuestion(session: String) -> QuestionRequest? { ClaudeHookSetup.live.question(session: session) }
+    var pushKey: String? { vapid.map { Base64URL.encode($0.publicKey.x963Representation) } }
+    func pushSubscribe(_ s: PushSubscription) -> Bool { vapid != nil && pushes?.add(s) == true }
+    func pushUnsubscribe(device: String, endpoint: String) { pushes?.remove(device: device, endpoint: endpoint) }
 
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);
     /// the answers must then cover every question, else nothing is sent. Every key is gated: the agent from the

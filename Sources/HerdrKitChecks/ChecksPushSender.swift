@@ -73,7 +73,7 @@ func checksPushSender() async throws {
           "push: an endpoint off the allow list is not contacted")
     check(svc.seen.isEmpty, "push: nothing reached the fake service")
 
-    let out = await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, transport: WebPushSender.urlSession)
+    let out = await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession)
     check(out == .sent, "push: 201 -> sent (\(out))")
     if let r = svc.seen.last {
         check(r.head["_line"] == "POST /push/abc HTTP/1.1", "push: POST to the endpoint path (\(r.head["_line"] ?? ""))")
@@ -83,12 +83,12 @@ func checksPushSender() async throws {
         check((try? WebPush.decrypt(r.body, uaPrivate: phone, authSecret: auth)) == payload, "push: the phone decrypts the body")
         check(!r.body.contains(Data("orchard".utf8)), "push: the text is not in the clear")
     } else { check(false, "push: the fake service got the request") }
-    _ = await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .normal, transport: WebPushSender.urlSession)
+    _ = await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .normal, unchecked: WebPushSender.urlSession)
     check(svc.seen.last?.head["urgency"] == "normal", "push: normal urgency for a done agent")
     svc.status = 410
-    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, transport: WebPushSender.urlSession) == .gone, "push: 410 -> gone")
+    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) == .gone, "push: 410 -> gone")
     svc.status = 404
-    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, transport: WebPushSender.urlSession) == .gone, "push: 404 -> gone")
+    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) == .gone, "push: 404 -> gone")
     svc.status = 429
-    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, transport: WebPushSender.urlSession) == .failed(429), "push: 429 -> kept, failed")
+    check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) == .failed(429), "push: 429 -> kept, failed")
 }

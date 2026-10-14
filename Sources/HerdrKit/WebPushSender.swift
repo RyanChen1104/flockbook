@@ -64,14 +64,19 @@ public enum WebPushSender {
         return r
     }
 
-    /// Sends one message. Refuses an endpoint off the allow list (`PushSubscription.isValid`) unless `transport` is given
-    /// (the checks' local fake push service).
+    /// Sends one message. Refuses an endpoint off the allow list (`PushSubscription.isValid`): nothing is contacted.
     public static func send(_ payload: Data, to s: PushSubscription, key: P256.Signing.PrivateKey, subject: String,
-                            urgency: Urgency, transport: Transport? = nil) async -> PushOutcome {
-        guard transport != nil || s.isValid, let r = try? request(payload, to: s, key: key, subject: subject, urgency: urgency) else {
-            return .failed(0)
-        }
-        let status = await (transport ?? urlSession)(r)
+                            urgency: Urgency) async -> PushOutcome {
+        guard s.isValid else { return .failed(0) }
+        return await send(payload, to: s, key: key, subject: subject, urgency: urgency, unchecked: urlSession)
+    }
+
+    /// Checks only (internal, reached through `@testable import`): sends through `unchecked` WITHOUT the allow list, to
+    /// the local fake push service. App code cannot call it.
+    static func send(_ payload: Data, to s: PushSubscription, key: P256.Signing.PrivateKey, subject: String,
+                     urgency: Urgency, unchecked transport: Transport) async -> PushOutcome {
+        guard let r = try? request(payload, to: s, key: key, subject: subject, urgency: urgency) else { return .failed(0) }
+        let status = await transport(r)
         switch status {
         case 200..<300: return .sent
         case 404, 410: return .gone

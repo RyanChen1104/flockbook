@@ -30,7 +30,7 @@ import Foundation
     check(hubSeen == Set(Hub.hubTypes), "hub: a fixture for every hub type (missing \(Set(Hub.hubTypes).subtracting(hubSeen).sorted()))")
 
     // Intent only: no client message carries keys or terminal bytes (attach carries an image the hub re-encodes).
-    check(Hub.clientTypes == ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping"], "hub: client types are the intent list")
+    check(Hub.clientTypes == ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe"], "hub: client types are the intent list")
     if case .send(_, _, let att)? = (try? Hub.decodeClient(fixture("hub/send-attachments.json")))?.body { check(att == ["img-1"], "hub: send names its attachments") }
     else { check(false, "hub: send-attachments.json is a send") }
     if case .send(_, _, let att)? = (try? Hub.decodeClient(fixture("hub/send.json")))?.body { check(att.isEmpty, "hub: send without attachments: none") }

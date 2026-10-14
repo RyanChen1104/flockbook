@@ -1,3 +1,4 @@
+import CryptoKit
 import HerdrKit
 import Foundation
 import Observation
@@ -24,6 +25,11 @@ final class RemoteHub {
     @ObservationIgnored let devices: HubDeviceStore
     /// Device file and certificate live here; nil = nothing on disk (snapshots).
     @ObservationIgnored let dir: URL?
+    /// Phones' Web Push subscriptions: `push.json` in `dir` (in memory without one).
+    @ObservationIgnored let pushes: MemoryPushStore
+    /// The VAPID key (`vapid.key` in `dir`), loaded or made when the hub starts. Nil: no Web Push (no `dir`, or the
+    /// file is broken; it is never replaced, since a new key would break every phone's subscription).
+    @ObservationIgnored private(set) var vapid: P256.Signing.PrivateKey?
     @ObservationIgnored private var server: HubServer?
     @ObservationIgnored private let pairing: HubPairing
     @ObservationIgnored private var poll: Task<Void, Never>?
@@ -59,6 +65,7 @@ final class RemoteHub {
 
     init(model: AppModel?, devices: HubDeviceStore, dir: URL?) {
         self.model = model; self.devices = devices; self.dir = dir
+        pushes = dir.map { FilePushStore(url: $0.appendingPathComponent("push.json")) } ?? MemoryPushStore()
         pairing = HubPairing(devices: devices)
         deviceList = devices.all
         addresses = HubBind.local()
@@ -128,7 +135,8 @@ final class RemoteHub {
         stop()
         guard enabled, let model else { return }
         do {
-            let s = HubServer(backend: AppHubBackend(model: model), devices: devices, pairing: pairing)
+            if vapid == nil, let dir { vapid = try? VAPIDKeyFile.loadOrCreate(at: dir.appendingPathComponent("vapid.key")) }
+            let s = HubServer(backend: AppHubBackend(model: model, pushes: pushes, vapid: vapid), devices: devices, pairing: pairing)
             if mode == .tailscale {
                 if tailscale == nil { await checkTailscale(restart: false) }
                 guard let ts = tailscale, ts.signedIn, ts.httpsReady else {
@@ -262,7 +270,9 @@ final class RemoteHub {
     /// right before its keys.
     func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); server?.dropRevoked(); deviceList = devices.all }
     /// Removes the device and closes its open connections at once.
-    func revoke(device id: String) { devices.revoke(device: id); server?.dropRevoked(); deviceList = devices.all }
+    func revoke(device id: String) {
+        devices.revoke(device: id); pushes.remove(device: id); server?.dropRevoked(); deviceList = devices.all
+    }
 
     // MARK: Snapshots
 

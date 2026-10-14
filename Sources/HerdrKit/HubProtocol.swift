@@ -7,7 +7,7 @@ public enum Hub {
     public static let version = 1
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
-    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping"]
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe"]
     public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
@@ -156,6 +156,9 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case approve(pane: String, prompt: String, allow: Bool)
         case answer(pane: String, question: String, answers: [HubAnswer])
         case ping
+        /// Web Push for this device (the browser's subscription; keys base64url). One per device.
+        case pushSubscribe(endpoint: String, p256dh: String, auth: String)
+        case pushUnsubscribe(endpoint: String)
 
         public var type: String {
             switch self {
@@ -169,6 +172,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             case .approve: "approve"
             case .answer: "answer"
             case .ping: "ping"
+            case .pushSubscribe: "pushSubscribe"
+            case .pushUnsubscribe: "pushUnsubscribe"
             }
         }
     }
@@ -176,7 +181,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -193,6 +198,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case "approve": body = .approve(pane: try s(.pane), prompt: try s(.prompt), allow: try c.decode(Bool.self, forKey: .allow))
         case "answer": body = .answer(pane: try s(.pane), question: try s(.question), answers: try c.decode([HubAnswer].self, forKey: .answers))
         case "ping": body = .ping
+        case "pushSubscribe": body = .pushSubscribe(endpoint: try s(.endpoint), p256dh: try s(.p256dh), auth: try s(.auth))
+        case "pushUnsubscribe": body = .pushUnsubscribe(endpoint: try s(.endpoint))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -222,6 +229,10 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(pane, forKey: .pane); try c.encode(question, forKey: .question); try c.encode(answers, forKey: .answers)
         case .ping:
             break
+        case .pushSubscribe(let endpoint, let p256dh, let auth):
+            try c.encode(endpoint, forKey: .endpoint); try c.encode(p256dh, forKey: .p256dh); try c.encode(auth, forKey: .auth)
+        case .pushUnsubscribe(let endpoint):
+            try c.encode(endpoint, forKey: .endpoint)
         }
     }
 }
@@ -242,8 +253,10 @@ public struct HubWelcome: Codable, Hashable, Sendable {
     public var level: HubLevel
     /// herdr session name; nil = the default session.
     public var session: String?
-    public init(hub: String, hubVersion: String, level: HubLevel, session: String? = nil) {
-        self.hub = hub; self.hubVersion = hubVersion; self.level = level; self.session = session
+    /// The hub's VAPID public key (base64url) for `PushManager.subscribe`; nil: no Web Push on this hub.
+    public var pushKey: String?
+    public init(hub: String, hubVersion: String, level: HubLevel, session: String? = nil, pushKey: String? = nil) {
+        self.hub = hub; self.hubVersion = hubVersion; self.level = level; self.session = session; self.pushKey = pushKey
     }
 }
 

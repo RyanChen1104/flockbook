@@ -1,0 +1,8 @@
+{
+  "auth": "AAECAwQFBgcICQoLDA0ODw",
+  "endpoint": "https://fcm.googleapis.com/fcm/send/fake-subscription-id",
+  "id": "c9",
+  "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+  "type": "pushSubscribe",
+  "v": 1
+}

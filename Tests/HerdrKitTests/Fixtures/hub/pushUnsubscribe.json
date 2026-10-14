@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/fake-subscription-id",
+  "id": "c10",
+  "type": "pushUnsubscribe",
+  "v": 1
+}

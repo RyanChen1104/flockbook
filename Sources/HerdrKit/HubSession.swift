@@ -33,6 +33,11 @@ import CryptoKit
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws
     /// The newest AskUserQuestion call the Claude hook saved for this agent session (`ClaudeQuestionHook`), if any.
     func hookedQuestion(session: String) -> QuestionRequest?
+    /// The hub's VAPID public key (base64url) for the PWA; nil: no Web Push.
+    var pushKey: String? { get }
+    /// Keeps the device's push subscription (one per device). False: refused (invalid, or push is off).
+    func pushSubscribe(_ s: PushSubscription) -> Bool
+    func pushUnsubscribe(device: String, endpoint: String)
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -180,7 +185,8 @@ extension Hub {
             deviceID = d.id
             helloLevel = d.level
             lastSnapshot = snapshot()
-            return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName)),
+            return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName,
+                                        pushKey: backend.pushKey)),
                     .snapshot(lastSnapshot ?? []), ok(m.id)]
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
@@ -191,6 +197,16 @@ extension Hub {
             return []   // handled above
         case .ping:
             return [.pong, ok(m.id)]
+        case .pushSubscribe(let endpoint, let p256dh, let auth):
+            // Any level may subscribe: a notification carries no conversation text. Bound to this device; the
+            // allow list runs here and again in the store.
+            let sub = PushSubscription(device: device.id, endpoint: endpoint, p256dh: p256dh, auth: auth)
+            guard sub.isValid else { return [fail(m.id, .badRequest, "Not a push service this hub sends to.")] }
+            guard backend.pushKey != nil, backend.pushSubscribe(sub) else { return [fail(m.id, .failed, "Notifications are off on this hub.")] }
+            return [ok(m.id)]
+        case .pushUnsubscribe(let endpoint):
+            backend.pushUnsubscribe(device: device.id, endpoint: endpoint)
+            return [ok(m.id)]
         case .watch(let id):
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
             if !watched.contains(id) { watched.append(id) }

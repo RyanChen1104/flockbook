@@ -47,6 +47,8 @@ The client sends **intent only**. There is no message that carries raw keys or t
 | `approve` | `pane`, `prompt`, `allow` | Answer the open permission prompt. `prompt` is the id from the last `prompt` push. Needs level `input`. |
 | `answer` | `pane`, `question`, `answers` | Answer the open question. `answers`: one per question, `{picks: [int], other?: string}` (0-based option indexes). Needs level `input`. |
 | `ping` | – | The hub sends `pong`. |
+| `pushSubscribe` | `endpoint`, `p256dh`, `auth` | Web Push for this device: the browser's `PushSubscription` (keys base64url), made with `pushKey` from `welcome`. One per device: a new one replaces the old. `endpoint` must be https on a known push service (FCM, Apple, Mozilla, Windows); else `badRequest`. `failed` when the hub has no push key. Any level. |
+| `pushUnsubscribe` | `endpoint` | Remove this device's subscription with that endpoint. |
 
 ### 3.1 Input rules: approve, answer, send
 
@@ -149,7 +151,7 @@ until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be rep
 | `type` | Fields | When |
 |---|---|---|
 | `paired` | `token`, `device` (`{id, name, level}`) | After a good `pair`. The token is shown only here. |
-| `welcome` | `hub` (name), `hubVersion`, `level` (`read` / `input`), `session?` (herdr session name; absent = default) | After a good `hello`. |
+| `welcome` | `hub` (name), `hubVersion`, `level` (`read` / `input`), `session?` (herdr session name; absent = default), `pushKey?` (the hub's VAPID public key, base64url; absent = no Web Push on this hub) | After a good `hello`. |
 | `reply` | `re`, `ok`, `error?` {`code`, `message`} | Once per client message. |
 | `snapshot` | `workspaces` | After `welcome`, and on every change of workspaces, tabs, panes or agents. Full list each time (it is small). |
 | `status` | `pane`, `status` | An agent's status changed (cheap update between snapshots). |
