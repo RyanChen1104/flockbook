@@ -19,8 +19,19 @@ import Foundation
     let d = PushNotice.agent(.done, workspace: "site", tab: "build", agent: agent(.done, title: ""), pane: "w1:p1")
     check(d.title == "Done · build", "push notice: done; no agent title -> the tab (\(d.title))")
     let long = PushNotice(title: String(repeating: "t", count: 500), body: String(repeating: "\u{1F600}", count: 500), tag: "x", pane: "p")
-    check(long.title.count == PushNotice.maxTitle && long.body.count == PushNotice.maxBody, "push notice: title and body cut")
+    check(long.title.count == PushNotice.maxTitle && long.body.count == PushNotice.bodyBytes / 4, "push notice: title cut to 120 characters, body to 600 bytes (\(long.body.count) emoji)")
+    check(PushNotice(title: "t", body: String(repeating: "b", count: 500), tag: nil, pane: nil).body.count == PushNotice.maxBody, "push notice: ASCII body cut to 200 characters")
     check(long.payload.count < WebPush.maxPlaintext, "push notice: payload fits one push (\(long.payload.count) bytes)")
+    // Size in bytes, not characters: 200 family emoji (25 bytes each), quotes and control characters still fit one push.
+    let family = String(repeating: "👨‍👩‍👧‍👦", count: 200)
+    let huge = PushNotice(title: family, body: family, tag: family, pane: family)
+    check(huge.payload.count <= WebPush.maxPlaintext, "push notice: 200 family emoji fit (\(huge.payload.count) bytes)")
+    let ua = P256.KeyAgreement.PrivateKey()
+    check((try? WebPush.encrypt(huge.payload, uaPublic: ua.publicKey.x963Representation, authSecret: Data(count: 16))) != nil, "push notice: and encrypt")
+    check(huge.body.unicodeScalars.count % 7 == 0 && huge.body.hasPrefix("👨‍👩‍👧‍👦"), "push notice: cut on a character boundary")
+    let nasty = PushNotice(title: String(repeating: "\"\\\u{1}", count: 300), body: String(repeating: "\u{0}\n\"", count: 700), tag: nil, pane: nil)
+    check(nasty.payload.count <= WebPush.maxPlaintext, "push notice: quotes and control characters fit (\(nasty.payload.count) bytes)")
+    check(!nasty.title.unicodeScalars.contains { $0.value < 0x20 }, "push notice: control characters dropped from the title")
     let back = try? JSONDecoder().decode([String: String].self, from: n.payload)
     check(back == ["title": n.title, "body": n.body, "tag": "w1:p1", "pane": "w1:p1"], "push notice: JSON for sw.js")
 
@@ -77,6 +88,24 @@ import Foundation
     log.sent = []
     check(await c.test(device: "d1") == .sent && log.sent.first?.1.isEmpty == false, "push center: a test notification, not throttled")
     check(await c.test(device: "none") == nil, "push center: test to a device without a subscription -> nil")
+    // A device no longer paired: not sent to, its subscription removed.
+    let store2 = MemoryPushStore()
+    store2.add(PushSubscription(device: "d1", endpoint: "https://fcm.googleapis.com/fcm/send/k", p256dh: p256, auth: auth))
+    store2.add(PushSubscription(device: "gone", endpoint: "https://fcm.googleapis.com/fcm/send/g", p256dh: p256, auth: auth))
+    let log2 = Log()
+    let c2 = PushCenter(store: store2, known: { $0 == "d1" }) { _, s, u in
+        await MainActor.run { log2.sent.append((s.device, "", u)) }
+        return .sent
+    }
+    check(await c2.notify(n, kind: .needsYou, now: now) == 1 && log2.sent.map(\.0) == ["d1"] && store2.all.map(\.device) == ["d1"],
+          "push center: a removed device gets nothing, its subscription is dropped")
+    // Stopped (Remote access off): nothing more goes out.
+    c2.stop()
+    log2.sent = []
+    let afterStop = await c2.notify(d, kind: .done, now: now.addingTimeInterval(500)), testAfterStop = await c2.test(device: "d1")
+    check(afterStop == 0 && testAfterStop == nil && log2.sent.isEmpty,
+          "push center: stopped -> sends nothing")
+
     // Over the minute: held, then one "more" push.
     for i in 0..<10 { _ = await c.notify(PushNotice(title: "m\(i)", body: "", tag: "m\(i)", pane: nil), kind: .message, now: now.addingTimeInterval(20)) }
     log.sent = []

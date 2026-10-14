@@ -40,6 +40,16 @@ import Foundation
     store.remove(device: "d1")
     check(store.all.isEmpty && FilePushStore(url: url).all.isEmpty, "push store: removing the device removes its subscription")
 
+    // A save that fails is reported: add keeps nothing, remove says so.
+    let blocker = dir.appending(path: "blocker")
+    try Data("a file, not a folder".utf8).write(to: blocker)
+    let stuck = FilePushStore(url: blocker.appending(path: "push.json"))
+    check(!stuck.add(PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth)) && stuck.all.isEmpty && stuck.saveError != nil,
+          "push store: a failed save -> not added, reported (\(stuck.saveError ?? "nil"))")
+    stuck.load([PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth)])
+    check(!stuck.remove(device: "d1") && stuck.all.isEmpty && stuck.saveError != nil, "push store: a failed save on remove -> gone in memory, reported")
+    check(store.saveError == nil, "push store: no error when saves work")
+
     // Over the protocol: welcome carries the key, subscribe binds to the device, a bad endpoint is refused.
     let devices = MemoryDeviceStore()
     devices.add(token: "tok", device: HubDevice(id: "d1", name: "Phone", level: .read))

@@ -6,26 +6,32 @@ import Foundation
     public private(set) var all: [PushSubscription] = []
     public init() {}
     /// Replaces the device's subscription. False: not a valid subscription (`PushSubscription.isValid`), nothing kept.
+    /// The last save that failed (nil: saved). Shown in Settings.
+    public internal(set) var saveError: String?
+    /// Replaces the device's subscription. False: not valid, or not saved; nothing kept.
     @discardableResult public func add(_ s: PushSubscription) -> Bool {
         guard s.isValid else { return false }
+        let before = all
         all.removeAll { $0.device == s.device || $0.endpoint == s.endpoint }
         all.append(s)
-        changed()
+        guard changed() else { all = before; return false }
         return true
     }
-    public func remove(device: String, endpoint: String? = nil) {
+    /// Gone from memory at once (nothing more is sent to it). False: the file still holds it (`saveError`).
+    @discardableResult public func remove(device: String, endpoint: String? = nil) -> Bool {
         let before = all.count
         all.removeAll { $0.device == device && (endpoint == nil || $0.endpoint == endpoint) }
-        if all.count != before { changed() }
+        return all.count == before || changed()
     }
     /// After a 404 / 410 from the push service.
-    public func remove(endpoint: String) {
+    @discardableResult public func remove(endpoint: String) -> Bool {
         let before = all.count
         all.removeAll { $0.endpoint == endpoint }
-        if all.count != before { changed() }
+        return all.count == before || changed()
     }
     func load(_ subs: [PushSubscription]) { all = subs }
-    func changed() {}
+    /// Saves; false when that failed.
+    func changed() -> Bool { true }
 }
 
 /// Subscriptions in a JSON file, mode 600 (an endpoint is a capability to push to the phone).
@@ -39,10 +45,10 @@ import Foundation
             load((try? d.decode([PushSubscription].self, from: data)) ?? [])
         }
     }
-    override func changed() {
+    override func changed() -> Bool {
         let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? e.encode(all) else { return }
-        try? PrivateFile.write(data, to: url)
+        do { try PrivateFile.write(try e.encode(all), to: url); saveError = nil; return true }
+        catch { saveError = "Could not save \(url.lastPathComponent): \(error.localizedDescription)"; return false }
     }
 }
 

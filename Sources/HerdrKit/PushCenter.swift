@@ -5,6 +5,9 @@ import Foundation
 /// the agent's title, its status and where it runs: no conversation text.
 public struct PushNotice: Codable, Hashable, Sendable {
     public static let maxTitle = 120, maxBody = 200
+    /// UTF-8 bytes per field. JSON escaping at most doubles them (control characters are dropped), so a notice stays
+    /// under 2.7 KB, below one push (`WebPush.maxPlaintext`, 3993).
+    static let titleBytes = 300, bodyBytes = 600, idBytes = 200
     public var title: String
     public var body: String
     /// A newer notice with the same tag replaces the old one on the phone.
@@ -12,7 +15,23 @@ public struct PushNotice: Codable, Hashable, Sendable {
     /// The pane the tap opens.
     public var pane: String?
     public init(title: String, body: String, tag: String?, pane: String?) {
-        self.title = String(title.prefix(Self.maxTitle)); self.body = String(body.prefix(Self.maxBody)); self.tag = tag; self.pane = pane
+        self.title = Self.clip(title, chars: Self.maxTitle, bytes: Self.titleBytes, newlines: false)
+        self.body = Self.clip(body, chars: Self.maxBody, bytes: Self.bodyBytes, newlines: true)
+        self.tag = tag.map { Self.clip($0, chars: Self.idBytes, bytes: Self.idBytes, newlines: false) }
+        self.pane = pane.map { Self.clip($0, chars: Self.idBytes, bytes: Self.idBytes, newlines: false) }
+    }
+
+    /// At most `chars` characters and `bytes` UTF-8 bytes, cut between characters; control characters dropped (a
+    /// newline kept when `newlines`).
+    static func clip(_ s: String, chars: Int, bytes: Int, newlines: Bool) -> String {
+        var out = "", used = 0, count = 0
+        for c in s {
+            if c.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) && !(newlines && c == "\n") { continue }
+            let n = c.utf8.count
+            guard count < chars, used + n <= bytes else { break }
+            out.append(c); used += n; count += 1
+        }
+        return out
     }
 
     /// "Needs you · Fix the build", "claude · site · build" (as the PWA's list row).
@@ -23,7 +42,6 @@ public struct PushNotice: Codable, Hashable, Sendable {
         return PushNotice(title: "\(what) · \(name)", body: body, tag: pane, pane: pane)
     }
 
-    /// At most about 1.9 KB (6 bytes per character when escaped), well under one push (`WebPush.maxPlaintext`).
     public var payload: Data {
         let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return (try? e.encode(self)) ?? Data()
@@ -76,15 +94,24 @@ public struct PushPolicy: Sendable {
     private var throttle = PushThrottle()
 
     /// The app's center: real sends, only to push services on the allow list (`WebPushSender.send`).
-    public convenience init(store: MemoryPushStore, key: P256.Signing.PrivateKey, subject: String = WebPushSender.subject) {
-        self.init(store: store) { await WebPushSender.send($0, to: $1, key: key, subject: subject, urgency: $2) }
+    public convenience init(store: MemoryPushStore, key: P256.Signing.PrivateKey, subject: String = WebPushSender.subject,
+                            known: @escaping @MainActor (String) -> Bool) {
+        self.init(store: store, known: known) { await WebPushSender.send($0, to: $1, key: key, subject: subject, urgency: $2) }
     }
     /// Checks: a recording `deliver`.
-    init(store: MemoryPushStore, deliver: @escaping Deliver) { self.store = store; self.deliver = deliver }
+    init(store: MemoryPushStore, known: @escaping @MainActor (String) -> Bool = { _ in true }, deliver: @escaping Deliver) {
+        self.store = store; self.known = known; self.deliver = deliver
+    }
+    /// A device still paired. A subscription of any other device is dropped, never sent to (its removal may not have
+    /// reached the file).
+    private let known: @MainActor (String) -> Bool
+    private var stopped = false
+    /// Remote access off: nothing more is sent, also from a notify already waiting on the network.
+    public func stop() { stopped = true }
 
     /// Throttled. Returns the number of phones it reached.
     @discardableResult public func notify(_ n: PushNotice, kind: PushThrottle.Kind, now: Date = Date()) async -> Int {
-        guard case .send(let more) = throttle.decide(agent: n.pane ?? n.tag ?? n.title, kind: kind, now: now) else { return 0 }
+        guard !stopped, case .send(let more) = throttle.decide(agent: n.pane ?? n.tag ?? n.title, kind: kind, now: now) else { return 0 }
         var n = n
         if more > 0 { n = PushNotice(title: n.title, body: n.body.isEmpty ? "+\(more) more" : "\(n.body) · +\(more) more", tag: n.tag, pane: n.pane) }
         return await send(n, urgency: kind == .needsYou ? .high : .normal, to: store.all).filter { $0 == .sent }.count
@@ -92,6 +119,7 @@ public struct PushPolicy: Sendable {
 
     /// Held pushes, once the minute has room: one "N more" push. Returns the phones reached.
     @discardableResult public func flush(now: Date = Date()) async -> Int {
+        guard !stopped else { return 0 }
         let held = throttle.flush(now: now)
         guard held > 0 else { return 0 }
         let n = PushNotice(title: "Flockbook", body: "\(held) more agent updates. Open Flockbook to see them.", tag: "more", pane: nil)
@@ -100,12 +128,18 @@ public struct PushPolicy: Sendable {
 
     /// Settings > Send Test Notification: not throttled. Nil: the device has no subscription.
     public func test(device: String) async -> PushOutcome? {
-        guard let s = store.all.first(where: { $0.device == device }) else { return nil }
+        guard !stopped, let s = store.all.first(where: { $0.device == device }) else { return nil }
         let n = PushNotice(title: "Flockbook", body: "Test notification. Agents that need you will show up like this.", tag: "test", pane: nil)
         return await send(n, urgency: .normal, to: [s]).first
     }
 
     private func send(_ n: PushNotice, urgency: WebPushSender.Urgency, to subs: [PushSubscription]) async -> [PushOutcome] {
+        let subs = subs.filter { s in
+            if known(s.device) { return true }
+            store.remove(device: s.device)
+            return false
+        }
+        guard !stopped, !subs.isEmpty else { return [] }
         let payload = n.payload, deliver = deliver
         let results = await withTaskGroup(of: (String, PushOutcome).self) { g in
             for s in subs { g.addTask { (s.endpoint, await deliver(payload, s, urgency)) } }

@@ -34,10 +34,14 @@ final class RemoteHub {
     /// Sends to the phones while the hub runs with a key; the trigger turns status changes into pushes.
     @ObservationIgnored private var pushCenter: PushCenter?
     @ObservationIgnored private var pushTrigger = PushTrigger()
+    /// The sends of the latest polls, one after the other; cancelled by `stop()`.
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
     /// `flockbook-notify`'s door (127.0.0.1, token in `notify.json`), open while push is.
     @ObservationIgnored private var notifyDoor: NotifyEndpoint?
     /// The subscriptions, for Settings (refreshed by the poll and after each change here).
     private(set) var pushList: [PushSubscription] = []
+    /// The subscription file could not be written (a removed phone may come back after a restart until it works).
+    private(set) var pushSaveError: String?
     @ObservationIgnored private var server: HubServer?
     @ObservationIgnored private let pairing: HubPairing
     @ObservationIgnored private var poll: Task<Void, Never>?
@@ -74,7 +78,7 @@ final class RemoteHub {
     init(model: AppModel?, devices: HubDeviceStore, dir: URL?) {
         self.model = model; self.devices = devices; self.dir = dir
         pushes = dir.map { FilePushStore(url: $0.appendingPathComponent("push.json")) } ?? MemoryPushStore()
-        pushList = pushes.all
+        pushList = pushes.all; pushSaveError = pushes.saveError
         pairing = HubPairing(devices: devices)
         deviceList = devices.all
         addresses = HubBind.local()
@@ -168,7 +172,8 @@ final class RemoteHub {
             }
             server = s; running = true; problem = nil
             pushTrigger = PushTrigger()
-            pushCenter = vapid.map { PushCenter(store: pushes, key: $0) }
+            let devices = devices
+            pushCenter = vapid.map { PushCenter(store: pushes, key: $0, known: { id in devices.device(id: id) != nil }) }
             if pushCenter != nil, let dir {
                 let door = NotifyEndpoint { [weak self] n in await self?.pushCenter?.notify(n, kind: .message) ?? 0 }
                 do { _ = try await door.start(file: dir.appendingPathComponent("notify.json")); notifyDoor = door }
@@ -182,7 +187,7 @@ final class RemoteHub {
                     self.connections = s.connectionCount
                     if let o = self.offer, self.pairing.open != o { self.offer = nil; self.pairingEndedByWrongTries = self.pairing.endedByWrongTries }
                     if self.deviceList != self.devices.all { self.deviceList = self.devices.all }
-                    if self.pushList != self.pushes.all { self.pushList = self.pushes.all }
+                    if self.pushList != self.pushes.all || self.pushSaveError != self.pushes.saveError { self.refreshPushes() }
                     self.pushTick()
                 }
             }
@@ -194,7 +199,8 @@ final class RemoteHub {
 
     func stop() {
         poll?.cancel(); poll = nil
-        server?.stop(); server = nil; pushCenter = nil
+        server?.stop(); server = nil
+        pushCenter?.stop(); pushCenter = nil; pushTask?.cancel(); pushTask = nil
         notifyDoor?.stop(); notifyDoor = nil
         running = false; port = nil; connections = 0; servedName = nil; fingerprint = nil
         cancelPairing()
@@ -222,8 +228,14 @@ final class RemoteHub {
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
         let due = events.filter { policy.allows($0.kind, idle: idle, locked: locked) }
-        Task { @MainActor in
-            for e in due { await c.notify(e.notice, kind: e.kind) }
+        let previous = pushTask
+        pushTask = Task { @MainActor [weak self] in
+            await previous?.value
+            for e in due {
+                guard !Task.isCancelled, self?.pushCenter === c else { return }
+                await c.notify(e.notice, kind: e.kind)
+            }
+            guard !Task.isCancelled, self?.pushCenter === c else { return }
             await c.flush()
         }
     }
@@ -232,7 +244,7 @@ final class RemoteHub {
     func sendTestPush(device id: String) async -> String {
         guard let c = pushCenter else { return "Turn on remote access first." }
         let r = await c.test(device: id)
-        pushList = pushes.all
+        refreshPushes()
         switch r {
         case .sent?: return "Sent. Check the phone."
         case .gone?: return "The phone turned notifications off. Turn them on again on the phone."
@@ -241,7 +253,8 @@ final class RemoteHub {
         }
     }
 
-    func removePush(device id: String) { pushes.remove(device: id); pushList = pushes.all }
+    func removePush(device id: String) { pushes.remove(device: id); refreshPushes() }
+    private func refreshPushes() { pushList = pushes.all; pushSaveError = pushes.saveError }
 
     /// `flockbook-notify` next to the app's executable (Contents/MacOS in the bundle, the build folder in development).
     /// Nil: not in this build. Snapshots show a fixed path.
@@ -343,7 +356,7 @@ final class RemoteHub {
     func setLevel(_ level: HubLevel, device id: String) { devices.setLevel(level, device: id); server?.dropRevoked(); deviceList = devices.all }
     /// Removes the device and closes its open connections at once.
     func revoke(device id: String) {
-        devices.revoke(device: id); pushes.remove(device: id); pushList = pushes.all; server?.dropRevoked(); deviceList = devices.all
+        devices.revoke(device: id); pushes.remove(device: id); refreshPushes(); server?.dropRevoked(); deviceList = devices.all
     }
 
     // MARK: Snapshots

@@ -335,6 +335,10 @@ struct PushSheet: View {
                     if hub.pushList.isEmpty {
                         Text("No phone has notifications on. Open Flockbook on the phone and tap Notify me.").foregroundStyle(.secondary)
                     }
+                    if let error = hub.pushSaveError {
+                        Label("\(error). A removed phone may get notifications again after Flockbook restarts.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
                     ForEach(hub.pushList, id: \.device) { s in
                         LabeledContent {
                             HStack {
