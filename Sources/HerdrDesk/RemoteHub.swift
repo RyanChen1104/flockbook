@@ -243,6 +243,16 @@ final class RemoteHub {
 
     func removePush(device id: String) { pushes.remove(device: id); pushList = pushes.all }
 
+    /// `flockbook-notify` next to the app's executable (Contents/MacOS in the bundle, the build folder in development).
+    /// Nil: not in this build. Snapshots show a fixed path.
+    var notifyCommand: String? {
+        if let previewNotifyCommand { return previewNotifyCommand }
+        guard let exe = Bundle.main.executableURL else { return nil }
+        let url = exe.deletingLastPathComponent().appendingPathComponent("flockbook-notify")
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url.path : nil
+    }
+    @ObservationIgnored private var previewNotifyCommand: String?
+
     static func describe(_ e: Error) -> String {
         switch e as? HubServer.StartError {
         case .wildcard?: "Listening on all addresses is not allowed. Pick one address."
@@ -361,6 +371,7 @@ final class RemoteHub {
         if offer { hub.startPairing() }
         hub.pairingEndedByWrongTries = pairStopped
         hub.claudeHook = .preview(claudeHook)
+        hub.previewNotifyCommand = "/Applications/Flockbook.app/Contents/MacOS/flockbook-notify"
         for s in pushes { hub.pushes.add(s) }
         hub.pushList = hub.pushes.all
         return hub

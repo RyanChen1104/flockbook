@@ -19,18 +19,24 @@ SP=(); [ -n "${SCRATCH_PATH:-}" ] && SP=(--scratch-path "$SCRATCH_PATH")
 mkdir -p build
 if [ -z "${ARCHS:-}" ]; then
   swift build -c release --product HerdrDesk ${SP[@]+"${SP[@]}"}
+  swift build -c release --product flockbook-notify ${SP[@]+"${SP[@]}"}
   BIN="$(swift build -c release --show-bin-path ${SP[@]+"${SP[@]}"})"
   EXE="$BIN/HerdrDesk"
+  NOTIFY="$BIN/flockbook-notify"
 else
-  EXES=()
+  EXES=(); NOTIFYS=()
   for a in $ARCHS; do
     swift build -c release --product HerdrDesk --arch "$a" ${SP[@]+"${SP[@]}"}
+    swift build -c release --product flockbook-notify --arch "$a" ${SP[@]+"${SP[@]}"}
     BIN="$(swift build -c release --arch "$a" --show-bin-path ${SP[@]+"${SP[@]}"})"
-    EXES+=("$BIN/HerdrDesk")
+    EXES+=("$BIN/HerdrDesk"); NOTIFYS+=("$BIN/flockbook-notify")
   done
   EXE="build/HerdrDesk-universal"
   lipo -create "${EXES[@]}" -output "$EXE"
   lipo -info "$EXE"
+  NOTIFY="build/flockbook-notify-universal"
+  lipo -create "${NOTIFYS[@]}" -output "$NOTIFY"
+  lipo -info "$NOTIFY"
 fi
 
 APP="${APP:-build/Flockbook.app}"
@@ -38,6 +44,8 @@ BUNDLE_ID="${BUNDLE_ID:-dev.mclee.flockbook}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$EXE" "$APP/Contents/MacOS/HerdrDesk"
+# The agents' command (Settings > Remote access shows its path; nothing changes the owner's PATH).
+cp "$NOTIFY" "$APP/Contents/MacOS/flockbook-notify"
 # Sparkle.framework (universal), found through the rpath @executable_path/../Frameworks (Package.swift).
 ditto "$BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
@@ -126,7 +134,9 @@ codesign --force "${SIGN[@]}" --preserve-metadata=entitlements "$FW/XPCServices/
 codesign --force "${SIGN[@]}" "$FW/Autoupdate"
 codesign --force "${SIGN[@]}" "$FW/Updater.app"
 codesign --force "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force "${SIGN[@]}" --identifier "$BUNDLE_ID.notify" "$APP/Contents/MacOS/flockbook-notify"
 codesign --force "${SIGN[@]}" "$APP"
 echo "signed: ${SIGN_ID:-ad-hoc}${SIGN_ID:+ (hardened runtime)}"
 codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$APP/Contents/MacOS/flockbook-notify"
 echo "built: $APP"

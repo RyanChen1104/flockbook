@@ -65,6 +65,7 @@ extension SnapshotRunner {
         pushOff.revoke(device: "d1")
         step("push: removing a device drops its notifications", pushOff.pushList.isEmpty)
         step("push: done and only-when-away are on by default", on.pushDone && on.pushOnlyAway)
+        step("push: the agents' command path is shown (\(on.notifyCommand ?? "nil"))", on.notifyCommand?.hasSuffix("Contents/MacOS/flockbook-notify") == true)
 
         // The blank guard itself: a one-colour image has no ink, so a blank capture fails.
         let blankCtx = CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8, bytesPerRow: 0,

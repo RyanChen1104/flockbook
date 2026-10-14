@@ -43,6 +43,18 @@ struct RemoteAccessSection: View {
                     Text(hub.pushList.isEmpty ? "No phone has them on. Tap Notify me in Flockbook on the phone."
                                               : "On for \(hub.pushList.count) \(hub.pushList.count == 1 ? "device" : "devices").")
                 }
+                if let command = hub.notifyCommand {
+                    LabeledContent {
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(command, forType: .string)
+                        }
+                    } label: {
+                        Text("Command for agents")
+                        Text(command).font(.caption.monospaced()).textSelection(.enabled)
+                        Text("An agent runs it with a title and a text to notify the phones: flockbook-notify \"Title\" \"Text\"")
+                    }
+                }
                 ClaudeHookRow(setup: hub.claudeHook)
             }
         } header: {
