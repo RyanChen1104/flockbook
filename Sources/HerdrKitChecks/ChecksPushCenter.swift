@@ -46,6 +46,13 @@ import Foundation
           && PushPolicy(doneEnabled: false, onlyWhenAway: false).allows(.needsYou, idle: 0, locked: false), "push policy: done can be turned off")
     check(PushPolicy(doneEnabled: true, onlyWhenAway: true).allows(.message, idle: 0, locked: false), "push policy: an agent's own message always goes")
 
+    // The VAPID subject: the project page, https, never a hub address or a placeholder domain.
+    check(WebPushSender.subject == "https://github.com/minchenlee/flockbook", "push subject: the project page (\(WebPushSender.subject))")
+    let jwt = VAPID.authorization(audience: "https://fcm.googleapis.com", subject: WebPushSender.subject, key: .init(), now: Date())
+    let claims = jwt.split(separator: ",").first.flatMap { $0.split(separator: ".").dropFirst().first }.flatMap { Base64URL.decode(String($0)) }
+    let sub = claims.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["sub"] as? String
+    check(sub == WebPushSender.subject, "push subject: it is the JWT's sub (\(sub ?? "nil"))")
+
     // The center: to every subscription, high urgency for needs you, throttled, a gone endpoint removed.
     let store = MemoryPushStore()
     let p256 = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4", auth = "AAECAwQFBgcICQoLDA0ODw"

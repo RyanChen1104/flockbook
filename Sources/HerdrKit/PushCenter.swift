@@ -76,7 +76,7 @@ public struct PushPolicy: Sendable {
     private var throttle = PushThrottle()
 
     /// The app's center: real sends, only to push services on the allow list (`WebPushSender.send`).
-    public convenience init(store: MemoryPushStore, key: P256.Signing.PrivateKey, subject: String) {
+    public convenience init(store: MemoryPushStore, key: P256.Signing.PrivateKey, subject: String = WebPushSender.subject) {
         self.init(store: store) { await WebPushSender.send($0, to: $1, key: key, subject: subject, urgency: $2) }
     }
     /// Checks: a recording `deliver`.

@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "HerdrKit", targets: ["HerdrKit"]),
         .executable(name: "HerdrDesk", targets: ["HerdrDesk"]),
+        .executable(name: "flockbook-notify", targets: ["flockbook-notify"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.9.0"),
@@ -26,6 +27,7 @@ let package = Package(
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(name: "HerdrKitChecks", dependencies: ["HerdrKit"]),
+        .executableTarget(name: "flockbook-notify", dependencies: ["HerdrKit"]),
         .testTarget(
             name: "HerdrKitTests",
             dependencies: ["HerdrKit"],

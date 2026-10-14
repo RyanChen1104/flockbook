@@ -42,6 +42,9 @@ public enum PushOutcome: Sendable, Hashable {
 
 public enum WebPushSender {
     public enum Urgency: String, Sendable { case normal, high }
+    /// The VAPID contact every push service sees: the project page. Never the hub's own address (that would hand the
+    /// owner's ts.net host name to Google and Apple); a placeholder domain may be refused by Apple.
+    public static let subject = "https://github.com/minchenlee/flockbook"
 
     /// Posts the request and returns its HTTP status (0: no answer).
     public typealias Transport = @Sendable (URLRequest) async -> Int

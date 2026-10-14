@@ -34,6 +34,8 @@ final class RemoteHub {
     /// Sends to the phones while the hub runs with a key; the trigger turns status changes into pushes.
     @ObservationIgnored private var pushCenter: PushCenter?
     @ObservationIgnored private var pushTrigger = PushTrigger()
+    /// `flockbook-notify`'s door (127.0.0.1, token in `notify.json`), open while push is.
+    @ObservationIgnored private var notifyDoor: NotifyEndpoint?
     /// The subscriptions, for Settings (refreshed by the poll and after each change here).
     private(set) var pushList: [PushSubscription] = []
     @ObservationIgnored private var server: HubServer?
@@ -166,7 +168,12 @@ final class RemoteHub {
             }
             server = s; running = true; problem = nil
             pushTrigger = PushTrigger()
-            pushCenter = vapid.map { PushCenter(store: pushes, key: $0, subject: pushSubject) }
+            pushCenter = vapid.map { PushCenter(store: pushes, key: $0) }
+            if pushCenter != nil, let dir {
+                let door = NotifyEndpoint { [weak self] n in await self?.pushCenter?.notify(n, kind: .message) ?? 0 }
+                do { _ = try await door.start(file: dir.appendingPathComponent("notify.json")); notifyDoor = door }
+                catch { remoteLog.error("notify endpoint: \(error.localizedDescription, privacy: .public)") }
+            }
             remoteLog.info("hub on \(self.mode.rawValue, privacy: .public) port \(self.port ?? 0)")
             poll = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -188,6 +195,7 @@ final class RemoteHub {
     func stop() {
         poll?.cancel(); poll = nil
         server?.stop(); server = nil; pushCenter = nil
+        notifyDoor?.stop(); notifyDoor = nil
         running = false; port = nil; connections = 0; servedName = nil; fingerprint = nil
         cancelPairing()
     }
@@ -204,13 +212,6 @@ final class RemoteHub {
         set { withMutation(keyPath: \.pushOnlyAway) { AppDefaults.store.set(newValue, forKey: Self.pushAwayKey) } }
     }
     static let pushDoneKey = "remote.push.done", pushAwayKey = "remote.push.onlyAway"
-
-    /// The VAPID contact the push services see: the hub's page when it has a DNS name (Tailscale), else a placeholder
-    /// (Apple refuses localhost and bare addresses).
-    private var pushSubject: String {
-        if let u = url, let h = URL(string: u)?.host, h.contains(where: \.isLetter), !h.contains(":") { return u }
-        return "mailto:flockbook@example.com"
-    }
 
     /// Every poll: status changes become pushes (needs you, done) when the policy allows; held pushes go out.
     private func pushTick() {
