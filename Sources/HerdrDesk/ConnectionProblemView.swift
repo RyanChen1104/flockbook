@@ -18,18 +18,20 @@ struct ConnectionProblemView: View {
         } actions: {
             VStack(spacing: 12) {
                 if let command = problem.command {
-                    HStack(spacing: 8) {
-                        Text(command).font(.body.monospaced()).textSelection(.enabled)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control))
-                        Button(copied ? "Copied" : "Copy") {
+                    // The whole command, wrapped if long: a cut command cannot be typed.
+                    Text(command).font(.body.monospaced()).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control))
+                }
+                HStack(spacing: 8) {
+                    if let command = problem.command {
+                        Button(copied ? "Copied" : "Copy Command") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(command, forType: .string)
                             copied = true
                         }
                     }
-                }
-                HStack(spacing: 8) {
                     if let link = problem.link { Link("Get herdr", destination: link).buttonStyle(.borderedProminent) }
                     Button(trying ? "Trying…" : "Try Again") {
                         trying = true
@@ -37,6 +39,7 @@ struct ConnectionProblemView: View {
                     }
                     .disabled(trying)
                 }
+                .fixedSize()
             }
         }
     }
