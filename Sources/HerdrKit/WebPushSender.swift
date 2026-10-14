@@ -62,7 +62,9 @@ public enum WebPushSender {
         r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         r.setValue(String(ttl), forHTTPHeaderField: "TTL")
         r.setValue(urgency.rawValue, forHTTPHeaderField: "Urgency")
-        let origin = scheme + "://" + host + (url.port.map { ":\($0)" } ?? "")
+        // The origin (RFC 6454): a default port is left out.
+        let port = url.port.flatMap { (scheme == "https" && $0 == 443) || (scheme == "http" && $0 == 80) ? nil : $0 }
+        let origin = scheme + "://" + host + (port.map { ":\($0)" } ?? "")
         r.setValue(VAPID.authorization(audience: origin, subject: subject, key: key, now: now), forHTTPHeaderField: "Authorization")
         return r
     }
@@ -87,8 +89,15 @@ public enum WebPushSender {
         }
     }
 
+    /// Never follows a redirect: the allow list checked the endpoint, not where a 3xx points. The 3xx is the answer
+    /// (`failed`). Ephemeral: no cookies, no cache.
     public static let urlSession: Transport = { r in
-        guard let (_, resp) = try? await URLSession.shared.data(for: r) else { return 0 }
+        guard let (_, resp) = try? await session.data(for: r) else { return 0 }
         return (resp as? HTTPURLResponse)?.statusCode ?? 0
+    }
+    private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirects(), delegateQueue: nil)
+    private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest) async -> URLRequest? { nil }
     }
 }

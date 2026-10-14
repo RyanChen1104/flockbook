@@ -10,6 +10,8 @@ final class FakePushService: @unchecked Sendable {
     private let lock = NSLock()
     private var _seen: [Seen] = []
     var status = 201
+    /// Sent as `Location` (a redirect) when set.
+    var location: String?
     var seen: [Seen] { lock.withLock { _seen } }
     var port: Int { Int(listener.port?.rawValue ?? 0) }
 
@@ -39,7 +41,8 @@ final class FakePushService: @unchecked Sendable {
                 let body = all[end.upperBound...]
                 if body.count >= need {
                     self.lock.withLock { self._seen.append(Seen(head: head, body: Data(body.prefix(need)))) }
-                    let resp = "HTTP/1.1 \(self.status) X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    let loc = self.location.map { "Location: \($0)\r\n" } ?? ""
+                    let resp = "HTTP/1.1 \(self.status) X\r\n\(loc)Content-Length: 0\r\nConnection: close\r\n\r\n"
                     c.send(content: Data(resp.utf8), completion: .contentProcessed { _ in c.cancel() })
                     return
                 }
@@ -91,4 +94,26 @@ func checksPushSender() async throws {
     check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) == .gone, "push: 404 -> gone")
     svc.status = 429
     check(await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) == .failed(429), "push: 429 -> kept, failed")
+
+    // A redirect is never followed: it would take the POST past the allow list.
+    let elsewhere = try FakePushService()
+    defer { elsewhere.stop() }
+    for code in [301, 302, 307, 308] {
+        svc.status = code; svc.location = "http://127.0.0.1:\(elsewhere.port)/stolen"
+        let r = await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession)
+        check(r == .failed(code) && elsewhere.seen.isEmpty, "push: \(code) redirect -> failed, not followed (\(r), \(elsewhere.seen.count) at the other host)")
+    }
+    svc.location = nil
+
+    // The VAPID audience is the endpoint's origin: a default port is left out.
+    func audience(_ endpoint: String) -> String? {
+        let s = PushSubscription(device: "d", endpoint: endpoint, p256dh: Base64URL.encode(phone.publicKey.x963Representation), auth: Base64URL.encode(auth))
+        guard let a = try? WebPushSender.request(payload, to: s, key: key, subject: "mailto:a@b.c", urgency: .high).value(forHTTPHeaderField: "Authorization"),
+              let part = a.split(separator: ",").first?.split(separator: ".").dropFirst().first,
+              let claims = Base64URL.decode(String(part)) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: claims) as? [String: Any])?["aud"] as? String
+    }
+    check(audience("https://fcm.googleapis.com:443/fcm/send/x") == "https://fcm.googleapis.com", "push: aud leaves out :443 (\(audience("https://fcm.googleapis.com:443/fcm/send/x") ?? "nil"))")
+    check(audience("https://web.push.apple.com/x") == "https://web.push.apple.com", "push: aud without a port")
+    check(audience("http://127.0.0.1:8080/x") == "http://127.0.0.1:8080", "push: aud keeps a port that is not the default")
 }
