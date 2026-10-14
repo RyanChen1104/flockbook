@@ -257,6 +257,45 @@ async function fakeRun() {
     "read: no Allow/Deny, no composer");
   check((await fresh.eval(text)).includes("Read only"), "read: card says read only");
 
+  // Notifications: the hub has a push key, so the list offers them; the worker is /sw.js on this origin. The default
+  // browser context: Chrome has no Push API in the other (incognito) contexts and logs an error there.
+  const np = await page();
+  pages.push(np);
+  await np.goto(origin + "/");
+  await np.eval("localStorage.setItem('flockbook.token', 'input-token')");
+  await np.goto(origin + "/");
+  check(await np.until("document.querySelector('#notify')?.textContent === 'Notify me'") === true, "push: the list offers notifications");
+  const sw = await np.until("navigator.serviceWorker.getRegistration().then(r => r && (r.active ?? r.waiting ?? r.installing)?.scriptURL)", 6000);
+  check(sw === origin + "/sw.js", `push: service worker registered (${sw})`);
+  await np.click("#notify");
+  check(await np.until("document.querySelector('.toast')?.textContent.includes('blocked')") === true && await np.eval("document.querySelector('#notify').textContent") === "Notify me",
+    "push: permission not given -> says so, stays off");
+  await send("Browser.grantPermissions", { permissions: ["notifications"], origin });
+  await np.click("#notify");
+  // The headless shell has no push service: turning on fails there and says so; a browser with one turns on.
+  const pushed = await np.until("(t => t.includes('Notifications on') || t.includes('did not turn on'))(document.querySelector('.toast')?.textContent ?? '') && document.querySelector('.toast').textContent", 8000);
+  check(!!pushed && !await np.eval("document.querySelector('#notify').disabled"), `push: permission given -> tries to subscribe, answers (${pushed})`);
+  // The page's half with a stand-in push service: the browser's subscription goes to the hub, which keeps it (an FCM
+  // endpoint, the RFC 8291 example keys); a second tap turns it off again.
+  await np.eval(`(() => {
+    let sub = null;
+    const key = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), (c) => c.charCodeAt(0)).buffer;
+    PushManager.prototype.getSubscription = async () => sub;
+    PushManager.prototype.subscribe = async (o) => (sub = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/web-test', options: { applicationServerKey: o.applicationServerKey.buffer },
+      toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/send/web-test',
+        keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' } }),
+      unsubscribe: async () => { sub = null; return true; } });
+    window.__sub = () => sub;
+  })()`);
+  await np.eval("document.querySelector('.toast')?.remove()");
+  await np.click("#notify");
+  check(await np.until("document.querySelector('#notify')?.textContent === 'Notifications on'", 6000) === true
+    && (await np.eval("document.querySelector('.toast')?.textContent ?? ''")).startsWith("Notifications on"), "push: subscribed -> the hub keeps it, the button says on");
+  await np.shot("list-notify");
+  await np.click("#notify");
+  check(await np.until("document.querySelector('#notify')?.textContent === 'Notify me' && window.__sub() === null", 6000) === true, "push: tapped again -> off, unsubscribed");
+
   // An unknown token: back to pairing with a reason.
   const gone = await page(await context());
   pages.push(gone);

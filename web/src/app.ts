@@ -53,6 +53,10 @@ const state = {
   attachments: new Map<string, Attachment[]>(),
   /** Upload progress of the message being sent, 0…1; null when none. */
   progress: null as number | null,
+  /** The hub's Web Push key (from `welcome`); null: the hub sends no notifications. */
+  pushKey: null as string | null,
+  /** This device gets notifications; `busy` while turning them on or off. */
+  notify: "off" as "off" | "on" | "busy",
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -153,6 +157,8 @@ function receive(m: HubMessage): void {
       state.welcomed = true;
       state.hub = m.hub;
       state.level = m.level;
+      state.pushKey = m.pushKey ?? null;
+      syncPush();
       break;
     case "snapshot": {
       const before = new Set(blockedPanes(state.workspaces).map((p) => p.id));
@@ -193,6 +199,69 @@ function receive(m: HubMessage): void {
       return;
   }
   render();
+}
+
+// --- Notifications (Web Push). The hub's key comes with `welcome`; the hub binds the subscription to this device.
+// iOS offers push only to a Home Screen app; Safari tabs have no PushManager.
+const pushReady = (): boolean => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const iosTab = (): boolean => /iPhone|iPad|iPod/.test(navigator.userAgent) && !pushReady();
+function worker(): Promise<ServiceWorkerRegistration | null> {
+  return "serviceWorker" in navigator ? navigator.serviceWorker.register("sw.js").catch(() => null) : Promise.resolve(null);
+}
+function keyBytes(b64url: string): Uint8Array<ArrayBuffer> {
+  const s = atob(b64url.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - b64url.length % 4) % 4));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+function subscribeMessage(s: PushSubscription): Record<string, unknown> {
+  const j = s.toJSON();
+  return { type: "pushSubscribe", endpoint: j.endpoint, p256dh: j.keys?.p256dh, auth: j.keys?.auth };
+}
+/** After `welcome`: tells the hub this browser's subscription again (the hub may have lost it), or drops one made
+ *  for another key. */
+async function syncPush(): Promise<void> {
+  const reg = pushReady() ? await worker() : null;
+  const s = await reg?.pushManager.getSubscription().catch(() => null);
+  let on = false;
+  if (s && state.pushKey) {
+    const had = new Uint8Array(s.options.applicationServerKey ?? new ArrayBuffer(0)), want = keyBytes(state.pushKey);
+    if (had.length === want.length && had.every((b, i) => b === want[i])) on = (await request(subscribeMessage(s))).ok;
+    else await s.unsubscribe().catch(() => false);
+  }
+  state.notify = on ? "on" : "off";
+  render();
+}
+async function togglePush(): Promise<void> {
+  if (state.notify === "busy" || !state.pushKey) return;
+  if (iosTab()) { toast("On iPhone, add Flockbook to the Home Screen first. Then turn on notifications there."); return; }
+  if (!pushReady()) { toast("This browser cannot show notifications."); return; }
+  const was = state.notify;
+  state.notify = "busy";
+  render();
+  const reg = await worker();
+  const old = await reg?.pushManager.getSubscription().catch(() => null);
+  if (was === "on") {
+    if (old) { await request({ type: "pushUnsubscribe", endpoint: old.endpoint }); await old.unsubscribe().catch(() => false); }
+    state.notify = "off";
+    toast("Notifications off.");
+    return;
+  }
+  const allowed = await Notification.requestPermission().catch(() => "denied");
+  if (allowed !== "granted" || !reg) {
+    state.notify = "off";
+    toast("Notifications are blocked. Allow them for this site in the browser settings.");
+    return;
+  }
+  try {
+    await navigator.serviceWorker.ready;
+    const s = old ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(state.pushKey) });
+    const r = await request(subscribeMessage(s));
+    if (!r.ok) { await s.unsubscribe().catch(() => false); throw new Error(explain(r.code, r.message)); }
+    state.notify = "on";
+    toast("Notifications on. You hear about agents that need you, even with this page closed.");
+  } catch (e) {
+    state.notify = "off";
+    toast(`Notifications did not turn on. ${e instanceof Error ? e.message : ""}`.trim());
+  }
 }
 
 // --- Navigation: `#pane=<id>` is the conversation; empty is the list.
@@ -350,7 +419,11 @@ function listScreen(): HTMLElement {
   return h("section", { class: "list" },
     // A large title that scrolls away with the list (no bar on top: nothing on this page needs one).
     h("header", { class: "list-head" }, h("h1", {}, "Agents"),
-      h("span", { class: `level ${state.level}` }, state.level === "input" ? "Input on" : "Read only")),
+      h("div", { class: "head-pills" },
+        state.pushKey && (pushReady() || iosTab()) ? h("button", { id: "notify", class: `notify ${state.notify}`, type: "button",
+          disabled: state.notify === "busy", "aria-pressed": state.notify === "on" ? "true" : "false", onclick: togglePush },
+          state.notify === "on" ? "Notifications on" : "Notify me") : null,
+        h("span", { class: `level ${state.level}` }, state.level === "input" ? "Input on" : "Read only"))),
     ...sections);
 }
 
@@ -582,6 +655,7 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
 }
 
 // --- Start.
+if (pushReady()) worker();
 render();
 if (state.token || state.pairSecret) connect();
 follow();

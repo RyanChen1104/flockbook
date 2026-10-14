@@ -31,7 +31,7 @@ export interface Device { id: string; name: string; level: Level }
 
 export type HubMessage =
   | { type: "paired"; token: string; device: Device }
-  | { type: "welcome"; hub: string; hubVersion: string; level: Level; session?: string }
+  | { type: "welcome"; hub: string; hubVersion: string; level: Level; session?: string; pushKey?: string }
   | { type: "reply"; re: string; ok: boolean; error?: HubError }
   | { type: "snapshot"; workspaces: Workspace[] }
   | { type: "status"; pane: string; status: Status }

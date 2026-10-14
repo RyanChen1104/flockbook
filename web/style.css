@@ -101,6 +101,11 @@ button:disabled { opacity: .35; cursor: default; }
 .list-head h1 { margin: 0; font: var(--large-title); }
 .level { font: var(--caption); font-weight: 500; padding: 3px 9px; border-radius: 99px; background: rgba(var(--primary), .1); color: var(--label-2-glass); }
 .level.input { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.head-pills { display: flex; align-items: center; gap: 6px; }
+.notify { font: var(--caption); font-weight: 500; padding: 3px 9px; border-radius: 99px; border: 0; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.notify.on { background: rgba(var(--primary), .1); color: var(--label-2-glass); }
+.notify:disabled { opacity: .5; cursor: default; }
 
 /* Agent list: the Overview's sections and cards (Screens.swift). */
 h2 { font: var(--headline); color: var(--label); margin: 22px 0 8px; display: flex; align-items: center; gap: 9px; }
