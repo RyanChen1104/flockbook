@@ -4,7 +4,9 @@ import SwiftUI
 struct ConversationView: View {
     let items: [ConversationItem]
     let agentName: String
-    var canRespond = false
+    /// The pending call whose card gets Allow / Deny (`ApprovalNotice.CardPlace.conversation`). Any other pending call
+    /// shows a "Running" chip: its id is not the prompt on screen.
+    var liveCard: String? = nil
     /// The card's buttons, with the request the card shows (its prompt id binds the keys).
     var onAllow: (PermissionRequest) -> Void = { _ in }
     var onDeny: (PermissionRequest) -> Void = { _ in }
@@ -309,7 +311,7 @@ struct ConversationView: View {
             ChipGroup(chips: chips)
         case .permissionRequest(let r):
             if r.state == .pending {
-                if canRespond { approval(r) } else { FlowLayout(spacing: 6) { ChipView(chip: ToolChip(symbol: "hourglass", text: "Running \(r.toolName.isEmpty ? "tool" : r.toolName)…")) } }
+                if r.toolUseId == liveCard { approval(r) } else { FlowLayout(spacing: 6) { ChipView(chip: ToolChip(symbol: "hourglass", text: "Running \(r.toolName.isEmpty ? "tool" : r.toolName)…")) } }
             }
         case .status(let s):
             Text(s).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
@@ -320,7 +322,7 @@ struct ConversationView: View {
     }
 
     @ViewBuilder private func approval(_ r: PermissionRequest) -> some View {
-        ApprovalCard(request: r, agentName: agentName, canRespond: canRespond, onAllow: { onAllow(r) }, onDeny: { onDeny(r) }, onOpen: onOpenTerminal)
+        ApprovalCard(request: r, agentName: agentName, canRespond: true, onAllow: { onAllow(r) }, onDeny: { onDeny(r) }, onOpen: onOpenTerminal)
     }
 
     private func markdown(_ s: String) -> AttributedString {

@@ -197,4 +197,42 @@ import Foundation
         check(N.prompt(st(midWord, "touch /work/project/build/output/scrat"), writes: true) == N.screenPrompt(midWord),
               "notice wrap: a log command that is only the first line does not match")
     }
+
+    // P3-15: one card with live buttons per pane, bound to the id the tab's card and the notification use.
+    do {
+        // The older Claude Code layout: the description under the command, no dashed rules. The command read from the
+        // box then holds the description too, and the log's call never matches it.
+        let older = """
+        ────────────────────────────────────────
+         Bash command
+
+           npm run build
+           Build the web app
+
+         Do you want to proceed?
+         ❯ 1. Yes
+           2. No
+
+         Esc to cancel · Tab to amend
+        """
+        let logged = PermissionRequest(title: "Bash", command: "npm run build", toolName: "Bash", toolUseId: "toolu_7")
+        let onScreen = N.screenRequest(older)
+        let card = N.cardRequest(logged: logged, onScreen: onScreen)
+        check(card?.toolUseId == N.screenPrompt(older), "p3-15: older layout -> the card binds the screen id")
+        check(N.cardPlace(pending: logged, card: card) == .composer(card!),
+              "p3-15: the log's call is not the card -> the screen card in the composer, no buttons on the log's call")
+        let now = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_7", screen: older, pendingTool: "Bash", pendingCommand: "npm run build")
+        if case .composer(let r) = N.cardPlace(pending: logged, card: card) {
+            check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: r.toolUseId, now: now, writes: true) == .send(allow: true),
+                  "p3-15: the composer card's id passes the re-check before the keys")
+        }
+        check(N.outcome(actionIdentifier: N.Action.allow.rawValue, boundPrompt: "toolu_7", now: now, writes: true) == .open,
+              "p3-15: the log's id would send nothing (why it gets no buttons)")
+        // Current layout: the log's call is the box -> the card stays in the conversation, bound to the log's id.
+        let current = N.cardRequest(logged: logged, onScreen: N.screenRequest(prompt))
+        check(N.cardPlace(pending: logged, card: current) == .conversation(toolUseId: "toolu_7"), "p3-15: log matches the box -> the conversation card")
+        // No log call (no transcript): the screen card in the composer. No prompt at all: no card.
+        check(N.cardPlace(pending: nil, card: onScreen) == .composer(onScreen!), "p3-15: no log call -> the screen card in the composer")
+        check(N.cardPlace(pending: logged, card: nil) == .none && N.cardPlace(pending: nil, card: nil) == .none, "p3-15: no card -> none")
+    }
 }

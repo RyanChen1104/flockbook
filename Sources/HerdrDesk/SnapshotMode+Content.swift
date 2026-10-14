@@ -316,13 +316,13 @@ import SwiftUI
             ConversationItem(id: "u1", kind: .userText("Can you check the build and tell me which snapshot tests changed? Keep it short, I am on my phone.")),
             ConversationItem(id: "a1", kind: .assistantText(md)),
             ConversationItem(id: "t1", kind: .toolChips([ToolChip(symbol: "doc.text", text: "Read 3 files"), ToolChip(symbol: "terminal", text: "Ran swift build")])),
-            ConversationItem(id: "p1", kind: .permissionRequest(PermissionRequest(title: "orchard-web-dev wants to run a build", command: "xcodebuild -scheme Mobile -destination 'platform=iOS Simulator,name=iPhone 17' build"))),
+            ConversationItem(id: "p1", kind: .permissionRequest(PermissionRequest(title: "orchard-web-dev wants to run a build", command: "xcodebuild -scheme Mobile -destination 'platform=iOS Simulator,name=iPhone 17' build", toolUseId: "toolu_p1"))),
         ]
         for size in [ReadingSize.s, .xl] {
             AppDefaults.store.set(size.rawValue, forKey: ReadingSize.key)
             TableLayoutProbe.rows = [:]; TableLayoutProbe.misfit = []
             let (win, host) = offscreen(ZStack { WindowSurface(glass: .off)
-                ConversationView(items: items, agentName: "orchard-web-dev", canRespond: true, loadState: .ready, hasLog: true) }
+                ConversationView(items: items, agentName: "orchard-web-dev", liveCard: "toolu_p1", loadState: .ready, hasLog: true) }
                 .environment(\.flatGlass, true), NSSize(width: 760, height: 1300))
             try? await Task.sleep(for: .milliseconds(1000))
             capture(win, to: "\(dir)/textsize-\(size.rawValue)-conversation.png")

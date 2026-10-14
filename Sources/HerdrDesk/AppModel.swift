@@ -166,12 +166,33 @@ final class AppModel {
     /// The request the approval card shows and binds its buttons to: the log's pending call when it is the prompt on
     /// screen, else the prompt on screen (`ApprovalNotice.cardRequest`).
     func approvalRequest(_ pane: Pane) -> PermissionRequest? {
+        ApprovalNotice.cardRequest(logged: loggedRequest(pane), onScreen: pane.agent?.status == .blocked ? screenPrompts[pane.id] : nil)
+    }
+
+    /// The log's last permission request, when it is still pending.
+    private func loggedRequest(_ pane: Pane) -> PermissionRequest? {
         let logged = store.conversation(for: pane.agent?.sessionId).reversed().lazy.compactMap { item -> PermissionRequest? in
             if case .permissionRequest(let r) = item.kind { return r }
             return nil
         }.first
-        return ApprovalNotice.cardRequest(logged: logged?.state == .pending ? logged : nil,
-                                          onScreen: pane.agent?.status == .blocked ? screenPrompts[pane.id] : nil)
+        return logged?.state == .pending ? logged : nil
+    }
+
+    /// Where the pane's live approval card stands (`ApprovalNotice.cardPlace`): one card, bound to `approvalRequest`'s
+    /// id, as the tab's card and the notification. Nothing while the prompt is not on screen.
+    func cardPlace(_ pane: Pane) -> ApprovalNotice.CardPlace {
+        guard promptVisible.contains(pane.id) else { return .none }
+        return ApprovalNotice.cardPlace(pending: loggedRequest(pane), card: approvalRequest(pane))
+    }
+    /// The pending call in the conversation that gets Allow / Deny, if the card stands there.
+    func liveCardInConversation(_ pane: Pane) -> String? {
+        if case .conversation(let id) = cardPlace(pane) { return id }
+        return nil
+    }
+    /// The card from the screen in the composer slot, if the card stands there.
+    func cardInComposer(_ pane: Pane) -> PermissionRequest? {
+        if case .composer(let r) = cardPlace(pane) { return r }
+        return nil
     }
 
     /// Allow once = "1" (no Enter), Deny = Escape (verified in a named test session). Only when the prompt is on screen.

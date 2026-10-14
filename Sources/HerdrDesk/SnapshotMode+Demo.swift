@@ -121,6 +121,7 @@ extension SnapshotRunner {
         let deploy = open("Harbor", "deploy")
         let deployPane = deploy?.panes.first?.id ?? ""
         step("approval card: prompt seen on \(deployPane)", await wait(8) { model.promptVisible.contains(deployPane) && model.hasPending(deploy!.panes[0]) })
+        step("approval card: in the conversation, bound to the log's call", deploy.map { model.liveCardInConversation($0.panes[0]) != nil } ?? false)
         await clearIsland("approval")
         save("approval")
 

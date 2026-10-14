@@ -132,6 +132,23 @@ public enum ApprovalNotice {
         return logged
     }
 
+    /// Where the in-app approval card with live buttons stands. One card per pane, bound to `cardRequest`'s id, the same
+    /// id the tab's card and the notification answer.
+    public enum CardPlace: Sendable, Hashable {
+        /// The log's pending call, in the conversation (it is the card's request).
+        case conversation(toolUseId: String)
+        /// The card read from the screen, in the composer slot. The log's call shows no buttons: its id is not the prompt.
+        case composer(PermissionRequest)
+        case none
+    }
+
+    /// `pending`: the log's pending call. `card`: `cardRequest(logged: pending, onScreen:)`.
+    public static func cardPlace(pending: PermissionRequest?, card: PermissionRequest?) -> CardPlace {
+        guard let card else { return .none }
+        if let pending, pending.toolUseId == card.toolUseId { return .conversation(toolUseId: pending.toolUseId) }
+        return .composer(card)
+    }
+
     /// A notification's text.
     public struct Text: Sendable, Hashable {
         public var title: String, subtitle: String, body: String
