@@ -158,7 +158,7 @@ function receive(m: HubMessage): void {
       state.hub = m.hub;
       state.level = m.level;
       state.pushKey = m.pushKey ?? null;
-      syncPush();
+      syncPush(m.pushOn === true);
       break;
     case "snapshot": {
       const before = new Set(blockedPanes(state.workspaces).map((p) => p.id));
@@ -216,16 +216,16 @@ function subscribeMessage(s: PushSubscription): Record<string, unknown> {
   const j = s.toJSON();
   return { type: "pushSubscribe", endpoint: j.endpoint, p256dh: j.keys?.p256dh, auth: j.keys?.auth };
 }
-/** After `welcome`: tells the hub this browser's subscription again (the hub may have lost it), or drops one made
- *  for another key. */
-async function syncPush(): Promise<void> {
+/** After `welcome`: on when this browser's subscription is the one the hub keeps (`pushOn`, same key). Else drops it:
+ *  the owner removed it on the Mac, or the hub has a new key. Never subscribes again by itself. */
+async function syncPush(hubHasOne: boolean): Promise<void> {
   const reg = pushReady() ? await worker() : null;
   const s = await reg?.pushManager.getSubscription().catch(() => null);
   let on = false;
-  if (s && state.pushKey) {
-    const had = new Uint8Array(s.options.applicationServerKey ?? new ArrayBuffer(0)), want = keyBytes(state.pushKey);
-    if (had.length === want.length && had.every((b, i) => b === want[i])) on = (await request(subscribeMessage(s))).ok;
-    else await s.unsubscribe().catch(() => false);
+  if (s) {
+    const had = new Uint8Array(s.options.applicationServerKey ?? new ArrayBuffer(0)), want = state.pushKey ? keyBytes(state.pushKey) : new Uint8Array(0);
+    on = hubHasOne && had.length === want.length && had.every((b, i) => b === want[i]);
+    if (!on && state.pushKey) await s.unsubscribe().catch(() => false);
   }
   state.notify = on ? "on" : "off";
   render();

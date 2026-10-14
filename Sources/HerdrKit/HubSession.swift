@@ -38,6 +38,8 @@ import CryptoKit
     /// Keeps the device's push subscription (one per device). False: refused (invalid, or push is off).
     func pushSubscribe(_ s: PushSubscription) -> Bool
     func pushUnsubscribe(device: String, endpoint: String)
+    /// The device has a subscription.
+    func pushSubscribed(device: String) -> Bool
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -186,7 +188,7 @@ extension Hub {
             helloLevel = d.level
             lastSnapshot = snapshot()
             return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName,
-                                        pushKey: backend.pushKey)),
+                                        pushKey: backend.pushKey, pushOn: backend.pushKey == nil ? nil : backend.pushSubscribed(device: d.id))),
                     .snapshot(lastSnapshot ?? []), ok(m.id)]
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }

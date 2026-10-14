@@ -151,7 +151,7 @@ until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be rep
 | `type` | Fields | When |
 |---|---|---|
 | `paired` | `token`, `device` (`{id, name, level}`) | After a good `pair`. The token is shown only here. |
-| `welcome` | `hub` (name), `hubVersion`, `level` (`read` / `input`), `session?` (herdr session name; absent = default), `pushKey?` (the hub's VAPID public key, base64url; absent = no Web Push on this hub) | After a good `hello`. |
+| `welcome` | `hub` (name), `hubVersion`, `level` (`read` / `input`), `session?` (herdr session name; absent = default), `pushKey?` (the hub's VAPID public key, base64url; absent = no Web Push on this hub), `pushOn?` (with `pushKey`: this device has a subscription; false after the owner removed it on the Mac, so the page drops its own instead of subscribing again) | After a good `hello`. |
 | `reply` | `re`, `ok`, `error?` {`code`, `message`} | Once per client message. |
 | `snapshot` | `workspaces` | After `welcome`, and on every change of workspaces, tabs, panes or agents. Full list each time (it is small). |
 | `status` | `pane`, `status` | An agent's status changed (cheap update between snapshots). |

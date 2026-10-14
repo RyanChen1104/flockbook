@@ -68,6 +68,7 @@ import Foundation
     var pushKey: String? { vapid.map { Base64URL.encode($0.publicKey.x963Representation) } }
     func pushSubscribe(_ s: PushSubscription) -> Bool { vapid != nil && pushes?.add(s) == true }
     func pushUnsubscribe(device: String, endpoint: String) { pushes?.remove(device: device, endpoint: endpoint) }
+    func pushSubscribed(device: String) -> Bool { pushes?.all.contains { $0.device == device } == true }
 
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);
     /// the answers must then cover every question, else nothing is sent. Every key is gated: the agent from the

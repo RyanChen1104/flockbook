@@ -255,8 +255,11 @@ public struct HubWelcome: Codable, Hashable, Sendable {
     public var session: String?
     /// The hub's VAPID public key (base64url) for `PushManager.subscribe`; nil: no Web Push on this hub.
     public var pushKey: String?
-    public init(hub: String, hubVersion: String, level: HubLevel, session: String? = nil, pushKey: String? = nil) {
-        self.hub = hub; self.hubVersion = hubVersion; self.level = level; self.session = session; self.pushKey = pushKey
+    /// With `pushKey`: this device has a subscription on the hub. False after the owner removed it on the Mac (or the
+    /// push service dropped it): the page then drops its own instead of subscribing again.
+    public var pushOn: Bool?
+    public init(hub: String, hubVersion: String, level: HubLevel, session: String? = nil, pushKey: String? = nil, pushOn: Bool? = nil) {
+        self.hub = hub; self.hubVersion = hubVersion; self.level = level; self.session = session; self.pushKey = pushKey; self.pushOn = pushOn
     }
 }
 

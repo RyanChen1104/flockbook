@@ -23,6 +23,7 @@ import Foundation
     let pushes = MemoryPushStore()
     func pushSubscribe(_ s: PushSubscription) -> Bool { pushes.add(s) }
     func pushUnsubscribe(device: String, endpoint: String) { pushes.remove(device: device, endpoint: endpoint) }
+    func pushSubscribed(device: String) -> Bool { pushes.all.contains { $0.device == device } }
 
     func conversation(session: String) -> [ConversationItem] { items[session] ?? [] }
     func hasEarlier(session: String) -> Bool { earlier[session] != nil }

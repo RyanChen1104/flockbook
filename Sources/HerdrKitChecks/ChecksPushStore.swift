@@ -56,10 +56,16 @@ import Foundation
     check(welcome?.pushKey != nil && welcome?.pushKey == b.pushKey, "push hub: welcome carries the push key")
     let sub = await s2.receive(msg(#"{"v":1,"type":"pushSubscribe","id":"p1","endpoint":"\#(fcm)","p256dh":"\#(p256)","auth":"\#(auth)"}"#))
     check(ok(sub) && b.pushes.all.map(\.device) == ["d1"], "push hub: a read-level device subscribes, bound to its device id")
+    func welcomeOf(_ ms: [HubMessage]) -> HubWelcome? { ms.compactMap { if case .welcome(let w) = $0 { w } else { nil } }.first }
+    check(welcome?.pushOn == false, "push hub: welcome says this device has no subscription yet")
+    let again = await HubSession(backend: b, devices: devices).receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok","client":"t","clientVersion":"1"}"#))
+    check(welcomeOf(again)?.pushOn == true, "push hub: the next welcome says it has one (the Mac did not remove it)")
     let bad = await s2.receive(msg(#"{"v":1,"type":"pushSubscribe","id":"p2","endpoint":"https://evil.example/x","p256dh":"\#(p256)","auth":"\#(auth)"}"#))
     check(code(bad) == .badRequest && b.pushes.all.map(\.endpoint) == [fcm], "push hub: an endpoint off the allow list -> badRequest, nothing changed")
     let un = await s2.receive(msg(#"{"v":1,"type":"pushUnsubscribe","id":"p3","endpoint":"\#(fcm)"}"#))
     check(ok(un) && b.pushes.all.isEmpty, "push hub: unsubscribe removes it")
+    let after = await HubSession(backend: b, devices: devices).receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok","client":"t","clientVersion":"1"}"#))
+    check(welcomeOf(after)?.pushOn == false, "push hub: removed -> the next welcome says so (the page drops its own)")
     b.pushKey = nil
     let off = await s2.receive(msg(#"{"v":1,"type":"pushSubscribe","id":"p4","endpoint":"\#(fcm)","p256dh":"\#(p256)","auth":"\#(auth)"}"#))
     check(code(off) == .failed && b.pushes.all.isEmpty, "push hub: no push key -> failed, nothing kept")

@@ -110,6 +110,8 @@ async function page(context) {
       return r.result.value;
     },
     async goto(url) { await send("Page.navigate", { url }, sessionId); },
+    /** Runs `source` in every page this target loads, before the page's own scripts. */
+    async onEveryLoad(source) { await send("Page.addScriptToEvaluateOnNewDocument", { source }, sessionId); },
     /** Waits until `expr` is truthy; returns its value, or undefined after `ms`. */
     async until(expr, ms = 4000) {
       const end = Date.now() + ms;
@@ -277,24 +279,37 @@ async function fakeRun() {
   check(!!pushed && !await np.eval("document.querySelector('#notify').disabled"), `push: permission given -> tries to subscribe, answers (${pushed})`);
   // The page's half with a stand-in push service: the browser's subscription goes to the hub, which keeps it (an FCM
   // endpoint, the RFC 8291 example keys); a second tap turns it off again.
-  await np.eval(`(() => {
-    let sub = null;
-    const key = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), (c) => c.charCodeAt(0)).buffer;
-    PushManager.prototype.getSubscription = async () => sub;
-    PushManager.prototype.subscribe = async (o) => (sub = {
-      endpoint: 'https://fcm.googleapis.com/fcm/send/web-test', options: { applicationServerKey: o.applicationServerKey.buffer },
-      toJSON: () => ({ endpoint: 'https://fcm.googleapis.com/fcm/send/web-test',
-        keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' } }),
-      unsubscribe: async () => { sub = null; return true; } });
-    window.__sub = () => sub;
+  // Kept across reloads (localStorage), as a browser keeps its subscription.
+  await np.onEveryLoad(`(() => {
+    const ep = 'https://fcm.googleapis.com/fcm/send/web-test';
+    const make = (key) => ({ endpoint: ep, options: { applicationServerKey: key },
+      toJSON: () => ({ endpoint: ep, keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' } }),
+      unsubscribe: async () => { localStorage.removeItem('fake-sub'); return true; } });
+    const saved = () => { const k = localStorage.getItem('fake-sub'); return k ? make(Uint8Array.from(JSON.parse(k)).buffer) : null; };
+    PushManager.prototype.getSubscription = async () => saved();
+    PushManager.prototype.subscribe = async (o) => { localStorage.setItem('fake-sub', JSON.stringify([...o.applicationServerKey])); return saved(); };
+    window.__sub = () => localStorage.getItem('fake-sub');
   })()`);
+  await np.goto(origin + "/");
+  check(await np.until("document.querySelector('#notify')?.textContent === 'Notify me'") === true, "push: reloaded, still off");
   await np.eval("document.querySelector('.toast')?.remove()");
   await np.click("#notify");
   check(await np.until("document.querySelector('#notify')?.textContent === 'Notifications on'", 6000) === true
     && (await np.eval("document.querySelector('.toast')?.textContent ?? ''")).startsWith("Notifications on"), "push: subscribed -> the hub keeps it, the button says on");
   await np.shot("list-notify");
+  // `__old` marks the page before a reload, so a check never passes on the old page.
+  await np.eval("window.__old = true");
+  await np.goto(origin + "/");
+  check(await np.until("!window.__old && document.querySelector('#notify')?.textContent === 'Notifications on'", 6000) === true, "push: reloaded -> the hub still has it (welcome pushOn), on");
   await np.click("#notify");
   check(await np.until("document.querySelector('#notify')?.textContent === 'Notify me' && window.__sub() === null", 6000) === true, "push: tapped again -> off, unsubscribed");
+  // The hub no longer has it (as after Remove on the Mac) but the browser still does: the page drops its own.
+  const hubKey = [...Buffer.from("BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8", "base64url")];
+  await np.eval(`localStorage.setItem('fake-sub', ${JSON.stringify(JSON.stringify(hubKey))})`);
+  await np.eval("window.__old = true");
+  await np.goto(origin + "/");
+  check(await np.until("!window.__old && !!document.querySelector('#notify') && window.__sub() === null", 6000) === true
+    && await np.eval("document.querySelector('#notify').textContent") === "Notify me", "push: the hub does not have it (removed on the Mac) -> the page drops its own, off");
 
   // An unknown token: back to pairing with a reason.
   const gone = await page(await context());
