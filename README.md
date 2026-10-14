@@ -6,6 +6,8 @@ Flockbook is a native macOS reading view for your [Herdr](https://herdr.dev) age
 
 Your agents' conversations are already in the terminal. Flockbook shows the same conversation in a layout that is easier to read.
 
+**Built with AI.** AI coding agents write Flockbook: Claude Code writes the code and Codex reviews it. A human sets the direction, tests the app, and reviews every change. See [How this was built](#how-this-was-built).
+
 **[Download for macOS](https://github.com/minchenlee/flockbook/releases/latest)** · [Website](https://flockbook.mclee.dev) · Requires macOS 26 or later.
 
 ## Features
@@ -134,6 +136,24 @@ The Rust code in `xplat/` is an early port of Flockbook to Linux and Windows, bu
 ## Privacy
 
 Flockbook runs locally. It reads agent session logs on your Mac (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.pi/agent/sessions/`) and talks to Herdr through its local socket. It sends nothing over the network and has no telemetry.
+
+## How this was built
+
+Flockbook was developed with extensive help from AI: [Claude Code](https://claude.com/claude-code) (Anthropic) writes most of the code, and Codex (OpenAI) reviews the changes. The repository is open; read the code and judge it on its merits.
+
+<details>
+<summary>About the process</summary>
+
+My role is direction, not authorship:
+
+- Product direction: deciding what to build and why
+- Testing: using the app every day, finding bugs, checking that features behave
+- Review: reading the changes before they land, with an AI review on top for security and correctness
+- Measurement: hang and performance fixes are checked with real samples and timings on my own Mac
+
+I'm disclosing this because it's true and because the code should stand on its own. If something is wrong, [open an issue](https://github.com/minchenlee/flockbook/issues).
+
+</details>
 
 ## License
 
