@@ -187,6 +187,7 @@ final class RemoteHub {
                     self.connections = s.connectionCount
                     if let o = self.offer, self.pairing.open != o { self.offer = nil; self.pairingEndedByWrongTries = self.pairing.endedByWrongTries }
                     if self.deviceList != self.devices.all { self.deviceList = self.devices.all }
+                    self.pushes.retrySave()   // a removal whose save failed: try again until the file has it
                     if self.pushList != self.pushes.all || self.pushSaveError != self.pushes.saveError { self.refreshPushes() }
                     self.pushTick()
                 }

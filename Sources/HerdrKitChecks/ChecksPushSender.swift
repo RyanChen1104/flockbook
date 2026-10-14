@@ -12,6 +12,8 @@ final class FakePushService: @unchecked Sendable {
     var status = 201
     /// Sent as `Location` (a redirect) when set.
     var location: String?
+    /// Seconds before the answer.
+    var delay: Double = 0
     var seen: [Seen] { lock.withLock { _seen } }
     var port: Int { Int(listener.port?.rawValue ?? 0) }
 
@@ -43,7 +45,9 @@ final class FakePushService: @unchecked Sendable {
                     self.lock.withLock { self._seen.append(Seen(head: head, body: Data(body.prefix(need)))) }
                     let loc = self.location.map { "Location: \($0)\r\n" } ?? ""
                     let resp = "HTTP/1.1 \(self.status) X\r\n\(loc)Content-Length: 0\r\nConnection: close\r\n\r\n"
-                    c.send(content: Data(resp.utf8), completion: .contentProcessed { _ in c.cancel() })
+                    DispatchQueue.global().asyncAfter(deadline: .now() + self.delay) {
+                        c.send(content: Data(resp.utf8), completion: .contentProcessed { _ in c.cancel() })
+                    }
                     return
                 }
             }
@@ -104,6 +108,24 @@ func checksPushSender() async throws {
         check(r == .failed(code) && elsewhere.seen.isEmpty, "push: \(code) redirect -> failed, not followed (\(r), \(elsewhere.seen.count) at the other host)")
     }
     svc.location = nil
+
+    // Cancelled: a request already sent is dropped at once; a task cancelled before sending sends nothing.
+    svc.status = 201; svc.delay = 5
+    let t0 = Date()
+    let slow = Task { await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession) }
+    try? await Task.sleep(for: .milliseconds(400))
+    slow.cancel()
+    let slowOut = await slow.value
+    check(slowOut == .failed(0) && Date().timeIntervalSince(t0) < 2, "push: cancel -> the URLSession request stops (\(slowOut), \(Int(Date().timeIntervalSince(t0) * 1000)) ms)")
+    svc.delay = 0
+    let before = svc.seen.count
+    let early = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return await WebPushSender.send(payload, to: sub, key: key, subject: "mailto:a@b.c", urgency: .high, unchecked: WebPushSender.urlSession)
+    }
+    let earlyOut = await early.value
+    try? await Task.sleep(for: .milliseconds(200))
+    check(earlyOut == .failed(0) && svc.seen.count == before, "push: cancelled before sending -> no request (\(svc.seen.count - before))")
 
     // The VAPID audience is the endpoint's origin: a default port is left out.
     func audience(_ endpoint: String) -> String? {

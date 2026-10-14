@@ -106,15 +106,32 @@ public struct PushPolicy: Sendable {
     /// reached the file).
     private let known: @MainActor (String) -> Bool
     private var stopped = false
-    /// Remote access off: nothing more is sent, also from a notify already waiting on the network.
-    public func stop() { stopped = true }
+    /// Sends running now (poll, `flockbook-notify`, Send Test), by id: cancels each one's task.
+    private var inFlight: [UUID: @Sendable () -> Void] = [:]
+    /// Remote access off: nothing more is sent. Sends running now are cancelled, with their network requests.
+    public func stop() {
+        stopped = true
+        inFlight.values.forEach { $0() }
+        inFlight = [:]
+    }
+
+    /// Runs `work` as its own task that `stop()` (or the caller's cancel) cancels. `fallback` once stopped.
+    private func managed<T: Sendable>(_ fallback: T, _ work: @escaping @MainActor () async -> T) async -> T {
+        guard !stopped else { return fallback }
+        let id = UUID()
+        let t = Task { @MainActor in await work() }
+        inFlight[id] = { t.cancel() }
+        defer { inFlight[id] = nil }
+        return await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }
+    }
 
     /// Throttled. Returns the number of phones it reached.
     @discardableResult public func notify(_ n: PushNotice, kind: PushThrottle.Kind, now: Date = Date()) async -> Int {
         guard !stopped, case .send(let more) = throttle.decide(agent: n.pane ?? n.tag ?? n.title, kind: kind, now: now) else { return 0 }
         var n = n
         if more > 0 { n = PushNotice(title: n.title, body: n.body.isEmpty ? "+\(more) more" : "\(n.body) · +\(more) more", tag: n.tag, pane: n.pane) }
-        return await send(n, urgency: kind == .needsYou ? .high : .normal, to: store.all).filter { $0 == .sent }.count
+        let urgency: WebPushSender.Urgency = kind == .needsYou ? .high : .normal
+        return await managed(0) { await self.send(n, urgency: urgency, to: self.store.all).filter { $0 == .sent }.count }
     }
 
     /// Held pushes, once the minute has room: one "N more" push. Returns the phones reached.
@@ -123,26 +140,29 @@ public struct PushPolicy: Sendable {
         let held = throttle.flush(now: now)
         guard held > 0 else { return 0 }
         let n = PushNotice(title: "Flockbook", body: "\(held) more agent updates. Open Flockbook to see them.", tag: "more", pane: nil)
-        return await send(n, urgency: .normal, to: store.all).filter { $0 == .sent }.count
+        return await managed(0) { await self.send(n, urgency: .normal, to: self.store.all).filter { $0 == .sent }.count }
     }
 
     /// Settings > Send Test Notification: not throttled. Nil: the device has no subscription.
     public func test(device: String) async -> PushOutcome? {
         guard !stopped, let s = store.all.first(where: { $0.device == device }) else { return nil }
         let n = PushNotice(title: "Flockbook", body: "Test notification. Agents that need you will show up like this.", tag: "test", pane: nil)
-        return await send(n, urgency: .normal, to: [s]).first
+        return await managed(PushOutcome.failed(0)) { await self.send(n, urgency: .normal, to: [s]).first ?? .failed(0) }
     }
 
     private func send(_ n: PushNotice, urgency: WebPushSender.Urgency, to subs: [PushSubscription]) async -> [PushOutcome] {
         let subs = subs.filter { s in
+            if store.pendingRemoval.contains(s.endpoint) { return false }
             if known(s.device) { return true }
             store.remove(device: s.device)
             return false
         }
-        guard !stopped, !subs.isEmpty else { return [] }
+        guard !stopped, !Task.isCancelled, !subs.isEmpty else { return [] }
         let payload = n.payload, deliver = deliver
         let results = await withTaskGroup(of: (String, PushOutcome).self) { g in
-            for s in subs { g.addTask { (s.endpoint, await deliver(payload, s, urgency)) } }
+            for s in subs {
+                g.addTask { (s.endpoint, Task.isCancelled ? .failed(0) : await deliver(payload, s, urgency)) }
+            }
             var out: [(String, PushOutcome)] = []
             for await r in g { out.append(r) }
             return out

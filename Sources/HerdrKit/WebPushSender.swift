@@ -80,8 +80,10 @@ public enum WebPushSender {
     /// the local fake push service. App code cannot call it.
     static func send(_ payload: Data, to s: PushSubscription, key: P256.Signing.PrivateKey, subject: String,
                      urgency: Urgency, unchecked transport: Transport) async -> PushOutcome {
-        guard let r = try? request(payload, to: s, key: key, subject: subject, urgency: urgency) else { return .failed(0) }
+        // Cancelled (Remote access off): no request; one already sent is dropped (URLSession follows the task's cancel).
+        guard !Task.isCancelled, let r = try? request(payload, to: s, key: key, subject: subject, urgency: urgency) else { return .failed(0) }
         let status = await transport(r)
+        guard !Task.isCancelled else { return .failed(0) }
         switch status {
         case 200..<300: return .sent
         case 404, 410: return .gone

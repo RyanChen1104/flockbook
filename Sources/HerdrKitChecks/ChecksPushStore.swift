@@ -48,6 +48,26 @@ import Foundation
           "push store: a failed save -> not added, reported (\(stuck.saveError ?? "nil"))")
     stuck.load([PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth)])
     check(!stuck.remove(device: "d1") && stuck.all.isEmpty && stuck.saveError != nil, "push store: a failed save on remove -> gone in memory, reported")
+
+    // A removal that did not reach the file is kept as pending and saved again until it does.
+    let flakyDir = dir.appending(path: "flaky")
+    let flakyURL = flakyDir.appending(path: "push.json")
+    let flaky = FilePushStore(url: flakyURL)
+    flaky.add(PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth))
+    chmod(flakyDir.path, 0o500)   // the folder takes no new file: the save fails
+    check(!flaky.remove(device: "d1") && flaky.pendingRemoval == [fcm], "push store: failed remove -> pending removal (\(flaky.pendingRemoval))")
+    check(FilePushStore(url: flakyURL).all.map(\.device) == ["d1"], "push store: (the file still has it: a restart now would bring it back)")
+    check(!flaky.remove(device: "d1") && flaky.saveError != nil, "push store: remove again while pending -> saves again, still reports the failure")
+    check(!flaky.retrySave(), "push store: retry while the disk refuses -> false")
+    chmod(flakyDir.path, 0o700)
+    check(flaky.retrySave() && flaky.pendingRemoval.isEmpty && flaky.saveError == nil, "push store: retry once the disk works -> saved, nothing pending")
+    check(FilePushStore(url: flakyURL).all.isEmpty, "push store: the file no longer has it")
+    chmod(flakyDir.path, 0o500)
+    flaky.load([PushSubscription(device: "d2", endpoint: fcm + "x", p256dh: p256, auth: auth)])
+    _ = flaky.remove(device: "d2")
+    chmod(flakyDir.path, 0o700)
+    check(flaky.remove(device: "d2") && flaky.pendingRemoval.isEmpty, "push store: remove again once the disk works -> saved, true")
+    check(flaky.retrySave(), "push store: retry with nothing pending -> true")
     check(store.saveError == nil, "push store: no error when saves work")
 
     // Over the protocol: welcome carries the key, subscribe binds to the device, a bad endpoint is refused.

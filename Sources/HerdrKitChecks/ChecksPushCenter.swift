@@ -106,6 +106,52 @@ import Foundation
     check(afterStop == 0 && testAfterStop == nil && log2.sent.isEmpty,
           "push center: stopped -> sends nothing")
 
+    // Stop while sending: the requests in flight are cancelled, nothing after them starts; also a Send Test.
+    final class Flight: @unchecked Sendable { var started = 0; var finished = 0 }
+    let f = Flight()
+    let store3 = MemoryPushStore()
+    store3.add(PushSubscription(device: "d1", endpoint: "https://fcm.googleapis.com/fcm/send/f1", p256dh: p256, auth: auth))
+    store3.add(PushSubscription(device: "d2", endpoint: "https://fcm.googleapis.com/fcm/send/f2", p256dh: p256, auth: auth))
+    func slowCenter() -> PushCenter {
+        PushCenter(store: store3) { _, _, _ in
+            await MainActor.run { f.started += 1 }
+            try? await Task.sleep(for: .seconds(3))
+            if Task.isCancelled { return .failed(0) }
+            await MainActor.run { f.finished += 1 }
+            return .sent
+        }
+    }
+    let c3 = slowCenter()
+    let t0 = Date()
+    let run = Task { @MainActor in
+        let a = await c3.notify(PushNotice(title: "a", body: "", tag: nil, pane: "a"), kind: .message, now: now)
+        let b = await c3.notify(PushNotice(title: "b", body: "", tag: nil, pane: "b"), kind: .message, now: now)
+        return [a, b]
+    }
+    try? await Task.sleep(for: .milliseconds(300))
+    check(f.started == 2, "push center: two requests in flight (\(f.started))")
+    c3.stop()
+    let ab = await run.value
+    check(ab == [0, 0] && f.started == 2 && f.finished == 0 && Date().timeIntervalSince(t0) < 2,
+          "push center: stop mid-send -> in-flight cancelled, the next notice never starts (\(ab), \(f.started) started, \(f.finished) finished)")
+    let c4 = slowCenter()
+    f.started = 0
+    let t1 = Date()
+    let testRun = Task { @MainActor in await c4.test(device: "d1") }
+    try? await Task.sleep(for: .milliseconds(300))
+    c4.stop()
+    let tr = await testRun.value
+    check(tr != .sent && f.started == 1 && f.finished == 0 && Date().timeIntervalSince(t1) < 2, "push center: stop during Send Test -> cancelled (\(String(describing: tr)))")
+    // A caller's cancel (the poll task) reaches the send too.
+    let c5 = slowCenter()
+    f.started = 0
+    let t2 = Date()
+    let pollRun = Task { @MainActor in await c5.notify(PushNotice(title: "p", body: "", tag: nil, pane: "p"), kind: .message, now: now) }
+    try? await Task.sleep(for: .milliseconds(300))
+    pollRun.cancel()
+    let pr = await pollRun.value
+    check(pr == 0 && f.finished == 0 && Date().timeIntervalSince(t2) < 2, "push center: the caller cancelled -> the send is cancelled (\(pr))")
+
     // Over the minute: held, then one "more" push.
     for i in 0..<10 { _ = await c.notify(PushNotice(title: "m\(i)", body: "", tag: "m\(i)", pane: nil), kind: .message, now: now.addingTimeInterval(20)) }
     log.sent = []

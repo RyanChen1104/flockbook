@@ -5,7 +5,6 @@ import Foundation
 @MainActor public class MemoryPushStore {
     public private(set) var all: [PushSubscription] = []
     public init() {}
-    /// Replaces the device's subscription. False: not a valid subscription (`PushSubscription.isValid`), nothing kept.
     /// The last save that failed (nil: saved). Shown in Settings.
     public internal(set) var saveError: String?
     /// Replaces the device's subscription. False: not valid, or not saved; nothing kept.
@@ -14,20 +13,36 @@ import Foundation
         let before = all
         all.removeAll { $0.device == s.device || $0.endpoint == s.endpoint }
         all.append(s)
-        guard changed() else { all = before; return false }
+        let pending = pendingRemoval
+        pendingRemoval.remove(s.endpoint)
+        guard changed() else { all = before; pendingRemoval = pending; return false }
+        pendingRemoval = []   // the file now matches memory
         return true
     }
-    /// Gone from memory at once (nothing more is sent to it). False: the file still holds it (`saveError`).
+    /// Gone from memory at once (nothing more is sent to it). False: the file still holds it (`saveError`); it stays in
+    /// `pendingRemoval` and every later save tries again (`retrySave`). Removing it again saves again.
     @discardableResult public func remove(device: String, endpoint: String? = nil) -> Bool {
-        let before = all.count
-        all.removeAll { $0.device == device && (endpoint == nil || $0.endpoint == endpoint) }
-        return all.count == before || changed()
+        remove { $0.device == device && (endpoint == nil || $0.endpoint == endpoint) }
     }
     /// After a 404 / 410 from the push service.
     @discardableResult public func remove(endpoint: String) -> Bool {
-        let before = all.count
-        all.removeAll { $0.endpoint == endpoint }
-        return all.count == before || changed()
+        remove { $0.endpoint == endpoint }
+    }
+    private func remove(where gone: (PushSubscription) -> Bool) -> Bool {
+        let removed = all.filter(gone)
+        all.removeAll(where: gone)
+        pendingRemoval.formUnion(removed.map(\.endpoint))
+        return retrySave()
+    }
+    /// Endpoints removed here but still in the file (its save failed). Never sent to. Lost if the app quits before a
+    /// save works: the file brings them back on the next start.
+    public private(set) var pendingRemoval: Set<String> = []
+    /// Saves again when a removal is pending or the last save failed (the hub's poll calls it). True: the file matches.
+    @discardableResult public func retrySave() -> Bool {
+        guard !pendingRemoval.isEmpty || saveError != nil else { return true }
+        guard changed() else { return false }
+        pendingRemoval = []
+        return true
     }
     func load(_ subs: [PushSubscription]) { all = subs }
     /// Saves; false when that failed.
