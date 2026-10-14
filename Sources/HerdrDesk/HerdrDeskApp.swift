@@ -481,12 +481,16 @@ struct DetailView: View {
 
     var body: some View {
         Group {
-            switch model.screen {
-            case .tab: TabScreen()
-            case .inbox: InboxView()
-            case .overview: OverviewView()
-            case .search: SearchView()
-            case .settings: SettingsPage()
+            if model.screen != .settings, !model.store.connected, model.store.workspaces.isEmpty, let problem = model.store.problem {
+                ConnectionProblemView(problem: problem) { await model.store.refresh() }
+            } else {
+                switch model.screen {
+                case .tab: TabScreen()
+                case .inbox: InboxView()
+                case .overview: OverviewView()
+                case .search: SearchView()
+                case .settings: SettingsPage()
+                }
             }
         }
         // The window's surface again: the split view's detail column paints its own system background over the window's.

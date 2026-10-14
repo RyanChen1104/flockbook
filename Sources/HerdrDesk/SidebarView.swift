@@ -109,7 +109,7 @@ struct SidebarView: View {
 
     /// Connected / Reconnecting… (stale data, with last update time) / Connecting… (no data yet).
     private var connectionText: String {
-        guard !model.store.workspaces.isEmpty else { return "Connecting…" }
+        guard !model.store.workspaces.isEmpty else { return model.store.problem?.short ?? "Connecting…" }
         guard let t = model.lastUpdate else { return "Reconnecting…" }
         return "Reconnecting… · updated \(t.formatted(date: .omitted, time: .standard))"
     }

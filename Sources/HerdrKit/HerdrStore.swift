@@ -7,6 +7,9 @@ public final class HerdrStore {
     public let client: HerdrClient
     public private(set) var workspaces: [Workspace] = []
     public private(set) var connected = false
+    /// Why the last snapshot failed, with the next step (`ConnectionCheck`). Nil while connected, or when the socket
+    /// accepts but the request fails.
+    public private(set) var problem: ConnectionProblem?
     @ObservationIgnored var isPreview = false
     @ObservationIgnored var fuzzState: UInt64 = 0
     @ObservationIgnored var fuzzCounter = 0
@@ -131,10 +134,14 @@ public final class HerdrStore {
         do {
             let raw = try await client.snapshot()
             connected = true
+            if problem != nil { problem = nil }
             applySnapshot(raw)
             resolveMissing(raw)
         } catch {
             connected = false
+            let session = session
+            let found = await Task.detached { ConnectionCheck.diagnose(session: session) }.value
+            if found != problem, !connected { problem = found }
         }
     }
 
