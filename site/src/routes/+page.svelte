@@ -55,6 +55,7 @@
 			{/if}
 		</div>
 		<p class="req">macOS 26 · Herdr</p>
+		<p class="ai">Built with AI (Claude Code and Codex). A human sets the direction, tests, and reviews. <a href="https://github.com/minchenlee/flockbook#how-this-was-built">How it was built</a></p>
 	</section>
 
 	<section id="features" class="carousel" aria-roledescription="carousel" aria-label="Features">
@@ -254,6 +255,16 @@
 		letter-spacing: -0.03em;
 		font-weight: 700;
 		margin: 0 0 16px;
+	}
+	.ai {
+		font-size: 14px;
+		color: var(--fg-2);
+		margin: 12px 0 0;
+		max-width: 44ch;
+	}
+	.ai a {
+		color: inherit;
+		text-decoration: underline;
 	}
 	.pitch {
 		font-size: clamp(19px, 2.6vw, 24px);
