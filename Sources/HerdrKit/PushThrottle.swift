@@ -2,6 +2,7 @@ import Foundation
 
 /// How often the Mac pushes to phones. One kind per agent at most once in `perAgent` (2 min); all kinds together at
 /// most `perMinute` (6) in any 60 s. Over that, messages are held and counted; `flush` later sends one "N more" message.
+/// Needs-you (an approval) is never held: only the per-agent limit applies to it.
 public struct PushThrottle: Sendable {
     public enum Kind: String, Sendable, Hashable, Codable { case needsYou, done, message }
     public enum Decision: Sendable, Hashable {
@@ -24,6 +25,14 @@ public struct PushThrottle: Sendable {
     public mutating func decide(agent: String, kind: Kind, now: Date) -> Decision {
         let key = kind.rawValue + "\u{0}" + agent
         if let last = lastByKey[key], now.timeIntervalSince(last) < perAgent { return .repeated }
+        // An agent waiting for approval always goes (once per agent in `perAgent`): folded into "+N more" its name
+        // would never reach the phone. It still counts toward the minute; held messages wait for the next other push.
+        if kind == .needsYou {
+            _ = hasRoom(now)
+            lastByKey[key] = now
+            sent.append(now)
+            return .send(more: 0)
+        }
         guard hasRoom(now) else { held += 1; return .held }
         lastByKey[key] = now
         sent.append(now)
