@@ -16,8 +16,8 @@ func checksConversationWindow() async throws {
     check(w.range(ids) == 800..<950 && w.detached && w.endId == "r949", "window: past 150 rows the newest go (\(w.range(ids)), end \(w.endId ?? "nil"))")
     let more = ids + (1000..<1010).map { "r\($0)" }
     check(w.range(more) == 800..<950, "window: a detached window holds its rows while new rows arrive (\(w.range(more)))")
-    let trimmed = Array(ids.dropFirst(750))
-    check(w.range(trimmed) == 50..<200, "window: the front trimmed under the window (\(w.range(trimmed)))")
+    let trimmed = Array(ids.dropFirst(850))
+    check(w.range(trimmed) == 0..<100, "window: the front trimmed into the window (\(w.range(trimmed)))")
     for _ in 0..<10 { w.showEarlier(ids) }
     check(w.range(ids) == 0..<150 && w.detached, "window: Show earlier stops at the first row (\(w.range(ids)))")
     w.jumpToLatest()
