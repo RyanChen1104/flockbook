@@ -42,5 +42,7 @@ struct ConnectionProblemView: View {
                 .fixedSize()
             }
         }
+        // The whole detail column, as the other screens: alone, the view only takes its text's width.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
