@@ -113,7 +113,7 @@ struct ConversationView: View {
 
     private var list: some View {
         ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     let ids = items.map(\.id)
                     let range = window.range(ids)
                     if range.lowerBound > 0 || (onLoadEarlier != nil && moreEarlier) {

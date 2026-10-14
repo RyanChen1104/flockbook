@@ -34,10 +34,13 @@ extension ContentTests {
         let all = ChurnData.items(3000)
         let holder = ChurnHolder(items: Array(all.prefix(2800)))
         let size = NSSize(width: 1100, height: 760)
+        let opened = Date()
         let host = NSHostingView(rootView: ChurnView(holder: holder))
         host.frame = NSRect(origin: .zero, size: size)
         let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
+        print("churn-test: first view: laid out and drawn in \(Int(Date().timeIntervalSince(opened) * 1000)) ms (\(ConversationView.page) rows)")
         try? await Task.sleep(for: .seconds(1))
 
         // Selectable text: SwiftUI puts an AppKit overlay on each selectable Text and re-sets its font on every update,
@@ -80,7 +83,7 @@ extension ContentTests {
         }
         guard let sv = scrollView() else { step("scroll view found", false); exit(1) }
         // A text view never scrolls the conversation itself. When SwiftUI resizes a text view, NSTextView's setFrameSize
-        // asks the enclosing scroll view to show a rect of it (scrollToVisible). SwiftUI does not see that scroll: the lazy
+        // asks the enclosing scroll view to show a rect of it (scrollToVisible). SwiftUI does not see that scroll: a lazy
         // stack can keep the rows of the old range and leave the viewport blank until the next change.
         let clip = sv.contentView.bounds
         if let tv = Self.all(MessageTextView.self, in: host).last, clip.minY > 2000 {
@@ -220,7 +223,7 @@ extension ContentTests {
         await settle("burst")
 
         // 7. The row window: Show earlier past the cap drops the newest rows and offers Jump to latest, which goes back.
-        // The lazy stack builds only rows near the viewport: the top for Show earlier, the bottom for Jump to latest.
+        // Scrolled to the top for Show earlier, to the bottom for Jump to latest.
         func scroll(top: Bool) async {
             let doc = sv.documentView?.frame.height ?? 0
             let y = top ? -sv.contentInsets.top : doc + sv.contentInsets.bottom - sv.contentView.bounds.height

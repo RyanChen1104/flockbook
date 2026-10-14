@@ -1,11 +1,11 @@
 import Foundation
 
 /// Which rows of a conversation the reader shows: at most `maxRows`, ending at the newest row or, after "Show earlier"
-/// went past `maxRows`, at an older row (`endId`). A lazy stack lays out every row above the viewport again on a width
-/// or size change, so the row count bounds that cost.
+/// went past `maxRows`, at an older row (`endId`). The stack is not lazy (a lazy stack's estimates left the viewport
+/// blank and could re-measure without end): it lays out every row on a change, so the row count bounds that cost.
 public struct ConversationWindow: Equatable, Sendable {
     public static let page = 100
-    public static let maxRows = 400
+    public static let maxRows = 150
     /// Rows in the window (fewer when the log has fewer).
     public var shown: Int
     /// The last row shown. nil: the newest row (the window follows new rows).
