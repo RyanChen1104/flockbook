@@ -92,6 +92,7 @@ try await checksUpdater()
 try await checksLaunchGuard()
 try await checksConversationWindow()
 try await checksFirstRun()
+try await checksWebPush()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")
 exit(failures == 0 ? 0 : 1)
