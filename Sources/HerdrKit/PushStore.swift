@@ -17,6 +17,7 @@ import Foundation
         pendingRemoval.remove(s.endpoint)
         guard changed() else { all = before; pendingRemoval = pending; return false }
         pendingRemoval = []   // the file now matches memory
+        endRetry()
         return true
     }
     /// Gone from memory at once (nothing more is sent to it). False: the file still holds it (`saveError`); it stays in
@@ -40,10 +41,10 @@ import Foundation
     /// Saves again when a removal is pending or the last save failed. True: the file matches. While a removal is
     /// pending, the store's own timer calls it every `retryEvery` (with or without the hub running).
     @discardableResult public func retrySave() -> Bool {
-        guard !pendingRemoval.isEmpty || saveError != nil else { return true }
+        guard !pendingRemoval.isEmpty || saveError != nil else { endRetry(); return true }
         guard changed() else { scheduleRetry(); return false }
         pendingRemoval = []
-        retryTask?.cancel(); retryTask = nil
+        endRetry()
         return true
     }
     /// The retry timer is on (a removal is pending).
@@ -52,10 +53,14 @@ import Foundation
     public var onRetry: (@MainActor () -> Void)?
     var retryEvery: Duration = .seconds(2)
     private var retryTask: Task<Void, Never>?
+    private var retryID = UUID()
     private func scheduleRetry() {
         guard retryTask == nil, !pendingRemoval.isEmpty else { return }
-        let every = retryEvery
+        let every = retryEvery, id = UUID()
+        retryID = id
         retryTask = Task { @MainActor [weak self] in
+            // However the timer ends, it is cleared (unless a newer one replaced it), so the next failure starts one.
+            defer { if let self, self.retryID == id { self.retryTask = nil } }
             while (try? await Task.sleep(for: every)) != nil {
                 guard let self else { return }
                 let saved = self.retrySave()
@@ -63,6 +68,11 @@ import Foundation
                 if saved { return }
             }
         }
+    }
+    /// Nothing left to save: the timer stops.
+    private func endRetry() {
+        retryTask?.cancel(); retryTask = nil
+        retryID = UUID()
     }
     func load(_ subs: [PushSubscription]) { all = subs }
     /// Saves; false when that failed.

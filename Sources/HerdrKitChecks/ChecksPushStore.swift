@@ -84,6 +84,21 @@ import Foundation
     try? await Task.sleep(for: .milliseconds(400))
     check(own.pendingRemoval.isEmpty && own.saveError == nil && !own.retrying && FilePushStore(url: selfURL).all.isEmpty,
           "push store: disk works again -> saved by the timer, timer off (\(own.pendingRemoval), retrying \(own.retrying))")
+    // A save by add() before the timer's tick ends the timer; the next failed remove starts a new one.
+    own.add(PushSubscription(device: "d1", endpoint: fcm, p256dh: p256, auth: auth))
+    chmod(selfDir.path, 0o500)
+    _ = own.remove(device: "d1")
+    chmod(selfDir.path, 0o700)
+    check(own.add(PushSubscription(device: "d2", endpoint: fcm + "2", p256dh: p256, auth: auth)) && own.pendingRemoval.isEmpty && !own.retrying,
+          "push store: add saves before the tick -> nothing pending, timer off")
+    try? await Task.sleep(for: .milliseconds(250))
+    chmod(selfDir.path, 0o500)
+    _ = own.remove(device: "d2")
+    check(own.retrying, "push store: the next failed remove -> timer on again")
+    chmod(selfDir.path, 0o700)
+    try? await Task.sleep(for: .milliseconds(400))
+    check(own.pendingRemoval.isEmpty && !own.retrying && FilePushStore(url: selfURL).all.isEmpty,
+          "push store: ... and it saves by itself (\(own.pendingRemoval), retrying \(own.retrying))")
     check(store.saveError == nil, "push store: no error when saves work")
 
     // Over the protocol: welcome carries the key, subscribe binds to the device, a bad endpoint is refused.
