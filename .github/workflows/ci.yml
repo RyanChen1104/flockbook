@@ -66,9 +66,9 @@ jobs:
           UI_CHECK_TIMEOUT: '180'
         run: scripts/ui-checks.sh offline build/ui-checks
 
-      # The two checks with a real window and full screen: manual runs only.
+      # The two checks with a real window and full screen: manual runs only, also when an offline check failed.
       - name: Real-window checks
-        if: github.event_name == 'workflow_dispatch'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
         timeout-minutes: 10
         env:
           FLOCKBOOK_VISIBLE_OK: '1'
