@@ -790,6 +790,47 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 500));
   check(await p.eval(bottomGap) > 200, `newest: scrolling when the connection dropped -> not pulled to the bottom after it returns (gap ${await p.eval(bottomGap)})`);
   await down();
+  // End is the reader asking for the bottom: new rows that render before the scroll is seen still leave it following.
+  await up();
+  await p.eval(`${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight); ${grows}`);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: End, rows rendered before the scroll -> follows (gap ${await p.eval(bottomGap)})`);
+  // From the bottom up in 1 px steps within one round: more than 1 px above the bottom it reached, not following.
+  await down();
+  await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 })); window.scrollTo(0, document.documentElement.scrollHeight);
+    let n = 0; window.__steps = setInterval(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -1 })); window.scrollBy(0, -1);
+      if (++n === 70) clearInterval(window.__steps); }, 20); })()`);
+  await new Promise((r) => setTimeout(r, 2000));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 100, `newest: up from the bottom in 1 px steps -> stays (gap ${await p.eval(bottomGap)})`);
+  // The page gets shorter during a round and that puts the view at the bottom: not the reader, not following.
+  await p.eval("(() => { const d = document.createElement('div'); d.id = 'shrinks2'; d.style.height = '600px'; document.body.append(d); })()");
+  await down();
+  await up();
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })); window.__wheels = setInterval(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })), 50);
+    document.getElementById('shrinks2').remove()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("clearInterval(window.__wheels)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  // (Not pulled to the bottom. The browser's own scroll anchoring may move the view down by part of the new height.)
+  check(await p.eval(bottomGap) > 50, `newest: put at the bottom by a shorter page during a round -> not following (gap ${await p.eval(bottomGap)})`);
+  // Another session in the same pane (a new agent there): it opens at its newest message, and follows.
+  await up();
+  const s9 = "document.body.innerText.includes('New session reply 39')";
+  hub.stdin.write("session w2:p1 s9\n");
+  await p.until(s9, 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  grow("s9", 2);   // and it keeps following
+  await p.until("document.body.innerText.includes('Reply 41.')", 4000);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.until(atEnd, 2000) === true, `newest: another session in the pane -> at its newest message, following (gap ${await p.eval(bottomGap)})`);
+  hub.stdin.write("session w2:p1 s3\n");
+  await p.until(`!${s9}`, 4000);
+  await p.until(atEnd, 3000);
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });

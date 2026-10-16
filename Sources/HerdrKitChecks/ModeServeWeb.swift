@@ -5,7 +5,8 @@ import ImageIO
 /// `--serve-web`: a hub with the bundled PWA and a fake backend, for the headless browser test (scripts/web-test.mjs).
 /// TLS with a throwaway self-signed certificate, 127.0.0.1 only, never herdr. Prints one JSON line
 /// (port, cert path, tokens), then serves until stdin closes. Input changes the fake state the way an agent would.
-/// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open).
+/// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open);
+/// `session <pane> <session>` puts another session in a pane.
 @MainActor func modeServeWeb() async throws {
     guard CommandLine.arguments.contains("--serve-web") else { return }
     let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkweb-\(UUID().uuidString)")
@@ -141,6 +142,16 @@ import ImageIO
         try? await Task.sleep(for: .milliseconds(100))
         for line in stdinLines() {
             let w = line.split(separator: " ").map(String.init)
+            // `session <pane> <session>`: a new agent session in that pane (40 rows of its own).
+            if w.count == 3, w[0] == "session" {
+                if b.items[w[2]] == nil {
+                    b.items[w[2]] = (0..<40).map { ConversationItem(id: "\(w[2])-\($0)", kind: .assistantText("New session reply \($0). " + String(repeating: "Text to wrap. ", count: 6))) }
+                }
+                for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {
+                    ws[wi].tabs[ti].panes[pi].agent?.sessionId = w[2]
+                } } }
+                b.workspaces = ws
+            }
             if w.count == 3, w[0] == "grow", let n = Int(w[2]) {
                 let start = b.items[w[1]]?.count ?? 0
                 b.items[w[1], default: []] += (start..<(start + n)).map { i in

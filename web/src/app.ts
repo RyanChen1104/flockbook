@@ -176,6 +176,8 @@ function receive(m: HubMessage): void {
       break;
     case "conversation": {
       const v = view(m.pane);
+      // The pane shows another session (a new agent there): it opens at its newest message, like a switch.
+      if (m.pane === state.watching && v.session !== undefined && v.session !== m.session) { cancelRound(); following = true; }
       v.session = m.session;
       v.hasEarlier = m.hasEarlier;
       if (m.mode === "replace") v.items = m.items;
@@ -300,13 +302,13 @@ function toBottom(): void {
 const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
 /** Only the reader changes `following`. A reader action (wheel, touch, a scroll key, the scroll bar from press to
  * release) on a shown conversation starts a round; the round ends when the page has stopped scrolling for `settleMs`.
- * At its end: at the bottom, or the reader reached the bottom during the round and did not scroll up after (new rows
- * came in meanwhile) -> following. Elsewhere and moved since the round started -> not following. Elsewhere and not
- * moved -> as before. Every scroll outside a round (the page's own, a page that got shorter, a reconnect, the
+ * At its end: the reader reached the bottom during the round (scrolled down to it, pushed down at it, or pressed End)
+ * and did not scroll up after (new rows may have come in meanwhile) -> following. Otherwise moved since the round
+ * started -> not following; not moved -> as before. A page that got shorter and moved the view is not the reader. Every scroll outside a round (the page's own, a page that got shorter, a reconnect, the
  * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
  * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
  * page catches up. */
-const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, settle: 0, still: 0 };
+const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
 const settleMs = 150;
 /** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
  * a move. */
@@ -317,12 +319,20 @@ function cancelRound(): void {
   clearTimeout(reader.still);
   reader.active = reader.holding = reader.reachedEnd = false;
 }
-/** The bottom reached in this round, until the reader scrolls up again. */
+/** The bottom reached in this round: the view moved down to it. Kept until the view is more than 1 px above the
+ *  lowest place it reached since (a page that got shorter moves it up too). */
 function track(): void {
   const top = viewTop();
-  if (nearBottom()) reader.reachedEnd = true;
-  else if (top < reader.last - 1) reader.reachedEnd = false;
+  if (top > reader.last && nearBottom()) reachEnd();
+  else if (reader.reachedEnd) {
+    if (top > reader.endTop) reader.endTop = top;
+    else if (top < reader.endTop - 1) reader.reachedEnd = false;
+  }
   reader.last = top;
+}
+function reachEnd(): void {
+  reader.endTop = reader.reachedEnd ? Math.max(reader.endTop, viewTop()) : viewTop();
+  reader.reachedEnd = true;
 }
 function readerActs(): void {
   if (!shown()) return;
@@ -334,7 +344,7 @@ function readerActs(): void {
 function settled(): void {
   if (reader.holding) return;
   reader.active = false;
-  if (reader.reachedEnd || nearBottom()) following = true;
+  if (reader.reachedEnd) following = true;
   else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
   toBottom();
 }
@@ -353,7 +363,15 @@ function letGoBar(): void {
 }
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
-addEventListener("keydown", (e) => { if (scrollKeys.has(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) readerActs(); });
+/** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
+const downKeys = new Set(["PageDown", "ArrowDown", " "]);
+addEventListener("keydown", (e) => {
+  if (!scrollKeys.has(e.key) || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+  readerActs();
+  if (!reader.active) return;
+  if (e.key === "End" || (e.key === "ArrowDown" && e.metaKey) || (downKeys.has(e.key) && nearBottom())) reachEnd();
+});
+addEventListener("wheel", (e) => { if (reader.active && e.deltaY > 0 && nearBottom()) reachEnd(); }, { passive: true });
 addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) holdBar(); });
 addEventListener("pointermove", () => { if (reader.holding) holdBar(); }, { passive: true });
 for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur"]) addEventListener(type, letGoBar);
