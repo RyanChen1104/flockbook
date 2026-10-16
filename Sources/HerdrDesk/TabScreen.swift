@@ -246,11 +246,7 @@ extension PaneView {
                      draft: model.drafts[pane.id] ?? ComposerDraft(),
                      onSend: { model.send($0, to: pane) },
                      onDraft: { model.setDraft($0, for: pane.id) },
-                     deliver: { text in
-                         guard model.writesEnabled else { return false }
-                         model.noteSent(pane.id)
-                         return await MessageSender.send(text, to: pane.id, client: model.store.client, kind: agent.kind)
-                     },
+                     deliver: { await model.deliver($0, pane: pane.id, kind: agent.kind) },
                      placeholder: focused ? nil : "Click to reply to \(agent.name)",
                      focusRequest: focusRequest)
             .id("\(pane.id)-\(model.composerResets[pane.id] ?? 0)")   // a pulled queue starts the composer again from its draft

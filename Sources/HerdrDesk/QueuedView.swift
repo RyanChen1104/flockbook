@@ -24,18 +24,26 @@ extension AppModel {
     /// and the text goes into this pane's composer. It reads the pane before and after the keys; when the turn stopped
     /// or the keys were refused, a notice says so and the log keeps it.
     func pullQueued(_ pane: Pane) {
-        guard writesEnabled, let a = pane.agent, !pulling.contains(pane.id) else { return }
+        guard writesEnabled, let a = pane.agent else { return }
         let id = pane.id
+        // The pane's lock for the whole pull: no send (Mac or phone) types into the box meanwhile.
+        guard claim(id) else { notice = "A message to this pane is still going out. Pull back again in a moment."; return }
         pulling.insert(id)
         Task {
-            defer { pulling.remove(id) }
+            defer { pulling.remove(id); release(id) }
             let io = HerdrQueuePullIO(client: store.client, paneId: id, allowed: { [weak self] in self?.writesEnabled == true })
-            // Kept before the first Ctrl-U, taken once the composer has it (a quit in between: `deliverPulled`).
+            // Kept before the first Ctrl-U, until this composer sends it (a quit before: `deliverPulled`).
             let entry = UUID().uuidString, texts = pulledTexts
             let r = await QueuePull.run(expect: a, log: store.queuedInLog(for: a.sessionId), io: io) { text in
-                texts.keep(PulledText(id: entry, pane: id, device: PulledText.mac, text: text))
+                texts.keep(PulledText(id: entry, pane: id, device: PulledText.mac, text: text, note: PulledText.unfinished))
             }
-            if let t = r.text { putInComposer(texts.take(id: entry, device: PulledText.mac)?.text ?? t, pane: id) }
+            if let t = r.text {
+                if texts.all.contains(where: { $0.id == entry }) {
+                    delivered.insert(entry)
+                    texts.finish(id: entry, note: r.partialReason, interrupted: r.isInterrupted)
+                }
+                putInComposer(t, pane: id)
+            }
             switch r {
             case .pulled(let t):
                 noticeLog.info("queue pull pane \(id, privacy: .public): pulled \(t.count) chars")
@@ -58,12 +66,22 @@ extension AppModel {
         }
     }
 
-    /// Pulled texts of this pane the Mac's composer does not have yet (the app quit between the pull and the
-    /// composer), into the composer. Not while a pull of the pane runs (it delivers its own).
+    /// Pulled texts of this pane the Mac's composer does not have (the app quit before that composer sent them), into
+    /// the composer, once per run. Not while a pull or a send of the pane runs (a pull delivers its own).
     func deliverPulled(pane id: String) {
-        guard !pulling.contains(id) else { return }
-        for p in pulledTexts.pending(device: PulledText.mac) where p.pane == id {
-            if let t = pulledTexts.take(id: p.id, device: PulledText.mac) { putInComposer(t.text, pane: id) }
+        guard !pulling.contains(id), !busy.contains(id) else { return }
+        for p in pulledTexts.pending(device: PulledText.mac) where p.pane == id && !delivered.contains(p.id) {
+            delivered.insert(p.id)
+            putInComposer(p.text, pane: id)
+            if let why = p.note { notice = "Pulled-back text is in the composer again. " + why }
+        }
+    }
+
+    /// The pane's composer sent its draft: the kept texts this run put there went with it.
+    func composerSent(pane id: String) {
+        for p in pulledTexts.pending(device: PulledText.mac) where p.pane == id && delivered.contains(p.id) {
+            _ = pulledTexts.take(id: p.id, device: PulledText.mac)
+            delivered.remove(p.id)
         }
     }
 

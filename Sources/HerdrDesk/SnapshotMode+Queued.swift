@@ -56,17 +56,46 @@ extension SnapshotRunner {
         step("a second pull goes after the first, on its own line", model.drafts["px"]?.text == "first\nsecond" && model.composerResets["px"] == 2)
 
         // A pull kept its text, and the app quit before the composer had it: the pane's next check puts it there.
+        // r2 P1-2: the composer's draft lives in memory only, so the kept text stays on disk until that composer sends.
+        let texts = MemoryPulledStore()
+        _ = texts.keep(PulledText(id: "k1", pane: idle.id, device: PulledText.mac, text: "if ready:\n    run()"))
+        _ = texts.keep(PulledText(id: "k2", pane: idle.id, device: "phone-1", text: "the phone's"))
         let back = AppModel(store: store)
-        _ = back.pulledTexts.keep(PulledText(id: "k1", pane: idle.id, device: PulledText.mac, text: "if ready:\n    run()"))
-        _ = back.pulledTexts.keep(PulledText(id: "k2", pane: idle.id, device: "phone-1", text: "the phone's"))
+        back.pulledTexts = texts
         back.pulling = [idle.id]
         await back.checkQueue(for: idle)
         step("a kept text waits while a pull of the pane runs", back.drafts[idle.id] == nil && back.pulledTexts.all.count == 2)
         back.pulling = []
         await back.checkQueue(for: idle)
-        step("a kept text goes into the composer, exactly, once", back.drafts[idle.id]?.text == "if ready:\n    run()" && back.pulledTexts.pending(device: PulledText.mac).isEmpty)
+        step("a kept text goes into the composer, exactly", back.drafts[idle.id]?.text == "if ready:\n    run()")
+        step("r2 P1-2: still kept after it is in the composer (the draft is memory only)", back.pulledTexts.all.map(\.id) == ["k1", "k2"])
         await back.checkQueue(for: idle)
-        step("a phone's kept text stays for the phone", back.drafts[idle.id]?.text == "if ready:\n    run()" && back.pulledTexts.all.map(\.id) == ["k2"])
+        step("in the composer once, not again on the next check", back.drafts[idle.id]?.text == "if ready:\n    run()")
+        let restarted = AppModel(store: store)
+        restarted.pulledTexts = texts
+        await restarted.checkQueue(for: idle)
+        step("r2 P1-2: a quit before the send: the next start puts it in the composer again", restarted.drafts[idle.id]?.text == "if ready:\n    run()")
+        var typed: [String] = []
+        restarted.sendHook = { pane, text in typed.append("\(pane) \(text)"); return true }
+        let ok = await restarted.deliver("if ready:\n    run()", pane: idle.id, kind: "claude")
+        step("r2 P1-2: the composer sent it: the kept text goes, the phone's stays", ok && typed.count == 1 && texts.all.map(\.id) == ["k2"])
+
+        // r2 P1-3: one pull or send per pane at a time, for the whole of it (the Mac's composer and the hub's send).
+        typed = []
+        restarted.busy = [idle.id]
+        let refused = await restarted.deliver("M", pane: idle.id, kind: "claude")
+        step("r2 P1-3: a send while a pull of the pane runs: refused, nothing typed", !refused && typed.isEmpty)
+        let hub = AppHubBackend(model: restarted)
+        let viaHub = await hub.send(pane: idle.id, text: "M", images: [], agent: idle.agent!, allowed: { true })
+        step("r2 P1-3: a phone's send while the pane is busy: refused, nothing typed (\(viaHub))", viaHub == .changed && typed.isEmpty)
+        restarted.busy = []
+        restarted.sendHook = { pane, text in
+            typed.append("\(pane) \(text)")
+            return restarted.busy.contains(pane)   // the lock is held while the keys go out
+        }
+        let held = await restarted.deliver("N", pane: idle.id, kind: "claude")
+        let heldHub = await hub.send(pane: idle.id, text: "O", images: [], agent: idle.agent!, allowed: { true })
+        step("r2 P1-3: a send holds the pane's lock while it types, and lets it go after", held && heldHub == .sent && restarted.busy.isEmpty)
         print("snapshot-queued: \(failures == 0 ? "PASS" : "FAIL x\(failures)"), written to \(dir)")
         exit(failures == 0 ? 0 : 1)
     }
