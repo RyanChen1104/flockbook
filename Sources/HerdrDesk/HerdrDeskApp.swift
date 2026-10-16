@@ -301,6 +301,7 @@ struct RootView: View {
                 Notifier.shared.onAnswer = { action, pane, prompt in await model.answerNotice(action: action, paneID: pane, prompt: prompt) }
                 if !flat { Notifier.shared.start() }
             }
+            .onChange(of: model.store.snapshots) { _, _ in model.prunePulled() }
             .onChange(of: model.store.workspaces) { _, ws in
                 model.prune()
                 if !flat { Notifier.shared.update(ws) }

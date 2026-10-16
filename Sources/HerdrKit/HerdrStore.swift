@@ -136,13 +136,21 @@ public final class HerdrStore {
         connected = false
     }
 
+    /// Successful snapshots taken so far.
+    public private(set) var snapshots = 0
+    /// A snapshot herdr gave.
+    func took(_ raw: [Workspace]) {
+        connected = true
+        snapshotted = true
+        snapshots += 1
+        if problem != nil { problem = nil }
+        applySnapshot(raw)
+    }
+
     public func refresh() async {
         do {
             let raw = try await client.snapshot()
-            connected = true
-            snapshotted = true
-            if problem != nil { problem = nil }
-            applySnapshot(raw)
+            took(raw)
             resolveMissing(raw)
         } catch {
             connected = false

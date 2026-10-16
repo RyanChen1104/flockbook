@@ -209,6 +209,11 @@ public enum QueuePull {
     /// with no more keys. Whatever came back goes to the composer however the pull ends.
     public static func run(expect: Agent, log: ClaudeQueueLog, io: some IO, keep: @escaping @MainActor @Sendable (String) -> Bool = { _ in true }) async -> Outcome {
         guard let key = pullKey(agent: expect.kind) else { return .refused("This agent has no queue Flockbook can pull back.") }
+        // Only Claude Code's log gives queued text exactly. Codex shows its queue on screen only, where trailing blank
+        // lines and spaces are gone and a line break looks like wrapping: no text Flockbook could take is sure to be it.
+        guard expect.kind == "claude" else {
+            return .refused("Codex shows its queue only on screen, where Flockbook cannot read the text exactly. Edit it in Codex's terminal (Shift+Left takes back the newest). Nothing was sent.")
+        }
         guard bound(expect) else {
             return .refused("Flockbook cannot tell which agent session runs in this pane, so it does not pull back. Nothing was sent.")
         }
@@ -223,11 +228,11 @@ public enum QueuePull {
         let pulled = q.pullsAll ? q.items : Array(q.items.suffix(1))
         guard pulled.allSatisfy({ $0 != nil }) else { return .refused("The queued text cannot be read yet. Nothing was sent.") }
         let expected = pulled.compactMap { $0 }.joined(separator: "\n")
-        // On more than one row, and not exactly in Claude Code's log: a line break and the agent's wrapping look the
-        // same, so no text Flockbook could give back is sure to be the owner's. The terminal keeps it.
-        let fromLog = expect.kind == "claude" && log.items.allSatisfy { $0 != nil } && log.items.compactMap { $0 }.joined(separator: "\n") == expected
-        guard fromLog || !expected.contains("\n") else {
-            return .refused("This queued message is on more than one row, and Flockbook cannot tell its line breaks from wrapping. Edit it in the agent's terminal. Nothing was sent.")
+        // Not exactly in the log (not caught up, or text the log left out): the screen's rows are no proof of the
+        // text (trailing spaces and blank lines are gone, a line break looks like wrapping). The terminal keeps it.
+        let fromLog = log.items.allSatisfy { $0 != nil } && log.items.compactMap { $0 }.joined(separator: "\n") == expected
+        guard fromLog else {
+            return .refused("Flockbook cannot read this queued text exactly yet. Edit it in the agent's terminal, or try again in a moment. Nothing was sent.")
         }
 
         guard await send([key], io) else { return .refused("Input is off. Nothing was sent.") }
@@ -245,13 +250,14 @@ public enum QueuePull {
         }
         let cols = await io.width()
         let (taken, exact) = text(of: back, agent: expect.kind, width: textWidth(shown, agent: expect.kind, paneWidth: cols), log: log.items)
+        // Before any way out that gives text on: the box must hold exactly the log's text. Anything else (other text, a
+        // guess at line breaks) is not the owner's text for sure, so it goes nowhere: not kept, not in a composer, not
+        // cleared. The box keeps it.
+        guard exact else {
+            return .failed("The agent's input box did not hold exactly the queued text, so Flockbook did not take it or clear it. It is in the agent's input box now: edit it in the terminal.")
+        }
         guard compact(taken).contains(compact(expected)) else {
             return await held(taken, "The agent's input box did not hold the queued text as expected, so Flockbook did not clear it. \(check)", keep)
-        }
-        // Rows of the box joined by a guess: a line break and the agent's wrapping look the same. The guess is not the
-        // owner's text, so it goes nowhere: the box keeps the text exactly, and nothing is kept or cleared.
-        guard exact else {
-            return .failed("The text came back on more than one row of the agent's input box, and Flockbook cannot tell its line breaks from wrapping, so it did not take it. It is in the agent's input box now: edit it in the terminal.")
         }
         guard await keep(taken) else {
             return .partial(taken, "Flockbook could not save the text, so it did not clear the agent's input box. \(check)")
@@ -311,14 +317,14 @@ public enum QueuePull {
 
     /// The text of the input box rows, and whether it is exact. Claude Code: the log's open entries when they are the
     /// same text (the log keeps it exactly). Else, and for Codex, the rows joined: a row the agent wrapped (the row
-    /// before it was full) joins the one before it, any other row starts a new line. That is a guess unless there is
-    /// one row only.
+    /// before it was full) joins the one before it, any other row starts a new line. That is a guess, one row too
+    /// (trailing spaces and blank lines are gone from the screen).
     static func text(of rows: [String], agent: String, width: Int?, log: [String?]) -> (String, exact: Bool) {
         if agent == "claude", !log.isEmpty, log.allSatisfy({ $0 != nil }) {
             let l = log.compactMap { $0 }.joined(separator: "\n")
             if compact(l) == compact(rows.joined()) { return (l, true) }
         }
-        return (unwrap(rows, width: width), rows.count == 1)
+        return (unwrap(rows, width: width), false)
     }
 
     /// Rows back to lines. `width`: the columns a row of text may fill (nil: every row is a line).

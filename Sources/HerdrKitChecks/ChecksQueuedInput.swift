@@ -155,10 +155,11 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let cjkRows = [String(cjk.prefix(28)), String(cjk.dropFirst(28))]
     (r, k) = await pull("claude", [claudeScreen(queued: [cjk]), claudeBox(cjkRows), claudeBox(cjkRows), claudeBox([cjkRows[0]]), empty], log: [cjk])
     check(r == .pulled(cjk), "pull: CJK wrapped mid-word in the box comes back as the log has it (\(r))")
-    // Up brought back something else than expected: it goes to the composer as it is, and the box is not cleared.
+    // r4 P2-2: Up brought back something else than the log gives: not exact, so nothing is kept, nothing goes to the
+    // composer, nothing is cleared (before r4 it went to the composer as it was).
     let odd = claudeBox(["QZ something else"])
     (r, k) = await pull("claude", [two, odd, odd], log: gd)
-    check(r.text == "QZ something else" && r.isPartial && k == [["Up"]], "pull: other text came back: to the composer, no Ctrl-U (\(r), \(k))")
+    check(r.isFailed && r.text == nil && kept.isEmpty && k == [["Up"]], "pull: r4 P2-2: other text came back: not kept, not given on, not cleared (\(r), \(k))")
 
     // P1-1: the owner types in the terminal while it is cleared: stop, no more keys, the text still goes to the composer.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])], log: gd)
@@ -183,39 +184,27 @@ private func wrap(_ text: String, width: Int) -> [String] {
     (r, k) = await pull("claude", [two, pulledIn], log: gd)
     check(r.isPartial && r.text == gammaDelta && k.count <= 7 && k.dropFirst().allSatisfy { $0 == u }, "pull: the box never empties: stopped after a few Ctrl-U (\(k.count - 1))")
 
-    // Codex: Shift-Left takes the newest only.
+    // r4 P2-1: only Claude Code's log gives the queued text exactly. Codex shows its queue on screen only (trailing
+    // blank lines and spaces are gone there, line breaks look like wrapping): every Codex pull is refused before any
+    // key, the queue stays as it is, and the owner edits it in Codex's terminal.
     let cxQueued = codexScreen(queued: ["QB reply BETA", "QD reply DELTA"])
     let cxPulled = codexScreen(queued: ["QB reply BETA"], input: "› QD reply DELTA")
     (r, k) = await pull("codex", [cxQueued, cxPulled, cxPulled, codexScreen(queued: ["QB reply BETA"])])
-    check(r == .pulled("QD reply DELTA") && k == [["shift+left"], u], "pull: Codex: Shift-Left takes the newest only (\(r), \(k))")
-    // P2-4: indentation stays; a soft wrap is not a line break (Codex wraps at the pane's width less 3).
-    let code = "if ready:\n    run()"
+    check(r.isRefused && k.isEmpty && (r.refusedWhy ?? "").contains("terminal"), "pull: r4 P2-1: Codex, one row: refused before any key, edit it in the terminal (\(r), \(k))")
+    let fix = codexScreen(queued: ["fix"])   // queued as "fix\n\n": the screen shows "fix"
+    (r, k) = await pull("codex", [fix, codexScreen(queued: [], input: "› fix"), codexScreen(queued: [], input: "› fix"), codexScreen(queued: [])])
+    check(r.isRefused && k.isEmpty, "pull: r4 P2-1: Codex 'fix' with trailing blank lines: refused, nothing cleared (\(r), \(k))")
     let cxCode = codexScreen(queued: [], input: "› if ready:\n      run()")
-    (r, k) = await pull("codex", [codexScreen(queued: ["if ready:\n        run()"]), cxCode, cxCode, codexScreen(queued: [], input: "› if ready:"), codexScreen(queued: [])])
-    check(r.isRefused && k.isEmpty, "pull: r3 P2-1: Codex: a queued message on more than one row: refused before any key (\(r), \(k))")
-    let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
-    let rows = wrap(long, width: 37)   // 40 columns
-    let cxLong = codexScreen(queued: [], input: "› " + rows.joined(separator: "\n  "))
-    (r, k) = await pull("codex", [codexScreen(queued: [long]), cxLong, cxLong, codexScreen(queued: [])], cols: 40)
-    check(rows.count > 1 && r.isFailed && r.text == nil && k == [["shift+left"]] && failedWhy(r).contains("terminal"),
-          "pull: r3 P2-1: Codex: the box wraps it on more than one row: no Ctrl-U, no guess for the composer, edit it in the terminal (\(rows), \(r), \(k))")
-    // r2 P2-5: a line break and a wrap look the same in the box (36 columns of text, a line break, then a word, in 37
-    // columns). Flockbook cannot tell them apart: it sends no Ctrl-U, the box keeps the text exactly, the owner is told.
-    let hard = String(repeating: "a", count: 36) + "\nnext"
-    let cxHard = codexScreen(queued: [], input: "› " + String(repeating: "a", count: 36) + "\n  next")
-    (r, k) = await pull("codex", [codexScreen(queued: [hard]), cxHard, cxHard, codexScreen(queued: [])], cols: 40)
-    check(r.isFailed && r.text == nil && k == [["shift+left"]] && kept.isEmpty && failedWhy(r).contains("terminal"),
-          "pull: r3 P2-1: a line break or a wrap, not known: no Ctrl-U, nothing kept, no guess for the composer (\(r), \(k))")
-    // Claude Code: rows that the log's text does not match (or no log): no Ctrl-U either. One row: no line breaks to lose.
+    (r, k) = await pull("codex", [codexScreen(queued: ["if ready:\n        run()"]), cxCode, cxCode, codexScreen(queued: [])])
+    check(r.isRefused && k.isEmpty, "pull: Codex: a queued message on more than one row: refused before any key (\(r), \(k))")
+    // Claude Code without the log's text (no log, or other text): refused before any key, one row too.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, empty])
     check(r.isRefused && k.isEmpty, "pull: r3 P2-1: Claude rows the log does not give exactly: refused before any key (\(r), \(k))")
-    // The screen showed one row, the log had nothing, and Up brought back two: no guess either.
-    (r, k) = await pull("claude", [claudeScreen(queued: ["QD reply DELTA"]), pulledIn, pulledIn, oneRow, empty])
-    check(r.isFailed && r.text == nil && k == [["Up"]] && kept.isEmpty, "pull: r3 P2-1: more rows came back than the log gives: no Ctrl-U, no guess (\(r), \(k))")
     (r, k) = await pull("claude", [claudeScreen(queued: ["QC reply GAMMA"]), oneRow, oneRow, empty])
-    check(r == .pulled("QC reply GAMMA") && k == [["Up"], u], "pull: one row without the log: cleared (\(r), \(k))")
-    (r, k) = await pull("codex", [cxQueued, cxPulled, cxPulled, codexScreen(queued: ["QB reply BETA"])])
-    check(r == .pulled("QD reply DELTA") && k == [["shift+left"], u], "pull: Codex: one row: cleared (\(r), \(k))")
+    check(r.isRefused && k.isEmpty, "pull: r4 P2-1: one row without the log: refused before any key (\(r), \(k))")
+    // The log gives one message and Up brought back two rows of other text: not exact, no guess.
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QD reply DELTA"]), pulledIn, pulledIn, oneRow, empty], log: ["QD reply DELTA"])
+    check(r.isFailed && r.text == nil && k == [["Up"]] && kept.isEmpty, "pull: r3 P2-1: more rows came back than the log gives: no Ctrl-U, no guess (\(r), \(k))")
 
     // r2 P1-4: the pull is bound to the agent's session: without one (nil or empty) Flockbook cannot tell another agent
     // of the same kind from it, so it refuses before any key.
@@ -256,5 +245,7 @@ extension QueuePull.Outcome {
     var isPartial: Bool { if case .partial = self { true } else { false } }
     var why: String? { if case .partial(_, let w) = self { w } else { nil } }
 }
-func failedWhy(_ r: QueuePull.Outcome) -> String { if case .failed(let w) = r { w } else { "" }
+func failedWhy(_ r: QueuePull.Outcome) -> String { if case .failed(let w) = r { w } else { "" } }
+extension QueuePull.Outcome {
+    var refusedWhy: String? { if case .refused(let w) = self { w } else { nil } }
 }

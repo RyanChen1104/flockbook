@@ -353,11 +353,15 @@ final class AppModel {
     /// The Mac's kept texts this run put in a composer (the drafts are memory only: a quit puts them there again).
     @ObservationIgnored var delivered: Set<String> = []
 
+    /// Kept pulled texts of panes that are gone: only from a snapshot herdr gave (an empty one too: the last tab
+    /// closed), never the empty start. Called on every snapshot (`HerdrStore.snapshots`), not only on a change.
+    func prunePulled() {
+        if let known = store.knownPanes { pulledTexts.prune(panes: known) }
+    }
+
     func prune() {
         defer { updateVisibleSessions() }
-        // Kept pulled texts: only from a snapshot herdr gave; an empty one (the last tab closed) prunes too, the empty
-        // start does not.
-        if let known = store.knownPanes { pulledTexts.prune(panes: known) }
+        prunePulled()
         let tabs = store.workspaces.flatMap(\.tabs)
         guard !tabs.isEmpty else { return }
         let panes = Set(tabs.flatMap(\.panes).map(\.id))

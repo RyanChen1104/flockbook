@@ -526,7 +526,9 @@ function queueView(pane: string, q: Queue): HTMLElement {
   const when = q.agent === "claude" ? "Goes in after the current step or when the turn ends." : "Goes in when this turn ends.";
   const note = q.pullsAll ? (q.items.length > 1 ? `All ${q.items.length} come back as one message.` : "It comes back to the composer.")
     : "Sending it again adds it to the turn now running.";
-  const blocked = !q.pullable ? "The agent's input box has text. Clear it in the terminal to pull back."
+  // Only Claude Code's queue can be taken back exactly (its log); Codex's is edited in its terminal.
+  const blocked = !q.pullsAll ? `${when} To change it, press Shift+Left in Codex's terminal.`
+    : !q.pullable ? "The agent's input box has text. Clear it in the terminal to pull back."
     : q.items.includes(null) ? "The queued text cannot be read yet." : null;
   const pull = async (): Promise<void> => {
     if (state.busy) return;
@@ -541,8 +543,8 @@ function queueView(pane: string, q: Queue): HTMLElement {
     ...q.items.map((t) => h("div", { class: "msg user queued" }, h("span", { class: "queued-label" }, "Queued"),
       t === null ? h("p", { class: "unknown" }, "1 queued message") : h("p", {}, t))),
     h("div", { class: "queue-foot" }, h("span", { class: "fine" }, blocked ?? `${when} ${note}`),
-      canInput() ? h("button", { id: "pull-queued", class: "secondary small", type: "button", disabled: state.busy || blocked !== null, onclick: pull },
-        q.pullsAll ? "Pull back to edit" : "Pull back the newest") : null));
+      canInput() && q.pullsAll ? h("button", { id: "pull-queued", class: "secondary small", type: "button", disabled: state.busy || blocked !== null, onclick: pull },
+        "Pull back to edit") : null));
 }
 
 function screenView(text: string, open: boolean): HTMLElement {

@@ -175,6 +175,12 @@ import Foundation
         check(none.knownPanes == [], "store: r3 P3-5: an empty snapshot: no panes (the last tab closed) (\(String(describing: none.knownPanes)))")
         none.setPreview(workspaces: ws(.idle), connected: true)
         check(none.knownPanes == ["w1:p1"], "store: the snapshot's panes")
+        // r4 P3-3: every snapshot herdr gives counts, the same as the last one too (an empty one at start equals the
+        // empty start, so `workspaces` alone never changes): the app prunes on each.
+        let fresh = HerdrStore(session: .named("c9-none"))
+        fresh.took([])
+        fresh.took([])
+        check(fresh.snapshots == 2 && fresh.knownPanes == [], "store: r4 P3-3: each snapshot taken counts, an empty one at start too (\(fresh.snapshots))")
     }
 
     // r2 P2-7: the store has limits (count and bytes): full, it refuses, and the pull then clears nothing. It drops a

@@ -127,6 +127,7 @@ struct QueuedStrip: View {
         return "Sending it again adds it to the turn now running."
     }
     private var blocked: String? {
+        if !queue.pullsAll { return "\(when) To change it, press Shift+Left in Codex's terminal." }
         if !queue.pullable { return "The agent's input box has text. Clear it in the terminal to pull back." }
         if queue.items.contains(where: { $0 == nil }) { return "The queued text cannot be read yet." }
         return nil
@@ -144,11 +145,13 @@ struct QueuedStrip: View {
                 Text(blocked ?? "\(when) \(pullNote)").font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
                 if pulling { ProgressView().controlSize(.small) }
-                Button(pullLabel, action: onPull)
-                    .controlSize(.small)
-                    .disabled(!canPull || blocked != nil || pulling)
-                    .help(queue.pullsAll ? "Takes the queue back from the agent into this composer. The turn keeps running."
-                                         : "Takes the newest queued message back into this composer. The turn keeps running.")
+                // Only Claude Code's queue can be taken back exactly (its log); Codex's is edited in its terminal.
+                if queue.pullsAll {
+                    Button(pullLabel, action: onPull)
+                        .controlSize(.small)
+                        .disabled(!canPull || blocked != nil || pulling)
+                        .help("Takes the queue back from the agent into this composer. The turn keeps running.")
+                }
             }
         }
         .frame(maxWidth: 780)
