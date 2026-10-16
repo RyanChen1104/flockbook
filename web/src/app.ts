@@ -57,8 +57,14 @@ const state = {
   pushKey: null as string | null,
   /** This device gets notifications; `busy` while turning them on or off. */
   notify: "off" as "off" | "on" | "busy",
-  /** Text the hub pulled back from the agent's queue, for the composer on the next render. */
-  fill: null as { pane: string; text: string } | null,
+  /** Texts the hub pulled back from agents' queues, per pane, oldest first, for that pane's composer. */
+  fills: {} as Record<string, { id?: string; text: string }[]>,
+  /** Unsent composer text per pane, and the pane whose composer is on the page: switching agents never carries one
+   *  agent's text into another's composer. */
+  drafts: {} as Record<string, string>,
+  composerPane: null as string | null,
+  /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
+  placed: new Set<string>(),
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -111,6 +117,12 @@ function connect(): void {
 /** Resolves when the socket is open, or after 5 s. */
 async function opened(): Promise<void> {
   for (let i = 0; i < 100 && ws?.readyState === WebSocket.CONNECTING; i++) await new Promise((r) => setTimeout(r, 50));
+}
+
+/** The composer has the pulled text `id`: the hub forgets it. Lost (no connection): the hub sends it again after
+ *  hello, and `placed` answers with another ack. */
+function ack(id: string): void {
+  void request({ type: "pulledAck", pulled: id });
 }
 
 function request(msg: Record<string, unknown>): Promise<{ ok: boolean; code?: string; message?: string }> {
@@ -194,10 +206,15 @@ function receive(m: HubMessage): void {
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
       break;
-    case "pulled":
-      state.fill = { pane: m.pane, text: m.text };
-      if (m.interrupted) toast("The agent's turn stopped after the pull. Your text is in the composer.");
+    case "pulled": {
+      if (m.id && state.placed.has(m.id)) { ack(m.id); break; }
+      const f = state.fills[m.pane] ??= [];
+      if (m.id && f.some((x) => x.id === m.id)) break;
+      f.push({ id: m.id, text: m.text });
+      if (m.note) toast(`Your text is in the composer. ${m.note}`);
+      else if (m.interrupted) toast("The agent's turn stopped after the pull. Your text is in the composer.");
       break;
+    }
     case "prompt": {
       const v = view(m.pane);
       v.approval = m.approval;
@@ -355,16 +372,22 @@ function render(): void {
     body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
   if (state.toast) body.push(h("div", { class: "toast glass-float", role: "status" }, state.toast));
-  // Keep the composer's text and focus across renders.
-  const draft = (document.getElementById("composer-text") as HTMLTextAreaElement | null)?.value;
+  // Keep each agent's composer text (its own) and the focus across renders.
+  const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+  if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
   const focused = document.activeElement?.id;
   app.replaceChildren(...body.filter((c): c is Node | string => !!c));
   const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
-  if (box && draft !== undefined) box.value = draft;
-  // A pulled queue goes after what the composer holds, on its own line.
-  if (box && state.fill && state.fill.pane === state.watching) {
-    box.value = box.value ? `${box.value}\n${state.fill.text}` : state.fill.text;
-    state.fill = null;
+  state.composerPane = box ? state.watching : null;
+  if (box && state.watching) box.value = state.drafts[state.watching] ?? "";
+  // Pulled texts of this agent go after what the composer holds, each on its own line; then the hub may forget them.
+  const fills = state.watching ? state.fills[state.watching] : undefined;
+  if (box && fills?.length) {
+    for (const f of fills) {
+      box.value = box.value ? `${box.value}\n${f.text}` : f.text;
+      if (f.id) { state.placed.add(f.id); ack(f.id); }
+    }
+    delete state.fills[state.watching!];
     box.dispatchEvent(new Event("input"));
     box.focus();
   }

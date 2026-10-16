@@ -601,6 +601,50 @@ async function fakeRun() {
   await p.click("#pull-queued");
   check(await p.until("(document.querySelector('.toast')?.textContent ?? '').includes('turn stopped')") === true, "queue: a stopped turn shows a notice");
   check(await p.eval("document.querySelector('#composer-text').value.startsWith('Also run the lint step')") === true, "queue: the text still comes back");
+  // A pull that stopped before the agent's box was empty: the text, and a notice to check the terminal.
+  await p.type("#composer-text", "");
+  await p.type("#composer-text", "queue partial");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.until("document.querySelector('#pull-queued')?.disabled === false");
+  await p.type("#composer-text", "");
+  await p.click("#pull-queued");
+  check(await p.until("(document.querySelector('.toast')?.textContent ?? '').includes('Check the agent') && document.querySelector('#composer-text').value.startsWith('Also run the lint step')") === true,
+    "queue: a pull that stopped early: the text, and a notice that says why");
+  // A pull answered while another agent is open: the text waits for its own agent's composer.
+  await p.type("#composer-text", "");
+  await p.type("#composer-text", "queue slow");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);   // the last notice would cover the button
+  await p.until("document.querySelector('#pull-queued')?.disabled === false");
+  await p.type("#composer-text", "");
+  await p.click("#pull-queued");
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  await p.until("!!document.querySelector('#composer-text') && location.hash === '#pane=w1%3Ap2'");
+  await p.until("false", 2500);
+  check(await p.eval("document.querySelector('#composer-text').value") === "", "queue: a pull's text never goes into another agent's composer");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  check(await p.until("document.querySelector('#composer-text')?.value === 'Slow one.'") === true,
+    `queue: back on its agent, its composer has it (${JSON.stringify(await p.eval("[location.hash, document.querySelector('#composer-text')?.value, document.querySelector('#composer-text')?.disabled]"))})`);
+  // Texts the hub kept (the phone was gone before they arrived) come after hello, each into its own agent's composer,
+  // added up; once there, the hub forgets them (a reload brings nothing back).
+  await p.type("#composer-text", "keep three");
+  await p.click("#composer-send");
+  await p.until("false", 600);
+  await p.eval("window.__old = true; location.reload()");
+  check(await p.until("!window.__old && document.querySelector('#composer-text')?.value === 'Kept one.\\nKept two.'", 8000) === true,
+    `queue: after a reload the kept texts for this agent, both, in order (${JSON.stringify(await p.eval("document.querySelector('#composer-text')?.value"))})`);
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  check(await p.until("location.hash === '#pane=w1%3Ap2' && document.querySelector('#composer-text')?.value === 'Kept for the other agent.'") === true,
+    `queue: and the other agent's in its own composer (${JSON.stringify(await p.eval("[location.hash, document.querySelector('#composer-text')?.value, document.querySelector('#composer-text')?.disabled]"))})`);
+  await p.eval("window.__old = true; location.reload()");
+  await p.until("!window.__old && !!document.querySelector('#composer-text')", 8000);
+  await p.until("false", 1000);
+  check(await p.eval("document.querySelector('#composer-text').value") === "", "queue: confirmed texts do not come back after another reload");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.until("false", 500);
+  check(await p.eval("document.querySelector('#composer-text').value") === "", "queue: nor for the first agent");
   await p.type("#composer-text", "");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");

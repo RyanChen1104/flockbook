@@ -39,7 +39,9 @@ export type HubMessage =
   | { type: "screen"; pane: string; text: string }
   | { type: "prompt"; pane: string; approval?: Approval; question?: QuestionRequest }
   | { type: "queued"; pane: string; agent: string; items: (string | null)[]; pullable: boolean; pullsAll: boolean }
-  | { type: "pulled"; pane: string; text: string; interrupted: boolean }
+  /** `id`: the hub keeps the text until `pulledAck` with it, and sends it again after each hello. `note`: the pull
+   *  stopped before the agent's input box was empty (why). */
+  | { type: "pulled"; id?: string; pane: string; text: string; interrupted: boolean; note?: string }
   | { type: "pong" };
 
 /** The agent's own queue: messages typed while it works, not taken yet. A null item: its text is not readable yet. */
