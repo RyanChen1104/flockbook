@@ -165,6 +165,12 @@ public final class HerdrStore {
         return logItems[sessionId]?.load ?? .loading
     }
 
+    /// Claude Code's queue as that session's log has it (`ClaudeQueueLog`). Read with the screen (`QueuedInput.read`).
+    public func queuedInLog(for sessionId: String?) -> [String?] {
+        guard !isPreview, let sessionId else { return [] }
+        return logItems[sessionId]?.queued ?? []
+    }
+
     /// Loads an older segment of that session's log. True while older content remains. `conversation(for:)` grows within one poll.
     @discardableResult
     public func loadEarlier(for sessionId: String?, bytes: Int = 2_000_000) async -> Bool {

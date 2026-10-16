@@ -13,6 +13,8 @@ public struct ConversationParser: Sendable {
     var runsByKey: [String: [(tool: String, label: ToolLabel, id: String)]] = [:]
     var questionAt: [String: Int] = [:]      // AskUserQuestion tool_use id -> index in `done`
     var pi = PiState()                               // pi entry tree (see ConversationParser+Pi.swift)
+    /// Claude Code's queue of messages typed while it works (`queue-operation` lines).
+    public private(set) var queue = ClaudeQueueLog()
 
     public init() {}
 
@@ -57,6 +59,7 @@ public struct ConversationParser: Sendable {
         if o["isSidechain"] as? Bool == true { return }
         let type = o["type"] as? String
         if type == "attachment" { feedQueued(o); return }
+        if type == "queue-operation" { queue.feed(o); return }
         guard type == "user" || type == "assistant",
               let msg = o["message"] as? [String: Any] else { return }
         let uuid = o["uuid"] as? String ?? UUID().uuidString
