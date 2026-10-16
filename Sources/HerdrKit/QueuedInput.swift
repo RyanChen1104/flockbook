@@ -233,7 +233,7 @@ public enum QueuePull {
         let expected = pulled.compactMap { $0 }.joined(separator: "\n")
         // Not exactly in the log (not caught up, or text the log left out): the screen's rows are no proof of the
         // text (trailing spaces and blank lines are gone, a line break looks like wrapping). The terminal keeps it.
-        let fromLog = log.items.allSatisfy { $0 != nil } && log.items.compactMap { $0 }.joined(separator: "\n") == expected
+        let fromLog = log.items.allSatisfy { $0 != nil } && same(log.items.compactMap { $0 }.joined(separator: "\n"), expected)
         guard fromLog else {
             return .refused("Flockbook cannot read this queued text exactly yet. Edit it in the agent's terminal, or try again in a moment. Nothing was sent.")
         }
@@ -272,9 +272,10 @@ public enum QueuePull {
         }
 
         // One Ctrl-U at a time (it takes one row; an emptied row's line break takes one more), each after a read that
-        // finds the same agent and only rows of `back` left.
-        var left = back.count, after = shown
-        let most = 2 * back.count + 2
+        // finds the same agent and only rows of the text left, as drawn (an emptied last row holds nothing).
+        let raw = rawBox(shown)
+        var left = raw.count, after = shown
+        let most = 2 * raw.count + 2
         for step in 0...most {
             guard let a = await io.agent(), same(a, expect) else {
                 return .partial(taken, "Another agent is in this pane now, so Flockbook stopped clearing its input box. \(check)")
@@ -283,10 +284,11 @@ public enum QueuePull {
                 return .partial(taken, "Flockbook could not read the agent's input box, so it stopped clearing it. \(check)")
             }
             after = s
-            let rows = box(s, agent: expect.kind)
-            // None of it left: an empty box, the placeholder, or only rows that are not ours (typed after it emptied).
-            if !rows.contains(where: { r in back.contains { !$0.isEmpty && r.hasPrefix($0) } }) { left = 0; break }
-            guard rows.count <= left, Array(back.prefix(rows.count)) == rows else {
+            var rows = rawBox(s)
+            while rows.last == "" { rows.removeLast() }
+            // None of it left: an empty box or the placeholder. Anything else must be the text's first rows exactly.
+            if rows.isEmpty || rows == [placeholder(expect.kind)] { left = 0; break }
+            guard rows.count <= left, zip(raw, rows).allSatisfy({ same($0, $1) }) else {
                 return .partial(taken, "The agent's input box changed while Flockbook cleared it, so it stopped. \(check)")
             }
             left = rows.count
@@ -325,7 +327,10 @@ public enum QueuePull {
     }
 
     /// The box rows are the text, character for character: one row per line, nothing joined, trimmed or guessed.
-    static func exact(_ rows: [String], _ text: String) -> Bool { rows.joined(separator: "\n") == text }
+    static func exact(_ rows: [String], _ text: String) -> Bool { same(rows.joined(separator: "\n"), text) }
+
+    /// The same Unicode scalars (Swift's `==` takes canonically equal text as equal: U+F900 and U+8C48).
+    static func same(_ a: String, _ b: String) -> Bool { a.unicodeScalars.elementsEqual(b.unicodeScalars) }
 
     /// The most rows `visibleText` gives.
     static let visibleRows = 60
@@ -349,11 +354,17 @@ public enum QueuePull {
     }
 
     /// The columns of `s` when every character's width is sure: printable ASCII (1), CJK and fullwidth (2), one
-    /// scalar each. Nil for anything else (emoji, combining marks, joiners, tabs, no-break spaces).
+    /// scalar each, no combining mark. Nil for anything else (emoji, combining marks, joiners, tabs, no-break spaces).
     static func knownColumns(_ s: String) -> Int? {
         var n = 0
         for c in s {
-            guard c.unicodeScalars.count == 1, let v = c.unicodeScalars.first?.value else { return nil }
+            guard c.unicodeScalars.count == 1, let u = c.unicodeScalars.first else { return nil }
+            // A combining mark (U+3099, U+302A…) has no width of its own: the screen puts it on the column before.
+            switch u.properties.generalCategory {
+            case .nonspacingMark, .spacingMark, .enclosingMark: return nil
+            default: break
+            }
+            let v = u.value
             switch v {
             case 0x20...0x7E: n += 1
             case 0x3000...0x303E, 0x3041...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xAC00...0xD7A3, 0xF900...0xFAFF,

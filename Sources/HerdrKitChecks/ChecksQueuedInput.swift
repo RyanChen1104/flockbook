@@ -211,6 +211,23 @@ private func wrap(_ text: String, width: Int) -> [String] {
     (r, k) = await pull("claude", [claudeScreen(queued: ["line 1\n  line 2…"]), claudeBox(tall.components(separatedBy: "\n")), empty], log: [tall])
     check(r.isRefused && k.isEmpty, "pull: r6 P2-5: 40 lines on a screen of fewer rows: refused before any key (\(r), \(k))")
 
+    // r7 P2-1: the clearing reads the box as drawn too: the owner changes a space to a no-break space, or adds a
+    // trailing space, after the first read: stopped, no Ctrl-U (before r7 those rows were cleaned and still matched).
+    let abBox = claudeBox(["a b"])
+    for row in ["a\u{a0}b", "a b "] {
+        (r, k) = await pull("claude", [claudeScreen(queued: ["a b"]), abBox, claudeBox([row]), claudeBox([row]), empty], log: ["a b"])
+        check(r.isPartial && k == [["Up"]], "pull: r7 P2-1: the box became \(row.debugDescription) before the first Ctrl-U: stopped, no Ctrl-U (\(r), \(k))")
+    }
+    // r7 P2-2: exact compares Unicode scalars, not canonically equal strings: U+F900 in the log, U+8C48 in the box.
+    (r, k) = await pull("claude", [claudeScreen(queued: ["\u{F900}"]), claudeBox(["\u{8C48}"]), claudeBox(["\u{8C48}"]), empty], log: ["\u{F900}"])
+    check(r.isFailed && r.text == nil && kept.isEmpty && k == [["Up"]], "pull: r7 P2-2: U+F900 and U+8C48 are not the same characters: failed, not cleared (\(r), \(k))")
+    // r7 P2-3: a combining mark (here on its own at a line's start) has no width of its own: refused before any key.
+    // The screen merges a mark with the column before it, so the check is on the text itself.
+    for marked in ["\u{3099}fix", "ok\n\u{302A}x"] {
+        check(!QueuePull.shows(marked, screen: two), "pull: r7 P2-3: a combining mark in \(marked.debugDescription): not shown exactly, refused before any key")
+    }
+    check(QueuePull.shows("ok\n\u{8C48}x", screen: two), "pull: r7: the same text without the mark passes the check")
+
     // P1-1: the owner types in the terminal while it is cleared: stop, no more keys, the text still goes to the composer.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])], log: gd)
     check(r == .partial(gammaDelta, r.why ?? "") && k == [["Up"], u], "pull: the box changed between two Ctrl-U: stopped, the text kept (\(r), \(k))")
