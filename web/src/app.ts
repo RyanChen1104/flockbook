@@ -675,12 +675,26 @@ async function upload(list: Attachment[]): Promise<{ code?: string; message?: st
   return null;
 }
 
+/** `pane`'s composer sent `raw`: that text leaves its draft, wherever the page is now. What came in after it (typed,
+ *  or a pulled text) stays; a draft that changed otherwise is left alone. */
+function sent(pane: string, raw: string): void {
+  const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+  const open = field && state.composerPane === pane;
+  const now = open ? field.value : state.drafts[pane] ?? "";
+  if (!now.startsWith(raw)) return;
+  const rest = now.slice(raw.length).replace(/^\n/, "");
+  if (open) field.value = rest;
+  else if (rest) state.drafts[pane] = rest;
+  else delete state.drafts[pane];
+}
+
 function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElement | null {
   if (!canInput() || !find(pane)?.p.agent) return null;
   const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : agent ? `Reply to ${agent}` : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
   const images = state.attachments.get(pane) ?? [];
   const send = async (): Promise<void> => {
-    const text = box.value.trim();
+    const raw = box.value;
+    const text = raw.trim();
     const list = state.attachments.get(pane) ?? [];
     if ((!text && !list.length) || state.busy) return;
     state.busy = true;
@@ -690,9 +704,8 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     const r = failed ? { ok: false, ...failed } : await request({ type: "send", pane, text, ...(list.length ? { attachments: list.map((a) => a.name) } : {}) });
     state.busy = false;
     state.progress = null;
-    const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
     if (r.ok) {
-      if (field) field.value = "";
+      sent(pane, raw);
       state.attachments.delete(pane);
     } else {
       // The hub no longer knows an image (reconnected, or it dropped one): upload them all again next time.

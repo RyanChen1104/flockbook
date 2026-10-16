@@ -646,6 +646,30 @@ async function fakeRun() {
   await p.until("false", 500);
   check(await p.eval("document.querySelector('#composer-text').value") === "", "queue: nor for the first agent");
   await p.type("#composer-text", "");
+  // r2 P1-1: a send answered while another agent is open clears the composer it was sent from, never the open one.
+  await p.type("#composer-text", "slow send");
+  await p.click("#composer-send");
+  await p.until("document.querySelector('#composer-text')?.value === '' && document.querySelector('#composer-send')?.disabled === false");
+  await p.until("false", 400);
+  await p.type("#composer-text", "Message A");
+  await p.click("#composer-send");
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  await p.until("location.hash === '#pane=w1%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "B draft");
+  await p.until("false", 2500);
+  check(await p.eval("document.querySelector('#composer-text').value") === "B draft",
+    `send: r2 P1-1: a send that ends while another agent is open leaves that agent's composer alone (${JSON.stringify(await p.eval("document.querySelector('#composer-text').value"))})`);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.until("false", 300);
+  check(await p.eval("document.querySelector('#composer-text').value") === "",
+    `send: r2 P1-1: the sent text is gone from its own agent's composer (${JSON.stringify(await p.eval("document.querySelector('#composer-text').value"))})`);
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  await p.until("location.hash === '#pane=w1%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,
