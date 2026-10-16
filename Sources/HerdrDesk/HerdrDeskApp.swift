@@ -28,6 +28,7 @@ struct HerdrDeskApp: App {
         // Updates: only a real launch of an installed app checks (UpdaterGate). Never a check, preview or snapshot run.
         let quiet = headless || args.contains { $0.hasPrefix("--test") || $0.hasPrefix("--preview") || $0.hasPrefix("--snapshot") || $0 == "--fuzz" }
         AppUpdater.shared.start(quiet: quiet)
+        Notifier.shared.quiet = quiet
         if let i = args.firstIndex(of: "--test-update"), args.indices.contains(i + 1) {
             let feed = args[i + 1]
             DispatchQueue.main.async { HeadlessUpdateTest.run(feed: feed) }

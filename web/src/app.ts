@@ -285,11 +285,28 @@ addEventListener("hashchange", follow);
 // --- The newest message. An open conversation stays at the bottom while rows arrive and lay out (markdown, images),
 // until the reader scrolls up; scrolling back down follows again. Opening, switching or reloading starts at the bottom.
 let following = true;
-function nearBottom(): boolean { return document.documentElement.scrollHeight - window.innerHeight - window.scrollY <= 40; }
+/** The page height the resize observer last saw. */
+let laidOutHeight = 0;
+/** What the reader sees is the visual viewport: smaller with the keyboard open or zoomed in. */
+function nearBottom(): boolean {
+  const v = window.visualViewport;
+  const seen = v ? v.pageTop + v.height : window.scrollY + window.innerHeight;
+  return document.documentElement.scrollHeight - seen <= 40;
+}
 function toBottom(): void { if (state.watching && following) window.scrollTo(0, document.documentElement.scrollHeight); }
-addEventListener("scroll", () => { if (state.watching) following = nearBottom(); }, { passive: true });
-new ResizeObserver(toBottom).observe(document.body);
+/** Only the reader's own scrolling in the conversation changes `following`: not a move on the short "Not connected"
+ * screen, not the browser moving the page because its height changed (scroll events come before the resize observer in
+ * a frame) and not a move while the page is in the background. */
+function scrolled(): void {
+  if (!state.watching || !state.welcomed || document.visibilityState !== "visible") return;
+  if (document.documentElement.scrollHeight === laidOutHeight) following = nearBottom();
+}
+addEventListener("scroll", scrolled, { passive: true });
+window.visualViewport?.addEventListener("scroll", scrolled);
+window.visualViewport?.addEventListener("resize", toBottom);
+new ResizeObserver(() => { laidOutHeight = document.documentElement.scrollHeight; toBottom(); }).observe(document.body);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") toBottom(); });
+addEventListener("pageshow", toBottom);
 function open(pane: string): void { location.hash = `pane=${encodeURIComponent(pane)}`; }
 
 // --- Helpers.

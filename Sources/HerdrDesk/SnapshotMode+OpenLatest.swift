@@ -106,7 +106,7 @@ extension ContentTests {
     }
 }
 
-@MainActor @Observable private final class OpenLatestHolder {
+@MainActor @Observable final class OpenLatestHolder {
     var pane = "p1"
     var items: [ConversationItem] = []
     var load: ConversationLoadState = .loading
@@ -114,13 +114,14 @@ extension ContentTests {
 }
 
 /// The pane's shape (TabScreen): a fresh ConversationView per pane, label and composer bars over it.
-private struct OpenLatestView: View {
+struct OpenLatestView: View {
     let holder: OpenLatestHolder
     var body: some View {
         ConversationView(items: holder.items, agentName: "open", agentStatus: .working, loadState: holder.load, hasLog: true,
                          onLoadEarlier: { false })
             .id(holder.pane)
-            .safeAreaBar(edge: .top, spacing: 0) { Text("open · \(holder.pane)").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
+            // 60 pt, like the toolbar and a pane label in the app: a top bar over 40 pt once hid the end from the follow rule.
+            .safeAreaBar(edge: .top, spacing: 0) { Text("open · \(holder.pane)").font(.caption).frame(maxWidth: .infinity).frame(height: 60) }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: holder.bar)

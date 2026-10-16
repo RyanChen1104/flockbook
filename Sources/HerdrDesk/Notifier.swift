@@ -16,7 +16,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var approvalPrompt: ((_ tab: Tab) async -> (pane: String, prompt: String, request: PermissionRequest?)?)?
     /// Allow / Deny chosen. Returns true when the input was sent; false opens the tab.
     var onAnswer: ((_ action: String, _ paneID: String, _ prompt: String?) async -> Bool)?
-    private var available: Bool { Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") }
+    /// Checks, previews and snapshots: no permission prompt and no notification, also when they run from the .app.
+    var quiet = false
+    private var available: Bool { !quiet && Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") }
 
     func start() {
         guard available else { return }

@@ -110,6 +110,10 @@ async function page(context) {
       return r.result.value;
     },
     async goto(url) { await send("Page.navigate", { url }, sessionId); },
+    /** A real reload (`goto` to the same address with another hash stays in the document). */
+    async reload() { await send("Page.reload", {}, sessionId); },
+    /** A DevTools call on this page. */
+    async cdp(method, params = {}) { return send(method, params, sessionId); },
     /** Runs `source` in every page this target loads, before the page's own scripts. */
     async onEveryLoad(source) { await send("Page.addScriptToEvaluateOnNewDocument", { source }, sessionId); },
     /** Waits until `expr` is truthy; returns its value, or undefined after `ms`. */
@@ -599,15 +603,47 @@ async function fakeRun() {
   await p.eval("location.hash = '#pane=w2%3Ap1'");
   await p.until(`${rows} >= ${before + 36}`);
   check(await p.until(atEnd, 2000) === true, `newest: back to the first agent -> at the bottom (gap ${await p.eval(bottomGap)})`);
-  // Reload.
-  await p.goto(origin + "/#pane=w2%3Ap1");
+  // Reload. From here on the page keeps its sockets where the check can close one (a dropped connection).
+  await p.onEveryLoad("{ const W = WebSocket; window.__sockets = []; window.WebSocket = class extends W { constructor(...a) { super(...a); window.__sockets.push(this); } }; }");
+  await p.eval("window.__loaded = true");
+  await p.reload();
+  await p.until("!window.__loaded && window.__sockets", 8000);
   await p.until(`${rows} >= ${before + 36}`, 8000);
   check(await p.until(atEnd, 2000) === true, `newest: reload -> at the bottom (gap ${await p.eval(bottomGap)})`);
-  // The page goes to the background, rows arrive, it comes back.
+  // The connection drops while the reader is scrolled up: the short "Not connected" screen puts the page at the top. That
+  // is not the reader scrolling: back online, rows arrive and the reader is not pulled to the bottom.
+  const y = "Math.round(window.scrollY)";
+  await p.eval("window.scrollTo(0, 200)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("window.__sockets.at(-1).close()");
+  await p.until("document.body.innerText.includes('Not connected')");
+  await p.until(`${rows} >= ${before + 36}`, 8000);
+  grow("s3", 2);
+  await p.until(`${rows} >= ${before + 38}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 200, `newest: connection dropped while scrolled up -> not pulled to the bottom after it returns (gap ${await p.eval(bottomGap)}, y ${await p.eval(y)})`);
+  // Pinch zoom: what the reader sees is the visual viewport. At the bottom of the page but zoomed in on its top half,
+  // the newest rows are out of view: rows that arrive do not move the page.
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+  await p.until("window.visualViewport.scale > 1.5");
+  await p.eval("window.scrollBy(0, -1)");   // the reader's own scroll, zoomed in
+  await new Promise((r) => setTimeout(r, 300));
+  const zoomedY = await p.eval(y);
+  grow("s3", 2);
+  await p.until(`${rows} >= ${before + 40}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(y) === zoomedY, `newest: zoomed in above the newest rows -> stays (y ${zoomedY} -> ${await p.eval(y)})`);
+  await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+  await p.until("window.visualViewport.scale < 1.1");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
+  await new Promise((r) => setTimeout(r, 300));
+  // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
+  // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    document.dispatchEvent(new Event('visibilitychange'))`);
-  grow("s3", 5);
-  await p.until(`${rows} >= ${before + 41}`);
+    document.dispatchEvent(new Event('visibilitychange')); window.scrollTo(0, 0)`);
+  await new Promise((r) => setTimeout(r, 300));
   await p.eval(`delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))`);
   check(await p.until(atEnd, 2000) === true, `newest: back from the background -> at the bottom (gap ${await p.eval(bottomGap)})`);
 

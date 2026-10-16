@@ -13,6 +13,8 @@ extension ContentTests {
         guard session.name != nil, args.contains("--read-only") else {
             print("open-latest-live: usage: HerdrDesk --session <name> --read-only --test-open-latest-live (named session only)"); exit(2)
         }
+        // RootView starts the notifier on appear: a check must never ask for notification permission or post one.
+        step("notifications off in checks", Notifier.shared.quiet)
         let store = HerdrStore(session: session)
         let model = AppModel(store: store)
         store.start()
