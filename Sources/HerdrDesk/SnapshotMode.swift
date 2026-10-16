@@ -1288,10 +1288,29 @@ enum SnapshotRunner {
             ConversationItem(id: "c1", kind: .toolChips([ToolChip(symbol: "doc", text: "Read 3 files"), ToolChip(symbol: "terminal", text: "Ran 2 commands")]), timestamp: t0.addingTimeInterval(10)),
             ConversationItem(id: "a1", kind: .assistantText(md), timestamp: t0.addingTimeInterval(134)),
         ]
+        conversationShots(items, agentName: "orchard-main-orch", dir: dir, name: "reading", height: 1300)
+        print("reading snapshots written to \(dir)")
+        NSApp.terminate(nil)
+    }
+
+    /// `--snapshot-log <log.jsonl> <dir>`: a session log read the way the app reads it (SessionLog), shown in the
+    /// conversation view offscreen: <dir>/log-light.png and log-dark.png.
+    static func runLog(path: String, dir: String) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        guard let data = FileManager.default.contents(atPath: path) else { print("snapshot-log: cannot read \(path)"); exit(2) }
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        let items = SessionLog.parse(lines: lines)
+        conversationShots(items, agentName: "claude", dir: dir, name: "log", height: 900)
+        print("snapshot-log: \(items.count) items, written to \(dir)")
+        NSApp.terminate(nil)
+    }
+
+    /// The conversation view with `items`, offscreen, light and dark: <dir>/<name>-light.png and <name>-dark.png.
+    private static func conversationShots(_ items: [ConversationItem], agentName: String, dir: String, name: String, height: CGFloat) {
         for dark in [false, true] {
             AppDefaults.store.set(ReadingSize.m.rawValue, forKey: ReadingSize.key)
-            let size = NSSize(width: 900, height: 1300)
-            let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: "orchard-main-orch", hasLog: true) }
+            let size = NSSize(width: 900, height: height)
+            let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: agentName, hasLog: true) }
                 .environment(\.flatGlass, true).frame(width: size.width, height: size.height)
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(origin: .zero, size: size)
@@ -1301,12 +1320,10 @@ enum SnapshotRunner {
             for _ in 0..<12 { RunLoop.current.run(until: Date().addingTimeInterval(0.15)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
             if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                 host.cacheDisplay(in: host.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/reading-\(dark ? "dark" : "light").png"))
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name)-\(dark ? "dark" : "light").png"))
             }
             win.orderOut(nil)
         }
-        print("reading snapshots written to \(dir)")
-        NSApp.terminate(nil)
     }
 
     private static func render(_ c: Case, dir: String, store: HerdrStore = .preview) {
