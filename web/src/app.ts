@@ -671,6 +671,13 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
   };
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
   box.addEventListener("input", () => fitText(box));
+  // Turning the phone re-wraps the text: fit it again when the field's width changes (its height changes are ours).
+  let width = -1;
+  new ResizeObserver(([e]) => {
+    const w = e.contentRect.width;
+    if (width >= 0 && w !== width) fitText(box);
+    width = w;
+  }).observe(box);
   // A file field with `image/*`: the phone offers the camera and the photo library.
   const file = h("input", { id: "composer-file", type: "file", accept: "image/*", multiple: true, hidden: true, tabindex: "-1",
     onchange: () => { const fs = [...(file.files ?? [])]; file.value = ""; pick(pane, fs); } });

@@ -134,7 +134,7 @@ async function page(context) {
       await send("DOM.setFileInputFiles", { files: paths, nodeId }, sessionId);
     },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
-    async scale(dpr) { await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: dpr, mobile: true }, sessionId); },
+    async scale(dpr, width = 390, height = 844) { await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: true }, sessionId); },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -529,6 +529,19 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 400));
   const back = await p.eval(shape);
   check(Math.abs(back.h - one.h) < 1, `pill: emptied, back to one line (${back.h})`);
+  // Landscape to portrait: a long draft wraps into more lines; the field grows with no typing, nothing is cut off.
+  const metrics = (width, height) => p.scale(3, width, height);
+  const draft = "A long draft typed with the phone turned sideways, words enough to fill one wide line and wrap once the phone stands up again.";
+  await metrics(844, 390);
+  await setText(draft);
+  await new Promise((r) => setTimeout(r, 400));
+  const wide = await p.eval(shape);
+  await metrics(390, 844);
+  await new Promise((r) => setTimeout(r, 500));
+  const fits = `(() => { const e = ${field}; return { fit: e.scrollHeight <= e.clientHeight + 1 || getComputedStyle(e).overflowY === 'auto', box: e.getBoundingClientRect().height }; })()`;
+  const narrow = await p.eval(fits);
+  check(narrow.fit && narrow.box > wide.box, `turn: portrait re-wraps the draft and the field grows (${wide.box} -> ${narrow.box}), nothing cut off`);
+  await setText("");
 
   // Images from the phone: pick, preview, remove, send in parts with progress; the hub re-encodes them.
   const imgDir = mkdtempSync(join(tmpdir(), "fb-web-img-"));
