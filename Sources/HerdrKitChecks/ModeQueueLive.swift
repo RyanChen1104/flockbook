@@ -43,13 +43,15 @@ import Foundation
     print("queue-live: \(ag.kind) queue \(q.items.map { $0 ?? "<no text>" }) pullable \(q.pullable) (log \(log().count) entries)")
     step("the agent works before the keys", ag.status == .working)
 
+    let logged = log()
     let io = Recorder(HerdrQueuePullIO(client: client, paneId: pane, allowed: { true }))
-    let r = await QueuePull.run(expect: ag, log: log(), io: io)
+    let r = await QueuePull.run(expect: ag, log: logged, io: io)
     print("queue-live: outcome \(r)")
     print("queue-live: keys \(io.sent)")
     let flat = io.sent.flatMap { $0 }
     step("only Up, shift+left and ctrl+u went out; never Escape", flat.allSatisfy(QueuePull.allowedKeys.contains) && !flat.contains { $0.lowercased().hasPrefix("esc") })
-    let want = (q.pullsAll ? q.items : Array(q.items.suffix(1))).compactMap { $0 }.joined(separator: "\n")
+    // Claude: every message its log has open (the screen may draw fewer for a moment); Codex: the newest row.
+    let want = (q.pullsAll ? (logged.count > q.items.count ? logged : q.items) : Array(q.items.suffix(1))).compactMap { $0 }.joined(separator: "\n")
     step("pulled: the queued text came back (\(want.debugDescription))", r == .pulled(want))
 
     // The turn after the keys: read again now and 3 s later. Working, or a turn that ended normally; no interrupt notice.
