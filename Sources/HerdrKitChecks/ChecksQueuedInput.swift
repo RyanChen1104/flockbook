@@ -94,6 +94,17 @@ private func working(_ kind: String) -> Agent { Agent(name: kind, kind: kind, st
 
     var (r, k) = await pull("claude", [two, pulledIn, "· Pouncing… (13s)\n" + empty])
     check(r == .pulled("QC reply GAMMA\nQD reply DELTA") && k == [["Up"], ["ctrl+u", "ctrl+u", "ctrl+u"]], "pull: Claude: Up, then Ctrl-U per input row and one more; every queued message, one per line (\(r), \(k))")
+    // The screen showed fewer rows than Up brought back (seen live: one row drawn, two queued): the composer gets every
+    // line that came back, never only the expected ones (the rest would be cleared and lost).
+    let more = "⏺ ALPHA\n" + rule + "\n❯ QK reply KILO\n  QL reply LIMA\n" + rule
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QL reply LIMA"]), more, "· Pouncing… (13s)\n" + empty])
+    check(r == .pulled("QK reply KILO\nQL reply LIMA") && k == [["Up"], ["ctrl+u", "ctrl+u", "ctrl+u"]], "pull: more came back than the screen showed: all of it (\(r))")
+    // A long message wraps in the input box: the text stays as queued, not cut at the wraps.
+    let wrapped = "⏺ ALPHA\n" + rule + "\n❯ QW one two three\n  four five\n" + rule
+    (r, _) = await pull("claude", [claudeScreen(queued: ["QW one two three four five"]), wrapped, "· Pouncing… (13s)\n" + empty])
+    check(r == .pulled("QW one two three four five"), "pull: a wrapped message comes back as queued (\(r))")
+    (r, _) = await pull("claude", [two, pulledIn, "⏺ ALPHA\n" + rule + "\n❯ QD reply DELTA\n" + rule])
+    check(r.isFailed, "pull: any pulled line left in the input box: failed")
     let cxQueued = codexScreen(queued: ["QB reply BETA", "QD reply DELTA"])
     let cxPulled = codexScreen(queued: ["QB reply BETA"], input: "› QD reply DELTA")
     (r, k) = await pull("codex", [cxQueued, cxPulled, codexScreen(queued: ["QB reply BETA"])])

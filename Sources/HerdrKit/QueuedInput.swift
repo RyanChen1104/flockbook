@@ -190,28 +190,35 @@ public enum QueuePull {
         let pulled = q.pullsAll ? q.items : Array(q.items.suffix(1))
         guard pulled.allSatisfy({ $0 != nil }) else { return .refused("The queued text cannot be read yet. Nothing was sent.") }
         let text = pulled.compactMap { $0 }.joined(separator: "\n")
-        let first = text.components(separatedBy: "\n").first ?? text
 
         guard await send([key], io) else { return .refused("Input is off. Nothing was sent.") }
         await io.settle()
-        guard let moved = await io.screen(), inputRows(moved, agent: expect.kind).contains(where: { $0.contains(first) }) else {
+        // What came back is what the input box holds now. It must hold the queued text; it may hold more than the
+        // screen showed (seen live): then all of it goes to the composer, so Ctrl-U never clears text the owner did
+        // not get back.
+        let back = await io.screen().map { inputRows($0, agent: expect.kind) } ?? []
+        let got = squash(back.joined(separator: " ")), want = squash(text)
+        guard !want.isEmpty, got.contains(want) else {
             return .failed("The queued text did not come back to the input box. Check the agent's terminal.")
         }
+        let taken = got == want ? text : back.joined(separator: "\n")
         // One Ctrl-U per input row (it clears one line), and one more.
-        let rows = max(1, inputRows(moved, agent: expect.kind).count)
-        guard await send(Array(repeating: "ctrl+u", count: rows + 1), io) else {
+        guard await send(Array(repeating: "ctrl+u", count: back.count + 1), io) else {
             return .failed("The text is in the agent's input box: input went off before it was cleared.")
         }
         await io.settle()
-        guard let after = await io.screen(), !inputRows(after, agent: expect.kind).contains(where: { $0.contains(first) }) else {
+        guard let after = await io.screen(), !inputRows(after, agent: expect.kind).contains(where: back.contains) else {
             return .failed("The text is still in the agent's input box. Check the agent's terminal.")
         }
         let status = await io.agent()?.status
         if interrupts(after) > interrupts(before) || !(status == .working || status == .idle || status == .done) {
-            return .interrupted(text)
+            return .interrupted(taken)
         }
-        return .pulled(text)
+        return .pulled(taken)
     }
+
+    /// Words only: the input box wraps long lines, so compare without line breaks and runs of spaces.
+    static func squash(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     private static func send(_ keys: [String], _ io: some IO) async -> Bool {
         guard safe(keys) else { return false }
@@ -222,7 +229,12 @@ public enum QueuePull {
     /// the rows that continue it).
     static func inputRows(_ screen: String, agent: String) -> [String] {
         let lines = screen.components(separatedBy: "\n")
-        if agent == "claude" { return QueuedInput.claudeInput(lines) }
+        if agent == "claude" {
+            // The first row starts with the "❯ " prompt mark; it is not text.
+            var rows = QueuedInput.claudeInput(lines)
+            if let f = rows.first, f.hasPrefix("❯") { rows[0] = String(f.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            return rows.filter { !$0.isEmpty }
+        }
         guard let i = lines.lastIndex(where: { $0.hasPrefix("› ") }) else { return [] }
         var rows = [String(lines[i].dropFirst(2))]
         for l in lines[(i + 1)...] {
