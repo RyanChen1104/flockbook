@@ -334,10 +334,12 @@ public enum QueuePull {
     /// The box rows are the text, character for character: one row per line, nothing joined, trimmed or guessed.
     static func exact(_ rows: [String], _ text: String) -> Bool { same(rows.joined(separator: "\n"), text) }
 
-    /// The box after one Ctrl-U: the last row emptied, or an empty last row gone; [] when the box is empty.
+    /// The box after one Ctrl-U: the last row emptied, or an empty last row gone; [] when the box is empty (one empty
+    /// row is an empty box).
     static func cleared(_ rows: [String]) -> [String] {
         guard rows.count > 1 else { return [] }
-        return rows.last == "" ? Array(rows.dropLast()) : Array(rows.dropLast()) + [""]
+        let next = rows.last == "" ? Array(rows.dropLast()) : Array(rows.dropLast()) + [""]
+        return next == [""] ? [] : next
     }
 
     static func sameRows(_ a: [String], _ b: [String]) -> Bool { a.count == b.count && zip(a, b).allSatisfy { same($0, $1) } }

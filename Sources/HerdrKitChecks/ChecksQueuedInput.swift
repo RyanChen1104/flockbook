@@ -233,6 +233,10 @@ private func wrap(_ text: String, width: Int) -> [String] {
     // the first read stop it (before r8 trailing blank rows were dropped and Ctrl-U cleared the new ones too).
     (r, k) = await pull("claude", [claudeScreen(queued: ["a"]), claudeBox(["a"]), claudeBox(["a", "", ""]), claudeBox(["a", "", ""]), empty], log: ["a"])
     check(r.isPartial && k == [["Up"]], "pull: r8 P2: two blank rows added before the first Ctrl-U: stopped, no Ctrl-U (\(r), \(k))")
+    // r9 P2: a text that starts with a blank line: once only one empty row is left the box is empty, so no third
+    // Ctrl-U (before r9 it went out and would clear what the owner had started to type).
+    (r, k) = await pull("claude", [claudeScreen(queued: ["\n  a"]), claudeBox(["", "a"]), claudeBox(["", "a"]), claudeBox(["", ""]), empty, empty], log: ["\na"])
+    check(r == .pulled("\na") && k == [["Up"], u, u], "pull: r9 P2: '\\na': two Ctrl-U, then empty (\(r), \(k))")
     // r8: a read that still shows the box before the last Ctrl-U (not redrawn yet): no key, the next read decides.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, pulledIn, qcBlank, oneRow, empty], log: gd)
     check(r == .pulled(gammaDelta) && k == [["Up"], u, u, u], "pull: r8: the screen not redrawn after a Ctrl-U: no extra key (\(r), \(k))")
