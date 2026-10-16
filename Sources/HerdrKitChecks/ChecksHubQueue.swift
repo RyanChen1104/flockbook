@@ -115,6 +115,21 @@ import Foundation
         let part = pulled(await s.receive(pull))
         check(part?.text == "QC reply GAMMA" && part?.note == "The agent's input box changed while Flockbook cleared it." && part?.id != nil,
               "hub queue: a pull that stopped early: the text, kept, with the reason as a note (\(String(describing: part)))")
+        // r2 P2-8: sent again after a hello, it carries the reason it was sent with (the terminal may still hold text).
+        let (_, h2) = await hello("tok-input")
+        check(pulled(h2)?.id == part?.id && pulled(h2)?.note == "The agent's input box changed while Flockbook cleared it.",
+              "hub queue: r2 P2-8: a partial pull sent again after hello keeps its reason (\(String(describing: pulled(h2))))")
+        b.pullOutcome = .interrupted("QI reply INDIA")
+        let stopped = pulled(await s.receive(pull))
+        let (_, h3) = await hello("tok-input")
+        let again3 = h3.compactMap { if case .pulled(let p) = $0, p.id == stopped?.id { p } else { nil } }.first
+        check(again3?.interrupted == true, "hub queue: r2 P2-8: an interrupted pull sent again is still marked interrupted (\(String(describing: again3)))")
+        check(b.keptNote != nil, "hub queue: r2 P2-8: while the pull runs the kept text carries a warning (a quit mid-pull is never sent as clean) (\(String(describing: b.keptNote)))")
+        b.pullOutcome = .pulled("QJ reply JULIET")
+        let clean = pulled(await s.receive(pull))
+        let (_, h4) = await hello("tok-input")
+        let again4 = h4.compactMap { if case .pulled(let p) = $0, p.id == clean?.id { p } else { nil } }.first
+        check(again4 != nil && again4?.note == nil && again4?.interrupted == false, "hub queue: r2 P2-8: a clean pull sent again has no warning (\(String(describing: again4)))")
         b.pulledTexts = FailingPulledStore()
         b.pullOutcome = .partial("QC reply GAMMA", "Could not keep the text.")
         let unkept = pulled(await s.receive(pull))
@@ -133,6 +148,31 @@ import Foundation
               "pulled store: a new start reads it back, exactly; the file is mode 600 (\(String(mode, radix: 8)))")
         check(f.take(id: "x1", device: "d-other") == nil && f.take(id: "x1", device: PulledText.mac)?.text == "if ready:\n    run()", "pulled store: only its device takes it")
         check(FilePulledStore(url: url).all.isEmpty, "pulled store: taken: gone from the file")
+    }
+
+    // r2 P2-7: the store has limits (count and bytes): full, it refuses, and the pull then clears nothing. It drops a
+    // removed device's texts and those of panes that are gone.
+    do {
+        let m = MemoryPulledStore(maxCount: 2, maxBytes: 64)
+        check(m.keep(PulledText(id: "a", pane: "p1", device: "d1", text: "one")) && m.keep(PulledText(id: "b", pane: "p2", device: "d2", text: "two")),
+              "pulled store: keeps up to its count")
+        check(!m.keep(PulledText(id: "c", pane: "p1", device: "d1", text: "three")) && m.all.map(\.id) == ["a", "b"], "pulled store: r2 P2-7: full by count: refused, the others stay")
+        let n = MemoryPulledStore(maxCount: 10, maxBytes: 64)
+        check(!n.keep(PulledText(id: "big", pane: "p1", device: "d1", text: String(repeating: "x", count: 65))) && n.all.isEmpty, "pulled store: r2 P2-7: over the bytes: refused")
+        m.drop(device: "d2")
+        check(m.all.map(\.id) == ["a"], "pulled store: r2 P2-7: a removed device's texts go (\(m.all.map(\.id)))")
+        _ = m.keep(PulledText(id: "d", pane: "p9", device: PulledText.mac, text: "gone pane"))
+        m.prune(panes: ["p1"])
+        check(m.all.map(\.id) == ["a"], "pulled store: r2 P2-7: texts of panes that are gone go (\(m.all.map(\.id)))")
+        m.finish(id: "a", note: "why", interrupted: true)
+        check(m.all.first?.note == "why" && m.all.first?.interrupted == true, "pulled store: finish records the pull's end")
+        // A file from before `note` and `interrupted` reads back.
+        let dir = FileManager.default.temporaryDirectory.appending(path: "pulled-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appending(path: "pulled.json")
+        try Data(#"[{"at":"2026-10-16T10:00:00Z","device":"mac","id":"o1","pane":"w1:p1","text":"old"}]"#.utf8).write(to: url)
+        check(FilePulledStore(url: url).all.map(\.text) == ["old"], "pulled store: a file without note and interrupted reads back")
     }
 
     // Wire format.

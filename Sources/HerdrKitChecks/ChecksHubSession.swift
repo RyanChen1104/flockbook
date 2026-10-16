@@ -43,8 +43,13 @@ import Foundation
     /// What `allowed()` said right before the keys, per call.
     private(set) var allowedAtKeys: [Bool] = []
     private(set) var sentAgents: [String?] = []
+    /// How long the next send takes (once; the web test switches agents meanwhile).
+    var sendDelay: Duration = .zero
     func send(pane: String, text: String, images: [URL], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async -> HubSendResult {
         beforeKeys?()
+        let delay = sendDelay
+        sendDelay = .zero
+        if delay > .zero { try? await Task.sleep(for: delay) }
         allowedAtKeys.append(allowed())
         guard allowed() else { return .failed }
         sentAgents.append(agent.sessionId)
@@ -70,6 +75,8 @@ import Foundation
     var pullDelay: Duration = .zero
     /// What `keep` answered for the last pull with text (nil: not asked).
     private(set) var kept: Bool?
+    /// The kept text's note right after `keep` (while the pull runs).
+    private(set) var keptNote: String?
     func pullQueued(pane: String, agent: Agent, log: ClaudeQueueLog, keep: @escaping @MainActor @Sendable (String) -> Bool,
                     allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
         beforeKeys?()
@@ -78,6 +85,7 @@ import Foundation
         pulls.append("\(pane) \(agent.sessionId ?? "")")
         if pullDelay > .zero { try? await Task.sleep(for: pullDelay) }
         kept = pullOutcome.text.map(keep)
+        keptNote = pulledTexts.all.last?.note
         return pullOutcome
     }
     /// The hook's newest call per agent session.

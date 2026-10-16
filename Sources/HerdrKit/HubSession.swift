@@ -199,8 +199,11 @@ extension Hub {
             return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName,
                                         pushKey: backend.pushKey, pushOn: backend.pushKey == nil ? nil : backend.pushSubscribed(device: d.id))),
                     .snapshot(lastSnapshot ?? [])]
-                // Pulled texts this device's composer did not confirm yet (the connection dropped before).
-                + backend.pulledTexts.pending(device: d.id).map { .pulled(HubPulled(id: $0.id, pane: $0.pane, text: $0.text, interrupted: false)) }
+                // Pulled texts this device's composer did not confirm yet (the connection dropped before), with the
+                // warning they had (or `unfinished`, when the hub stopped mid-pull).
+                + backend.pulledTexts.pending(device: d.id).map {
+                    .pulled(HubPulled(id: $0.id, pane: $0.pane, text: $0.text, interrupted: $0.interrupted, note: $0.note))
+                }
                 + [ok(m.id)]
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
@@ -281,11 +284,18 @@ extension Hub {
             let entry = UUID().uuidString, store = backend.pulledTexts, deviceID = device.id
             let saved = Flag()
             let keep: @MainActor @Sendable (String) -> Bool = { text in
-                saved.on = store.keep(PulledText(id: entry, pane: id, device: deviceID, text: text))
+                saved.on = store.keep(PulledText(id: entry, pane: id, device: deviceID, text: text, note: PulledText.unfinished))
                 return saved.on
             }
             let r = await backend.pullQueued(pane: id, agent: agent, log: log, keep: keep, allowed: allowed)
             let kept = saved.on ? entry : nil
+            if saved.on {
+                switch r {
+                case .partial(_, let why): store.finish(id: entry, note: why, interrupted: false)
+                case .interrupted: store.finish(id: entry, note: nil, interrupted: true)
+                default: store.finish(id: entry, note: nil, interrupted: false)
+                }
+            }
             switch r {
             case .pulled(let text): return [.pulled(HubPulled(id: kept, pane: id, text: text, interrupted: false)), ok(m.id)]
             case .interrupted(let text): return [.pulled(HubPulled(id: kept, pane: id, text: text, interrupted: true)), ok(m.id)]

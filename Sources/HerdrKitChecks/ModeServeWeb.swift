@@ -166,6 +166,8 @@ import ImageIO
                     _ = b.pulledTexts.keep(PulledText(pane: pane, device: "d-input", text: t))
                 }
             }
+            // "slow send": the next send takes 1.5 s.
+            if text == "slow send" { b.sendDelay = .milliseconds(1500) }
             if text == "queue busy" { b.screens["w2:p2"] = queueScreen(input: "❯ half typed"); setStatus("w2:p2", .working) }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }

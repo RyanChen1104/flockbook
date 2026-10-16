@@ -75,8 +75,6 @@ private func wrap(_ text: String, width: Int) -> [String] {
     check(log.items == ["QC", nil], "queue: log enqueue/remove/dequeue; an enqueue without content is a nil (\(log.items))")
     log.feed(["type": "queue-operation", "operation": "popAll", "content": "QC"]); log.feed(["type": "queue-operation", "operation": "popAll"])
     check(log.items.isEmpty, "queue: popAll empties it")
-    log.feed(["type": "queue-operation", "operation": "enqueue", "content": "QX", "timestamp": "2026-10-16T10:45:58.194Z"])
-    check(log.newest == ConversationParser.parseTime("2026-10-16T10:45:58.194Z") && log.newest != nil, "queue: the log keeps when the newest enqueue happened (\(String(describing: log.newest)))")
     let fixtureLog = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
     var parser = ConversationParser()
     for l in fixtureLog { parser.feed(line: l) }
@@ -90,19 +88,14 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let filled = QueuedInput.read(agent: working("claude"), screen: compact, log: [nil])
     check(filled?.items == ["QH reply HOTEL"], "queue: compaction's enqueue has no text; the newest screen row fills it, the sent prompt above stays out (\(String(describing: filled?.items)))")
     check(QueuedInput.read(agent: working("claude"), screen: two, log: ["QC reply GAMMA", "QD reply DELTA"])?.items == ["QC reply GAMMA", "QD reply DELTA"], "queue: log and screen agree")
-    // P2-7: the log and the screen are lined up by their text, not by count. Right after an enqueue the screen may
-    // draw only the newest row: the log's older entries stay. Once the screen had time to draw them (5 s after the
-    // newest enqueue) and still does not, they are entries the log never closed (a restart): dropped.
-    let now = Date()
-    let fresh = ClaudeQueueLog(["QC reply GAMMA", "QD reply DELTA"], newest: now.addingTimeInterval(-1))
-    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QD reply DELTA"]), log: fresh, now: now)?.items == ["QC reply GAMMA", "QD reply DELTA"],
-          "queue: the screen draws only the newest row just after an enqueue: the log's older entry stays")
-    let settled = ClaudeQueueLog(["stale", "QD reply DELTA"], newest: now.addingTimeInterval(-30))
-    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QD reply DELTA"]), log: settled, now: now)?.items == ["QD reply DELTA"],
-          "queue: an entry the log never closed is dropped once the screen had time to draw it")
-    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QE new text"]), log: ClaudeQueueLog(["QE old text"], newest: now), now: now)?.items == ["QE new text"],
+    // P2-7 / r2 P2-6: the log and the screen are lined up by their text, not by count. The screen may draw only the
+    // newest rows (just after an enqueue, or the box is cut by the pane's height): the log's older entries stay, at
+    // any age. Time alone is no proof that an entry is stale, so Flockbook shows more rather than less.
+    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QD reply DELTA"]), log: ["QC reply GAMMA", "QD reply DELTA"])?.items == ["QC reply GAMMA", "QD reply DELTA"],
+          "queue: r2 P2-6: the screen shows only the newest row (at any age): the log's older entry stays")
+    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QE new text"]), log: ["QE old text"])?.items == ["QE new text"],
           "queue: as many entries but other text: the screen's text, not the log's")
-    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QA reply ALPHA", "QZ from the screen"]), log: ["QA reply ALPHA", nil], now: now)?.items == ["QA reply ALPHA", "QZ from the screen"],
+    check(QueuedInput.read(agent: working("claude"), screen: claudeScreen(queued: ["QA reply ALPHA", "QZ from the screen"]), log: ["QA reply ALPHA", nil])?.items == ["QA reply ALPHA", "QZ from the screen"],
           "queue: a log entry without text takes its screen row's text")
     check(QueuedInput.read(agent: working("claude"), screen: two, log: [])?.items.count == 2, "queue: a log not caught up yet: the screen's rows")
     var idle = working("claude"); idle.status = .idle
@@ -124,13 +117,13 @@ private func wrap(_ text: String, width: Int) -> [String] {
     var allKeys: [[String]] = []
     /// The texts kept (`keep`) and how many key lists had gone out when each was kept.
     var kept: [(String, Int)] = []
-    func pull(_ kind: String, _ screens: [String?], agents: [Agent?]? = nil, log: ClaudeQueueLog = [], keysOn: Bool = true,
-              cols: Int? = 64, saves: Bool = true) async -> (QueuePull.Outcome, [[String]]) {
-        let io = FakePane(screens: screens, agents: agents ?? [working(kind)])
+    func pull(_ kind: String, _ screens: [String?], log: ClaudeQueueLog = [], agents: [Agent?]? = nil, keysOn: Bool = true,
+              cols: Int? = 64, saves: Bool = true, expect: Agent? = nil) async -> (QueuePull.Outcome, [[String]]) {
+        let io = FakePane(screens: screens, agents: agents ?? [expect ?? working(kind)])
         io.keysOn = keysOn
         io.cols = cols
         kept = []
-        let r = await QueuePull.run(expect: working(kind), log: log, io: io) { t in kept.append((t, io.sent.count)); return saves }
+        let r = await QueuePull.run(expect: expect ?? working(kind), log: log, io: io) { t in kept.append((t, io.sent.count)); return saves }
         allKeys += io.sent
         return (r, io.sent)
     }
@@ -138,17 +131,18 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let pulledIn = claudeBox(["QC reply GAMMA", "QD reply DELTA"])
     let oneRow = claudeBox(["QC reply GAMMA"])
     let gammaDelta = "QC reply GAMMA\nQD reply DELTA"
+    let gd: ClaudeQueueLog = ["QC reply GAMMA", "QD reply DELTA"]
     let u = ["ctrl+u"]
 
     // Claude Code: Up, then one Ctrl-U at a time; the box is read again before each and must still hold what Up
     // brought back, less the rows Ctrl-U took (Ctrl-U takes one row; an emptied row's line break takes one more).
-    var (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, "· Pouncing… (13s)\n" + empty])
+    var (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, "· Pouncing… (13s)\n" + empty], log: gd)
     check(r == .pulled(gammaDelta) && k == [["Up"], u, u, u], "pull: Claude: Up, then one Ctrl-U per key list until the box is empty (\(r), \(k))")
     check(kept.map(\.0) == [gammaDelta] && kept.first?.1 == 1, "pull: the text is kept after Up, before the first Ctrl-U (\(kept))")
     // The screen showed fewer rows than Up brought back (seen live: one row drawn, two queued): the composer gets every
     // line that came back, never only the expected ones (the rest would be cleared and lost).
     let more = claudeBox(["QK reply KILO", "QL reply LIMA"])
-    (r, k) = await pull("claude", [claudeScreen(queued: ["QL reply LIMA"]), more, more, claudeBox(["QK reply KILO"]), empty])
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QL reply LIMA"]), more, more, claudeBox(["QK reply KILO"]), empty], log: ["QK reply KILO", "QL reply LIMA"])
     check(r == .pulled("QK reply KILO\nQL reply LIMA"), "pull: more came back than the screen showed: all of it (\(r))")
     // A long message wraps in the input box: the text stays as queued, not cut at the wraps.
     let wrapped = claudeBox(["QW one two three", "four five"])
@@ -163,30 +157,30 @@ private func wrap(_ text: String, width: Int) -> [String] {
     check(r == .pulled(cjk), "pull: CJK wrapped mid-word in the box comes back as the log has it (\(r))")
     // Up brought back something else than expected: it goes to the composer as it is, and the box is not cleared.
     let odd = claudeBox(["QZ something else"])
-    (r, k) = await pull("claude", [two, odd, odd])
+    (r, k) = await pull("claude", [two, odd, odd], log: gd)
     check(r.text == "QZ something else" && r.isPartial && k == [["Up"]], "pull: other text came back: to the composer, no Ctrl-U (\(r), \(k))")
 
     // P1-1: the owner types in the terminal while it is cleared: stop, no more keys, the text still goes to the composer.
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])], log: gd)
     check(r == .partial(gammaDelta, r.why ?? "") && k == [["Up"], u], "pull: the box changed between two Ctrl-U: stopped, the text kept (\(r), \(k))")
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, claudeBox(["QC reply GAMMA typed"])])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, claudeBox(["QC reply GAMMA typed"])], log: gd)
     check(r.isPartial && r.text == gammaDelta && k == [["Up"], u, u], "pull: text typed into a row Ctrl-U left: stopped, no more keys (\(r), \(k))")
     // P1-1: another agent in the pane after Up: no Ctrl-U at all.
     var other = working("claude"); other.sessionId = "another"
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn], agents: [working("claude"), other])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn], log: gd, agents: [working("claude"), other])
     check(r.isPartial && r.text == gammaDelta && k == [["Up"]], "pull: another agent after Up: no Ctrl-U, the text kept (\(r), \(k))")
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow], agents: [working("claude"), working("claude"), other])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow], log: gd, agents: [working("claude"), working("claude"), other])
     check(r.isPartial && r.text == gammaDelta && k == [["Up"], u], "pull: another agent between two Ctrl-U: stopped (\(k))")
     // P1-2: a failed read during or after the clearing: the text still comes back.
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, nil])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, nil], log: gd)
     check(r.text == gammaDelta && k == [["Up"], u], "pull: the box cannot be read after a Ctrl-U: the text still goes to the composer (\(r))")
-    (r, k) = await pull("claude", [two, nil])
+    (r, k) = await pull("claude", [two, nil], log: gd)
     check(r.text == gammaDelta && k == [["Up"]], "pull: the box cannot be read after Up: the text goes to the composer, no Ctrl-U (\(r))")
     // The text could not be kept: no Ctrl-U (the box keeps it), and it still goes to the composer.
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, empty], saves: false)
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, empty], log: gd, saves: false)
     check(r.isPartial && r.text == gammaDelta && k == [["Up"]], "pull: not kept: no Ctrl-U (\(r), \(k))")
     // Ctrl-U never clears it: stop after a bounded number of keys.
-    (r, k) = await pull("claude", [two, pulledIn])
+    (r, k) = await pull("claude", [two, pulledIn], log: gd)
     check(r.isPartial && r.text == gammaDelta && k.count <= 7 && k.dropFirst().allSatisfy { $0 == u }, "pull: the box never empties: stopped after a few Ctrl-U (\(k.count - 1))")
 
     // Codex: Shift-Left takes the newest only.
@@ -197,31 +191,55 @@ private func wrap(_ text: String, width: Int) -> [String] {
     // P2-4: indentation stays; a soft wrap is not a line break (Codex wraps at the pane's width less 3).
     let code = "if ready:\n    run()"
     let cxCode = codexScreen(queued: [], input: "› if ready:\n      run()")
-    (r, _) = await pull("codex", [codexScreen(queued: ["if ready:\n        run()"]), cxCode, cxCode, codexScreen(queued: [], input: "› if ready:"), codexScreen(queued: [])])
-    check(r == .pulled(code), "pull: Codex: indentation in the box stays (\(r))")
+    (r, k) = await pull("codex", [codexScreen(queued: ["if ready:\n        run()"]), cxCode, cxCode, codexScreen(queued: [], input: "› if ready:"), codexScreen(queued: [])])
+    check(r.text == code && r.isPartial && k == [["shift+left"]], "pull: Codex: indentation in the box stays; more than one row: not cleared (\(r), \(k))")
     let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
     let rows = wrap(long, width: 37)   // 40 columns
     let cxLong = codexScreen(queued: [], input: "› " + rows.joined(separator: "\n  "))
-    (r, _) = await pull("codex", [codexScreen(queued: [long]), cxLong, cxLong, codexScreen(queued: [])], cols: 40)
-    check(rows.count > 1 && r == .pulled(long), "pull: Codex: a soft-wrapped line comes back as one line (\(rows), \(r))")
+    (r, k) = await pull("codex", [codexScreen(queued: [long]), cxLong, cxLong, codexScreen(queued: [])], cols: 40)
+    check(rows.count > 1 && r.text == long && r.isPartial && k == [["shift+left"]], "pull: Codex: a soft-wrapped line comes back as one line, left in the box too (\(rows), \(r), \(k))")
+    // r2 P2-5: a line break and a wrap look the same in the box (36 columns of text, a line break, then a word, in 37
+    // columns). Flockbook cannot tell them apart: it sends no Ctrl-U, the box keeps the text exactly, the owner is told.
+    let hard = String(repeating: "a", count: 36) + "\nnext"
+    let cxHard = codexScreen(queued: [], input: "› " + String(repeating: "a", count: 36) + "\n  next")
+    (r, k) = await pull("codex", [codexScreen(queued: [hard]), cxHard, cxHard, codexScreen(queued: [])], cols: 40)
+    check(r.isPartial && r.text != nil && k == [["shift+left"]] && r.why?.contains("terminal") == true,
+          "pull: r2 P2-5: Codex text on more than one row: no Ctrl-U, the text to the composer, the owner told to clear it (\(r), \(k))")
+    // Claude Code: rows that the log's text does not match (or no log): no Ctrl-U either. One row: no line breaks to lose.
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, empty])
+    check(r.isPartial && r.text == gammaDelta && k == [["Up"]], "pull: r2 P2-5: Claude rows without the log's text: no Ctrl-U (\(r), \(k))")
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QC reply GAMMA"]), oneRow, oneRow, empty])
+    check(r == .pulled("QC reply GAMMA") && k == [["Up"], u], "pull: one row without the log: cleared (\(r), \(k))")
+    (r, k) = await pull("codex", [cxQueued, cxPulled, cxPulled, codexScreen(queued: ["QB reply BETA"])])
+    check(r == .pulled("QD reply DELTA") && k == [["shift+left"], u], "pull: Codex: one row: cleared (\(r), \(k))")
 
+    // r2 P1-4: the pull is bound to the agent's session: without one (nil or empty) Flockbook cannot tell another agent
+    // of the same kind from it, so it refuses before any key.
+    for sid in [nil, ""] as [String?] {
+        var anon = working("claude"); anon.sessionId = sid
+        (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, empty], log: gd, expect: anon)
+        check(r.isRefused && k.isEmpty, "pull: r2 P1-4: an agent without a session id (\(String(describing: sid))): refused, no key (\(r), \(k))")
+    }
+    var lost = working("claude"); lost.sessionId = nil
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, empty], log: gd, agents: [working("claude"), lost])
+    check(r.isPartial && k == [["Up"]], "pull: r2 P1-4: the session id gone after Up: no Ctrl-U (\(r), \(k))")
     (r, k) = await pull("claude", [claudeScreen(queued: ["QC"], input: "❯ half typed")])
     check(r.isRefused && k.isEmpty, "pull: input box not empty: refused, no key")
     var notWorking = working("claude"); notWorking.status = .done
-    (r, k) = await pull("claude", [two], agents: [notWorking])
+    (r, k) = await pull("claude", [two], log: gd, agents: [notWorking])
     check(r.isRefused && k.isEmpty, "pull: the turn ended: refused, no key")
-    (r, k) = await pull("claude", [two], agents: [other])
+    (r, k) = await pull("claude", [two], log: gd, agents: [other])
     check(r.isRefused && k.isEmpty, "pull: another agent in the pane: refused, no key")
     (r, k) = await pull("claude", ["⏺ nothing queued\n" + empty])
     check(r.isRefused && k.isEmpty, "pull: no queue on screen: refused, no key")
-    (r, k) = await pull("claude", [two], keysOn: false)
+    (r, k) = await pull("claude", [two], log: gd, keysOn: false)
     check(r.isRefused && k == [["Up"]], "pull: input went off: nothing went out, no more keys")
-    (r, k) = await pull("claude", [two, two])
+    (r, k) = await pull("claude", [two, two], log: gd)
     check(r.isFailed && k == [["Up"]], "pull: the text did not come back (still queued): failed, no Ctrl-U")
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, "  ⎿  Interrupted · What should Claude do instead?\n" + empty])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, "  ⎿  Interrupted · What should Claude do instead?\n" + empty], log: gd)
     check(r == .interrupted(gammaDelta), "pull: an interrupt notice after the keys: interrupted, the text kept (\(r))")
     var blocked = working("claude"); blocked.status = .blocked
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, empty], agents: [working("claude"), working("claude"), working("claude"), blocked])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, empty], log: gd, agents: [working("claude"), working("claude"), working("claude"), blocked])
     check(r == .interrupted(gammaDelta), "pull: the agent no longer working or done after the keys: interrupted (\(r))")
 
     let flat = Set(allKeys.flatMap { $0 })
