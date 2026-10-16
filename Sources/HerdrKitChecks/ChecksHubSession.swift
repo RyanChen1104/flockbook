@@ -59,6 +59,19 @@ import Foundation
         guard allowed() else { return false }
         approved.append("\(pane) \(prompt) \(allow)"); return approveOK
     }
+    /// Claude Code's queue per session, as a log would have it.
+    var queuedLogs: [String: [String?]] = [:]
+    func queuedLog(session: String) -> [String?] { queuedLogs[session] ?? [] }
+    var pullOutcome = QueuePull.Outcome.refused("not set")
+    /// "pane session" per pull.
+    private(set) var pulls: [String] = []
+    func pullQueued(pane: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
+        beforeKeys?()
+        allowedAtKeys.append(allowed())
+        guard allowed() else { return .refused("Input is off. Nothing was sent.") }
+        pulls.append("\(pane) \(agent.sessionId ?? "")")
+        return pullOutcome
+    }
     /// The hook's newest call per agent session.
     var hooked: [String: QuestionRequest] = [:]
     func hookedQuestion(session: String) -> QuestionRequest? { hooked[session] }

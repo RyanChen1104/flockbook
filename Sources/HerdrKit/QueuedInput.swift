@@ -232,3 +232,23 @@ public enum QueuePull {
         return rows
     }
 }
+
+/// QueuePull on a live pane: a fresh snapshot for the agent, the visible screen, named keys through herdr. `allowed`
+/// is asked right before each key list (Allow input, the device's level).
+public struct HerdrQueuePullIO: QueuePull.IO {
+    public let client: HerdrClient
+    public let paneId: String
+    public let allowed: @MainActor @Sendable () -> Bool
+    public init(client: HerdrClient, paneId: String, allowed: @escaping @MainActor @Sendable () -> Bool) {
+        self.client = client; self.paneId = paneId; self.allowed = allowed
+    }
+    public func agent() async -> Agent? {
+        (try? await client.snapshot())?.flatMap(\.tabs).flatMap(\.panes).first { $0.id == paneId }?.agent
+    }
+    public func screen() async -> String? { try? await client.visibleText(paneId: paneId) }
+    public func keys(_ keys: [String]) async -> Bool {
+        guard QueuePull.safe(keys), await allowed() else { return false }
+        return (try? await client.sendNamedKeys(keys, to: paneId)) != nil
+    }
+    public func settle() async { try? await Task.sleep(for: .milliseconds(400)) }
+}

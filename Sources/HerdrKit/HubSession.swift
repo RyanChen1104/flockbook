@@ -33,6 +33,11 @@ import CryptoKit
     func answer(pane: String, question: QuestionRequest, answers: [QuestionAnswer], agent: Agent, allowed: @escaping @MainActor @Sendable () -> Bool) async throws
     /// The newest AskUserQuestion call the Claude hook saved for this agent session (`ClaudeQuestionHook`), if any.
     func hookedQuestion(session: String) -> QuestionRequest?
+    /// Claude Code's queue as the session's log has it (`ClaudeQueueLog`), oldest first; [] when the log has none.
+    func queuedLog(session: String) -> [String?]
+    /// Takes the agent's own queue back (`QueuePull.run`): the text for the device's composer. Called only after the
+    /// hub saw a queue it may pull. `allowed` as for `send`.
+    func pullQueued(pane: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome
     /// The hub's VAPID public key (base64url) for the PWA; nil: no Web Push.
     var pushKey: String? { get }
     /// Keeps the device's push subscription (one per device). False: refused (invalid, or push is off).
@@ -99,6 +104,7 @@ extension Hub {
     private var sent: [String: [HubItem]] = [:]
     private var lastScreen: [String: String] = [:]
     private var lastPrompt: [String: HubPrompt] = [:]
+    private var lastQueued: [String: HubQueued] = [:]
 
     private let pairing: HubPairing?
 
@@ -215,7 +221,7 @@ extension Hub {
             return await pushes(p, force: true) + [ok(m.id)]
         case .unwatch(let id):
             watched.removeAll { $0 == id }
-            sent[id] = nil; lastScreen[id] = nil; lastPrompt[id] = nil
+            sent[id] = nil; lastScreen[id] = nil; lastPrompt[id] = nil; lastQueued[id] = nil
             return [ok(m.id)]
         case .loadEarlier(let session, let before):
             return await loadEarlier(session: session, before: before, re: m.id)
@@ -252,6 +258,24 @@ extension Hub {
             case .sent: return [ok(m.id)]
             case .changed: return [fail(m.id, .promptOpen, "The pane changed before the text went out. Nothing was sent.")]
             case .failed: return [fail(m.id, .failed, "herdr did not take the message.")]
+            }
+        case .pullQueued(let id):
+            guard canInput else { return [readOnly(m.id)] }
+            guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
+            guard let agent = p.agent, QueuePull.pullKey(agent: agent.kind) != nil else {
+                return [fail(m.id, .badRequest, "This agent has no queue Flockbook can pull back.")]
+            }
+            let st = await state(p)
+            guard inputAllowed else { return [readOnly(m.id)] }
+            guard let q = st.queued, !q.items.isEmpty else { return [fail(m.id, .failed, "No queued message. Nothing was sent.")] }
+            guard q.pullable else { return [fail(m.id, .failed, "The agent's input box is not empty. Nothing was sent.")] }
+            let log = agent.sessionId.map { backend.queuedLog(session: $0) } ?? []
+            switch await backend.pullQueued(pane: id, agent: agent, log: log, allowed: allowed) {
+            case .pulled(let text): return [.pulled(HubPulled(pane: id, text: text, interrupted: false)), ok(m.id)]
+            case .interrupted(let text): return [.pulled(HubPulled(pane: id, text: text, interrupted: true)), ok(m.id)]
+            case .refused(let why), .failed(let why):
+                if !inputAllowed { return [readOnly(m.id)] }
+                return [fail(m.id, .failed, why)]
             }
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
@@ -408,6 +432,8 @@ extension Hub {
         var question: QuestionRequest?
         /// A permission prompt on screen that the parser cannot read: counted as open.
         var unreadablePrompt = false
+        /// The agent's own queue (`QueuedInput`).
+        var queued: QueuedInput?
     }
 
     /// The pane as it is now: one screen read, the log, and the open prompt by the app's rules.
@@ -422,7 +448,9 @@ extension Hub {
         let question = Hub.openQuestion(agent: p.agent, screen: screen, items: items, hooked: hooked)
         let unreadable = approval == nil && question == nil && p.agent?.kind == "claude"
             && Hub.unreadablePrompt(screen: screen ?? "", blocked: p.agent?.status == .blocked)
-        return PaneNow(screen: screen, pane: ps, approval: approval, question: question, unreadablePrompt: unreadable)
+        let log = p.agent?.sessionId.map { backend.queuedLog(session: $0) } ?? []
+        let queued = QueuedInput.read(agent: p.agent, screen: screen, log: log)
+        return PaneNow(screen: screen, pane: ps, approval: approval, question: question, unreadablePrompt: unreadable, queued: queued)
     }
 
     private func pushes(_ p: Pane, force: Bool) async -> [HubMessage] {
@@ -432,6 +460,10 @@ extension Hub {
         if let s = st.screen, force || s != lastScreen[p.id] { lastScreen[p.id] = s; out.append(.screen(pane: p.id, text: s)) }
         let prompt = HubPrompt(pane: p.id, approval: st.approval, question: st.question.map { HubQuestion($0, paneAgent: p.agent) })
         if force || prompt != lastPrompt[p.id] { lastPrompt[p.id] = prompt; out.append(.prompt(prompt)) }
+        // The queue: on watch only when there is one; then each change, an empty one clearing it.
+        let queued = HubQueued(pane: p.id, st.queued)
+        if force ? !queued.items.isEmpty : queued != (lastQueued[p.id] ?? HubQueued(pane: p.id, nil)) { out.append(.queued(queued)) }
+        lastQueued[p.id] = queued
         return out
     }
 

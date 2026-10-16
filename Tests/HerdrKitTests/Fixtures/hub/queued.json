@@ -1,0 +1,12 @@
+{
+  "agent": "claude",
+  "items": [
+    "Also check the lint step.",
+    null
+  ],
+  "pane": "w1:p1",
+  "pullable": true,
+  "pullsAll": true,
+  "type": "queued",
+  "v": 1
+}

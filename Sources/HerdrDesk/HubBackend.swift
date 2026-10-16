@@ -63,6 +63,21 @@ import Foundation
         return true
     }
 
+    func queuedLog(session: String) -> [String?] { store.queuedInLog(for: session) }
+
+    /// The agent's own queue back into the phone's composer (`QueuePull`): Up or Shift-Left, then Ctrl-U; never Escape.
+    func pullQueued(pane id: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
+        let model = model
+        let io = HerdrQueuePullIO(client: store.client, paneId: id, allowed: { model.writesEnabled && allowed() })
+        let r = await QueuePull.run(expect: agent, log: log, io: io)
+        switch r {
+        case .interrupted: remoteLog.error("pullQueued \(id, privacy: .public): the agent's turn stopped")
+        case .failed(let why): remoteLog.error("pullQueued \(id, privacy: .public): \(why, privacy: .public)")
+        case .pulled, .refused: break
+        }
+        return r
+    }
+
     /// The hook's newest AskUserQuestion call for this session (the files the hook wrote, read-only).
     func hookedQuestion(session: String) -> QuestionRequest? { ClaudeHookSetup.live.question(session: session) }
     var pushKey: String? { vapid.map { Base64URL.encode($0.publicKey.x963Representation) } }
