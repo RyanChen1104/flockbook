@@ -41,31 +41,8 @@ extension SnapshotRunner {
             } else {
                 step("\(name): the working pane's queue is read", model.queued[pane.id] == q)
             }
-            let shown = model.queued[pane.id]
-            let size = NSSize(width: 900, height: 640)
-            let view = ZStack {
-                Color(nsColor: .textBackgroundColor)
-                ConversationView(items: store.conversation(for: nil), agentName: pane.agent?.name ?? "claude", hasLog: true)
-                    .safeAreaBar(edge: .bottom, spacing: 0) {
-                        VStack(spacing: 0) {
-                            if let shown { QueuedStrip(queue: shown, canPull: true, pulling: false, onPull: {}) }
-                            ComposerView(agentName: pane.agent?.name ?? "claude", draft: model.drafts[pane.id] ?? ComposerDraft(), onSend: { _ in })
-                                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
-                        }
-                    }
-            }
-            .environment(\.flatGlass, true).frame(width: size.width, height: size.height)
-            let host = NSHostingView(rootView: view)
-            host.frame = NSRect(origin: .zero, size: size)
-            let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-            win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
-            for _ in 0..<12 { try? await Task.sleep(for: .milliseconds(150)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
-            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                host.cacheDisplay(in: host.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/queued-\(name)-\(dark ? "dark" : "light").png"))
-            }
-            win.orderOut(nil)
+            await shot(queue: model.queued[pane.id], draft: model.drafts[pane.id], agent: pane.agent?.name ?? "claude", dark: dark,
+                 path: "\(dir)/queued-\(name)-\(dark ? "dark" : "light").png")
         }
 
         let model = AppModel(store: store)
@@ -79,5 +56,40 @@ extension SnapshotRunner {
         step("a second pull goes after the first, on its own line", model.drafts["px"]?.text == "first\nsecond" && model.composerResets["px"] == 2)
         print("snapshot-queued: \(failures == 0 ? "PASS" : "FAIL x\(failures)"), written to \(dir)")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not
+    /// a nested run loop: the composer sizes itself in a main-queue block that a nested run loop would never run.
+    @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, path: String) async {
+        let size = NSSize(width: 900, height: 420)
+        // The bottom of a pane: the last reply, the queue strip and the composer. (The conversation's scroll view does
+        // not draw in an offscreen capture, so the reply is a plain bubble here.)
+        let view = ZStack(alignment: .bottom) {
+            Color(nsColor: .textBackgroundColor)
+            VStack(spacing: 0) {
+                Spacer()
+                HStack {
+                    Spacer(minLength: 120)
+                    UserBubble(text: "The build fails on main. Please fix it.", size: .m)
+                }
+                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 14)
+                if let queue { QueuedStrip(queue: queue, canPull: true, pulling: false, onPull: {}) }
+                ComposerView(agentName: agent, draft: draft ?? ComposerDraft(), onSend: { _ in })
+                    .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+            }
+        }
+        .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
+        .frame(width: size.width, height: size.height)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        for _ in 0..<12 { try? await Task.sleep(for: .milliseconds(150)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        win.orderOut(nil)
     }
 }

@@ -9,9 +9,13 @@ extension AppModel {
             if queued[pane.id] != nil { queued[pane.id] = nil }
             return
         }
-        if let q = QueueProbe.injected[pane.id] { queued[pane.id] = q; return }   // offscreen shots only (empty in the app)
-        let screen = try? await store.client.visibleText(paneId: pane.id)
-        let q = QueuedInput.read(agent: a, screen: screen, log: store.queuedInLog(for: a.sessionId)).flatMap { $0.items.isEmpty ? nil : $0 }
+        let read: QueuedInput?
+        if let q = QueueProbe.injected[pane.id] { read = q }   // offscreen shots only (empty in the app)
+        else {
+            let screen = try? await store.client.visibleText(paneId: pane.id)
+            read = QueuedInput.read(agent: a, screen: screen, log: store.queuedInLog(for: a.sessionId))
+        }
+        let q = read.flatMap { $0.items.isEmpty ? nil : $0 }
         if queued[pane.id] != q { queued[pane.id] = q }
     }
 
