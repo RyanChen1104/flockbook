@@ -124,10 +124,12 @@ public struct ConversationParser: Sendable {
 
     /// A message the owner typed while the agent worked. Claude Code hands it over mid-turn as a `queued_command`
     /// attachment instead of a user line, so it shows here, where the agent took it. Task notices (`commandMode`
-    /// other than "prompt") and subagent hand-backs (origin other than "human") are not the owner's words.
+    /// other than "prompt") and subagent hand-backs (an origin other than "human") are not the owner's words.
     private mutating func feedQueued(_ o: [String: Any]) {
         guard let a = o["attachment"] as? [String: Any], a["type"] as? String == "queued_command",
-              a["commandMode"] as? String == "prompt", (a["origin"] as? [String: Any])?["kind"] as? String == "human" else { return }
+              a["commandMode"] as? String == "prompt" else { return }
+        // Older clients log no origin: the owner's. An origin of another kind (peer, task-notification) is not.
+        if let origin = a["origin"], (origin as? [String: Any])?["kind"] as? String != "human" { return }
         let text: String
         if let s = a["prompt"] as? String { text = s }
         else if let blocks = a["prompt"] as? [[String: Any]] {
