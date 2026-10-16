@@ -373,7 +373,7 @@ function render(): void {
     const b = state.banner;
     body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
-  if (state.toast) body.push(h("div", { class: "toast glass-float", role: "status" }, state.toast));
+  if (state.toast) body.push(h("div", { class: "toast", role: "status" }, state.toast));
   // Keep each agent's composer text (its own) and the focus across renders.
   const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
