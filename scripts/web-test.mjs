@@ -670,6 +670,38 @@ async function fakeRun() {
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
   await p.type("#composer-text", "");
+  // r3 P2-2: the composer changed while its send was out: the reply leaves the new text alone (also the same text
+  // typed again).
+  for (const [first, next] of [["fix", "fix\nnew instructions"], ["same", "same"]]) {
+    await p.type("#composer-text", "slow send");
+    await p.click("#composer-send");
+    await p.until("document.querySelector('#composer-text')?.value === '' && document.querySelector('#composer-send')?.disabled === false");
+    await p.until("false", 400);
+    await p.type("#composer-text", first);
+    await p.click("#composer-send");
+    await p.until("false", 200);
+    await p.type("#composer-text", next);
+    await p.until("document.querySelector('#composer-send')?.disabled === false", 5000);
+    await p.until("false", 300);
+    check(await p.eval("document.querySelector('#composer-text').value") === next,
+      `send: r3 P2-2: text written while the send was out stays (${JSON.stringify([first, next, await p.eval("document.querySelector('#composer-text').value")])})`);
+    await p.type("#composer-text", "");
+  }
+  // r3 P2-3: a kept text with a warning, sent again while another agent is open: the warning comes with the text
+  // when it goes into its own composer.
+  await p.type("#composer-text", "keep warned");
+  await p.click("#composer-send");
+  await p.until("false", 600);
+  await p.eval("window.__old = true; location.reload()");
+  await p.until("!window.__old && !!document.querySelector('#composer-text')", 8000);
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  check(await p.until("location.hash === '#pane=w1%3Ap2' && document.querySelector('#composer-text')?.value === 'Warned one.' && (document.querySelector('.toast')?.textContent ?? '').includes('Check the agent')") === true,
+    `queue: r3 P2-3: placed later, the text comes with its warning (${JSON.stringify(await p.eval("[document.querySelector('#composer-text')?.value, document.querySelector('.toast')?.textContent]"))})`);
+  await p.type("#composer-text", "");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.until("!document.querySelector('.toast')", 8000);
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,

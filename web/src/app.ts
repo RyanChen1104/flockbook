@@ -58,11 +58,14 @@ const state = {
   /** This device gets notifications; `busy` while turning them on or off. */
   notify: "off" as "off" | "on" | "busy",
   /** Texts the hub pulled back from agents' queues, per pane, oldest first, for that pane's composer. */
-  fills: {} as Record<string, { id?: string; text: string }[]>,
+  fills: {} as Record<string, { id?: string; text: string; note?: string; interrupted?: boolean }[]>,
   /** Unsent composer text per pane, and the pane whose composer is on the page: switching agents never carries one
    *  agent's text into another's composer. */
   drafts: {} as Record<string, string>,
   composerPane: null as string | null,
+  /** Bumped on every change of a pane's composer text (typed, or a pulled text placed): a send clears the draft only
+   *  when it is still the one it sent. */
+  revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
 };
@@ -210,9 +213,8 @@ function receive(m: HubMessage): void {
       if (m.id && state.placed.has(m.id)) { ack(m.id); break; }
       const f = state.fills[m.pane] ??= [];
       if (m.id && f.some((x) => x.id === m.id)) break;
-      f.push({ id: m.id, text: m.text });
-      if (m.note) toast(`Your text is in the composer. ${m.note}`);
-      else if (m.interrupted) toast("The agent's turn stopped after the pull. Your text is in the composer.");
+      // Its warning goes with it, shown when it goes into its own composer (maybe later, on that agent).
+      f.push({ id: m.id, text: m.text, note: m.note, interrupted: m.interrupted });
       break;
     }
     case "prompt": {
@@ -383,10 +385,14 @@ function render(): void {
   // Pulled texts of this agent go after what the composer holds, each on its own line; then the hub may forget them.
   const fills = state.watching ? state.fills[state.watching] : undefined;
   if (box && fills?.length) {
+    const warnings: string[] = [];
     for (const f of fills) {
       box.value = box.value ? `${box.value}\n${f.text}` : f.text;
       if (f.id) { state.placed.add(f.id); ack(f.id); }
+      if (f.note) warnings.push(f.note);
+      else if (f.interrupted) warnings.push("The agent's turn stopped after the pull.");
     }
+    if (warnings.length) queueMicrotask(() => toast(`Your text is in the composer. ${[...new Set(warnings)].join(" ")}`));
     delete state.fills[state.watching!];
     box.dispatchEvent(new Event("input"));
     box.focus();
@@ -675,17 +681,13 @@ async function upload(list: Attachment[]): Promise<{ code?: string; message?: st
   return null;
 }
 
-/** `pane`'s composer sent `raw`: that text leaves its draft, wherever the page is now. What came in after it (typed,
- *  or a pulled text) stays; a draft that changed otherwise is left alone. */
-function sent(pane: string, raw: string): void {
+/** `pane`'s composer sent the draft it had at `rev`: the draft goes, wherever the page is now, unless it changed
+ *  since (typed, or a pulled text placed): then it stays as it is. */
+function sent(pane: string, rev: number): void {
+  if ((state.revs[pane] ?? 0) !== rev) return;
   const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
-  const open = field && state.composerPane === pane;
-  const now = open ? field.value : state.drafts[pane] ?? "";
-  if (!now.startsWith(raw)) return;
-  const rest = now.slice(raw.length).replace(/^\n/, "");
-  if (open) field.value = rest;
-  else if (rest) state.drafts[pane] = rest;
-  else delete state.drafts[pane];
+  if (field && state.composerPane === pane) field.value = "";
+  delete state.drafts[pane];
 }
 
 function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElement | null {
@@ -693,8 +695,8 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
   const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : agent ? `Reply to ${agent}` : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
   const images = state.attachments.get(pane) ?? [];
   const send = async (): Promise<void> => {
-    const raw = box.value;
-    const text = raw.trim();
+    const rev = state.revs[pane] ?? 0;
+    const text = box.value.trim();
     const list = state.attachments.get(pane) ?? [];
     if ((!text && !list.length) || state.busy) return;
     state.busy = true;
@@ -705,7 +707,7 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     state.busy = false;
     state.progress = null;
     if (r.ok) {
-      sent(pane, raw);
+      sent(pane, rev);
       state.attachments.delete(pane);
     } else {
       // The hub no longer knows an image (reconnected, or it dropped one): upload them all again next time.
@@ -714,6 +716,7 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     }
     render();
   };
+  box.addEventListener("input", () => { state.revs[pane] = (state.revs[pane] ?? 0) + 1; });
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
   // A file field with `image/*`: the phone offers the camera and the photo library.
   const file = h("input", { id: "composer-file", type: "file", accept: "image/*", multiple: true, hidden: true, tabindex: "-1",
