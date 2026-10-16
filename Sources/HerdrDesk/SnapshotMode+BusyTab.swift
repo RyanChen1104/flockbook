@@ -47,24 +47,40 @@ extension ContentTests {
         step("10 new rows: \(built) texts built (want at most 40)", built <= 40)
         step("10 new rows: \(measured) texts measured (want at most 80)", measured <= 80)
 
-        // Other tabs read before filled the store: what is on screen stays (the least recently used texts go).
-        b0 = MessageContent.builds
-        for i in 10..<15 {
-            holder.panes[1].append(ConversationItem(id: "new\(i)", kind: .assistantText("New reply \(i) after a full store."),
-                                                    timestamp: Date(timeIntervalSince1970: 1_900_000_000 + Double(i))))
-            host.layoutSubtreeIfNeeded()
-            try? await Task.sleep(for: .milliseconds(100))
+        // The store fills up while the tab is on screen (other tabs, long tool output): a text on screen keeps its content,
+        // so an update after that does not rebuild, reload or measure it.
+        let before = Dictionary(Self.all(MessageTextView.self, in: host).map { (ObjectIdentifier($0), $0.contentID) }) { a, _ in a }
+        let filler2 = String(repeating: "more tool output ", count: 120)
+        for i in 0..<MessageContent.keep { _ = MessageContent.plain("later tab \(i) " + filler2, monoSize: 12) }
+        b0 = MessageContent.builds; m0 = MessageContent.measures
+        for p in 0..<panes {
+            holder.panes[p].append(ConversationItem(id: "full\(p)", kind: .assistantText("New reply in pane \(p) after a full store."),
+                                                    timestamp: Date(timeIntervalSince1970: 1_950_000_000 + Double(p))))
         }
-        let after = MessageContent.builds - b0
+        host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
+        try? await Task.sleep(for: .milliseconds(300))
+        let views = Self.all(MessageTextView.self, in: host)
+        let changed = views.filter { v in before[ObjectIdentifier(v)].map { $0 != v.contentID } ?? false }.count
+        let after = MessageContent.builds - b0, measuredAfter = MessageContent.measures - m0
         print("busy-tab: memory with a full store: \(footprint() / 1_048_576) MB (phys_footprint)")
-        step("full store, 5 new rows: \(after) texts built (want at most 20)", after <= 20)
+        step("full store, \(panes) new rows: \(changed) texts on screen reloaded (want 0)", changed == 0)
+        step("full store, \(panes) new rows: \(after) texts built, \(measuredAfter) measured (want at most \(2 * panes), \(10 * panes))",
+             after <= 2 * panes && measuredAfter <= 10 * panes)
 
-        // Long texts (tool output): the store keeps at most `keepChars` characters.
+        // Long texts (tool output): the store keeps at most `keepChars` characters, also with one text larger than that.
         let big = String(repeating: "0123456789 ", count: 100_000)   // 1.1 M characters
-        for i in 0..<12 { _ = MessageContent.plain("\(i) " + big, monoSize: 12) }
-        step("long texts: the store keeps \(MessageContent.chars) characters (at most \(MessageContent.keepChars))",
-             MessageContent.chars <= MessageContent.keepChars)
+        var held: [MessageContent] = []
+        for i in 0..<4 { held.append(MessageContent.plain("\(i) " + big, monoSize: 12)) }
+        step("long texts: \(MessageContent.chars) characters stored (at most \(MessageContent.keepChars))", MessageContent.chars <= MessageContent.keepChars)
+        // Four long outputs in view at once: each keeps its content while held, however full the store is.
+        let again = (0..<4).map { MessageContent.plain("\($0) " + big, monoSize: 12) }
+        step("long texts: a long text in use keeps its content", zip(held, again).allSatisfy { $0 === $1 })
+        let huge = String(repeating: "0123456789 ", count: 400_000)   // 4.4 M characters, source and text over 8 M
+        let hugeContent = MessageContent.plain(huge, monoSize: 12)
+        step("one text over the limit: \(MessageContent.chars) characters stored (at most \(MessageContent.keepChars))",
+             MessageContent.chars <= MessageContent.keepChars && MessageContent.plain(huge, monoSize: 12) === hugeContent)
         print("busy-tab: memory \(footprint() / 1_048_576) MB (phys_footprint)")
+        withExtendedLifetime((held, hugeContent)) {}
 
         win.orderOut(nil)
         print("busy-tab: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
