@@ -646,9 +646,19 @@ async function fakeRun() {
   // scroll counts, the page is not pulled back.
   await p.eval(`(() => { const d = document.createElement('div'); d.style.height = '600px'; document.getElementById('app').append(d);
     window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300); })()`);
-  await new Promise((r) => setTimeout(r, 500));
+  await new Promise((r) => setTimeout(r, 900));   // past the moment after the reader's input
   check(await p.eval(bottomGap) > 300, `newest: scrolled up while the page grew -> stays (gap ${await p.eval(bottomGap)})`);
   await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
+  await new Promise((r) => setTimeout(r, 300));
+  // The scroll bar held longer than that moment, then dragged up in the frame the page grew: still the reader.
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`(() => { const d = document.createElement('div'); d.style.height = '600px'; document.getElementById('app').append(d);
+    window.scrollBy(0, -300); })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 300, `newest: scroll bar held, dragged up while the page grew -> stays (gap ${await p.eval(bottomGap)})`);
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
   await new Promise((r) => setTimeout(r, 300));
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
