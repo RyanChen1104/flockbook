@@ -302,13 +302,12 @@ const readerMs = 700;
 /** The scroll bar is held: the reader scrolls until they let go. A release the page never hears (outside the window)
  * ends with the window's focus or the page, or after 10 s without a move. */
 let holdingBar = false;
-let barMovedAt = 0;
+let barStill = 0;
 const barStillMs = 10000;
-function reading(): boolean {
-  if (holdingBar && performance.now() - barMovedAt > barStillMs) holdingBar = false;
-  return holdingBar || performance.now() - readerAt < readerMs;
-}
-function letGoBar(): void { if (holdingBar) { holdingBar = false; readerScrolls(); } }
+function reading(): boolean { return holdingBar || performance.now() - readerAt < readerMs; }
+/** Ends the hold; the reader's moment starts again, and its end catches up with what arrived meanwhile. */
+function letGoBar(): void { if (holdingBar) { holdingBar = false; clearTimeout(barStill); readerScrolls(); } }
+function holdBar(): void { holdingBar = true; clearTimeout(barStill); barStill = setTimeout(letGoBar, barStillMs); }
 function readerScrolls(): void {
   readerAt = performance.now();
   clearTimeout(readerDone);
@@ -317,8 +316,8 @@ function readerScrolls(): void {
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerScrolls, { passive: true });
 addEventListener("keydown", (e) => { if (scrollKeys.has(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) readerScrolls(); });
-addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) { holdingBar = true; barMovedAt = performance.now(); readerScrolls(); } });
-addEventListener("pointermove", () => { if (holdingBar) barMovedAt = performance.now(); }, { passive: true });
+addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) { holdBar(); readerScrolls(); } });
+addEventListener("pointermove", () => { if (holdingBar) holdBar(); }, { passive: true });
 for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur", "pagehide"]) addEventListener(type, letGoBar);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") letGoBar(); });
 /** Only the reader's own scrolling in the conversation changes `following`: not a move on the short "Not connected"

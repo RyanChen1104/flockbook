@@ -667,10 +667,15 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   await p.eval(grows);
   check(await p.until(atEnd, 2000) === true, `newest: scroll bar let go outside the window -> follows again (gap ${await p.eval(bottomGap)})`);
+  // Held, the page grows a moment later, and then nothing happens at all: after 10 s still the page catches up by itself.
+  // First let the last scroll to the bottom be delivered (a busy machine sends it late; inside the hold it would count as
+  // the reader's).
+  await new Promise((r) => setTimeout(r, 500));
   await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
-  await new Promise((r) => setTimeout(r, 10500));
+  await new Promise((r) => setTimeout(r, 100));
   await p.eval(grows);
-  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held still for 10 s -> follows again (gap ${await p.eval(bottomGap)})`);
+  await new Promise((r) => setTimeout(r, 10500));
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held still for 10 s, no event after the page grew -> follows again (gap ${await p.eval(bottomGap)})`);
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
