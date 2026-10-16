@@ -96,6 +96,7 @@ function connect(): void {
     ws = null;
     state.connected = false;
     state.welcomed = false;
+    cancelRound();
     // The hub drops a connection's uploads when it closes: send them again next time.
     for (const list of state.attachments.values()) for (const a of list) a.uploaded = false;
     for (const done of waiting.values()) done(false, "failed", "Not connected.");
@@ -275,6 +276,7 @@ async function follow(): Promise<void> {
   if (want === state.watching) { render(); return; }
   if (state.watching) request({ type: "unwatch", pane: state.watching });
   state.watching = want;
+  cancelRound();
   following = true;   // an agent opens at its newest message
   if (state.banner && state.banner.pane === want) state.banner = null;
   render();
@@ -296,29 +298,49 @@ function toBottom(): void {
 }
 /** Where the reader sees the page from (the visual viewport: it moves alone when zoomed in). */
 const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
-/** Only the reader changes `following`, and only by moving the page. A reader action (wheel, touch, a scroll key, the
- * scroll bar from press to release) starts a turn; the turn ends when the page has stopped scrolling for `settleMs`. If
- * the page then sits elsewhere than at the start of the turn, `following` is whether it sits at the bottom. Every other
- * scroll (the page's own, a page that got shorter, a reconnect, the background) leaves `following` alone. During a
- * turn nothing pulls the page down; at its end a following page catches up. */
-const reader = { active: false, holding: false, from: 0, settle: 0, still: 0 };
+/** Only the reader changes `following`. A reader action (wheel, touch, a scroll key, the scroll bar from press to
+ * release) on a shown conversation starts a round; the round ends when the page has stopped scrolling for `settleMs`.
+ * At its end: at the bottom, or the reader reached the bottom during the round and did not scroll up after (new rows
+ * came in meanwhile) -> following. Elsewhere and moved since the round started -> not following. Elsewhere and not
+ * moved -> as before. Every scroll outside a round (the page's own, a page that got shorter, a reconnect, the
+ * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
+ * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
+ * page catches up. */
+const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, settle: 0, still: 0 };
 const settleMs = 150;
-/** A release the page never hears (outside the window) ends the hold with the window's focus or the page, or after
- * 10 s without a move. */
+/** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
+ * a move. */
 const stillMs = 10000;
+const shown = (): boolean => !!state.watching && state.welcomed && document.visibilityState === "visible";
+function cancelRound(): void {
+  clearTimeout(reader.settle);
+  clearTimeout(reader.still);
+  reader.active = reader.holding = reader.reachedEnd = false;
+}
+/** The bottom reached in this round, until the reader scrolls up again. */
+function track(): void {
+  const top = viewTop();
+  if (nearBottom()) reader.reachedEnd = true;
+  else if (top < reader.last - 1) reader.reachedEnd = false;
+  reader.last = top;
+}
 function readerActs(): void {
-  if (!reader.active) { reader.active = true; reader.from = viewTop(); }
+  if (!shown()) return;
+  if (!reader.active) { reader.active = true; reader.from = reader.last = viewTop(); reader.reachedEnd = false; }
+  track();
   clearTimeout(reader.settle);
   if (!reader.holding) reader.settle = setTimeout(settled, settleMs);
 }
 function settled(): void {
   if (reader.holding) return;
   reader.active = false;
-  if (Math.abs(viewTop() - reader.from) >= 1) following = nearBottom();
+  if (reader.reachedEnd || nearBottom()) following = true;
+  else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
   toBottom();
 }
 function holdBar(): void {
   readerActs();
+  if (!reader.active) return;
   reader.holding = true;
   clearTimeout(reader.still);
   reader.still = setTimeout(letGoBar, stillMs);
@@ -334,9 +356,10 @@ for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, 
 addEventListener("keydown", (e) => { if (scrollKeys.has(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) readerActs(); });
 addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) holdBar(); });
 addEventListener("pointermove", () => { if (reader.holding) holdBar(); }, { passive: true });
-for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur", "pagehide"]) addEventListener(type, letGoBar);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") letGoBar(); });
-/** A scroll during the reader's turn keeps the turn going (until the page stops); any other scroll changes nothing. */
+for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur"]) addEventListener(type, letGoBar);
+addEventListener("pagehide", cancelRound);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") cancelRound(); });
+/** A scroll during a round keeps the round going (until the page stops); any other scroll changes nothing. */
 function scrolled(): void {
   if (!reader.active) return;
   if (reader.holding) holdBar(); else readerActs();

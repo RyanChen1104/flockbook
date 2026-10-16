@@ -739,6 +739,57 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   await p.eval(grows);
   check(await p.until(atEnd, 2000) === true, `newest: then scrolled back to that end -> follows again (gap ${await p.eval(bottomGap)})`);
+  const up = async () => {   // the reader scrolls up: not following
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300)");
+    await new Promise((r) => setTimeout(r, 900));
+  };
+  const down = async () => {   // the reader scrolls to the end: following
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 300 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+    await new Promise((r) => setTimeout(r, 900));
+  };
+  // Not following, then the page gets shorter and sits at its end by itself. The reader presses End (nothing moves):
+  // following again.
+  await p.eval("(() => { const d = document.createElement('div'); d.id = 'shrinks'; d.style.height = '600px'; document.body.append(d); })()");
+  await down();
+  await up();
+  await p.eval("document.getElementById('shrinks').remove()");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval(key("End"));
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: at the end after the page got shorter, End -> follows (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls to the end and new rows come in before the scrolling settles: following.
+  await up();
+  await p.eval(`${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight)`);
+  await new Promise((r) => setTimeout(r, 50));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scrolled to the end, rows came in right after -> follows (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls and opens another agent in the same moment: the other agent opens at its newest message.
+  const here = await p.eval("location.hash");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until(atEnd, 3000);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 300)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollBy(0, -100); location.hash = ${JSON.stringify(here)}`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.until(atEnd, 2000) === true, `newest: scrolling, then another agent at once -> it opens at the bottom (gap ${await p.eval(bottomGap)})`);
+  // Scrolling while the connection drops: the short "Not connected" screen moving the page is not the reader. Back
+  // online, the reader who was scrolled up is not pulled to the bottom.
+  await down();
+  await up();
+  const had = await p.eval(rows);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })); window.__wheels = setInterval(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })), 50); window.__sockets.at(-1).close()");
+  await p.until("document.body.innerText.includes('Not connected')");
+  await new Promise((r) => setTimeout(r, 100));
+  await p.eval("clearInterval(window.__wheels)");
+  await p.until(`${rows} >= ${had}`, 8000);
+  grow("s3", 1);
+  await p.until(`${rows} >= ${had + 1}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 200, `newest: scrolling when the connection dropped -> not pulled to the bottom after it returns (gap ${await p.eval(bottomGap)})`);
+  await down();
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
