@@ -109,8 +109,12 @@ import ImageIO
         b.workspaces = ws
     }
     while true {
-        // A pull takes the queue off the agent's screen (before new input, which may set another screen).
-        if b.pulls.count > seenPulls { seenPulls = b.pulls.count; b.screens["w2:p2"] = "⏺ Working on the notes\n" + rule + "\n❯ \n" + rule }
+        // A pull that took the text takes the queue off the agent's screen (before new input, which may set another
+        // screen); a refused one leaves it.
+        if b.pulls.count > seenPulls {
+            seenPulls = b.pulls.count
+            if b.pullOutcome.text != nil { b.screens["w2:p2"] = "⏺ Working on the notes\n" + rule + "\n❯ \n" + rule }
+        }
         let now = (b.approved.count, b.answered.count, b.sent.count)
         if now.0 > seen.0, let last = b.approved.last {
             let pane = String(last.split(separator: " ")[0]), allow = last.hasSuffix("true")
@@ -159,6 +163,22 @@ import ImageIO
                 b.pullOutcome = text == "queue slow" ? .pulled("Slow one.")
                     : .partial(pulledText, "The agent's input box changed while Flockbook cleared it, so it stopped. Check the agent's terminal before you send it.")
                 setStatus("w2:p2", .working)
+            }
+            // "queue long": a pull QueuePull refuses before any key (a line wider than the agent's input box).
+            if text == "queue long" {
+                b.screens["w2:p2"] = ["⏺ Working on the notes",
+                                      "❯ Also run the lint step before you commit, then fix every warning it reports, run the tests again and open a draft PR",
+                                      "  ctrl+enter to send now", "· Baking… (12s)", rule, "❯ Press up to edit queued messages", rule].joined(separator: "\n")
+                b.pullDelay = .zero
+                b.pullOutcome = .refused("This queued text is too long or has spaces or blank lines that the agent's input box does not show, so Flockbook cannot check it exactly. Edit it in the agent's terminal. Nothing was sent.")
+                setStatus("w2:p2", .working)
+            }
+            // "codex queue": the working Codex (w2:p1) has a queued message on its screen.
+            if text == "codex queue" {
+                b.screens["w2:p1"] = ["› Run the test suite", "• Working (30s • esc to interrupt)", "• Queued follow-up inputs",
+                                      "  ↳ Check the retry count too.", "    ⇧← edit last queued message", "› Ask Codex to do anything",
+                                      "  GPT-5 · Context 96% left", "  ? for shortcuts"].joined(separator: "\n")
+                setStatus("w2:p1", .working)
             }
             // "keep three": texts the hub kept for this phone and never got a pulledAck for (sent again after hello).
             if text == "keep three" {

@@ -20,6 +20,7 @@ extension SnapshotRunner {
             step("the preview has a working and an idle agent", false); exit(1)
         }
         let two = ["Also run the lint step before you commit.", "Then open a draft PR with a short summary."]
+        let tooLong = "This queued text is too long or has spaces or blank lines that the agent's input box does not show, so Flockbook cannot check it exactly. Edit it in the agent's terminal. Nothing was sent."
         let cases: [(String, QueuedInput, Bool, String?)] = [
             ("claude", QueuedInput(agent: "claude", items: two, pullable: true), false, nil),
             ("claude", QueuedInput(agent: "claude", items: two, pullable: true), true, nil),
@@ -43,6 +44,11 @@ extension SnapshotRunner {
             }
             await shot(queue: model.queued[pane.id], draft: model.drafts[pane.id], agent: pane.agent?.name ?? "claude", dark: dark,
                  path: "\(dir)/queued-\(name)-\(dark ? "dark" : "light").png")
+        }
+        // A pull QueuePull refused before any key (too long to check exactly): the app's notice; the queue stays.
+        for dark in [false, true] {
+            let q = QueuedInput(agent: "claude", items: [String(repeating: "Also run the lint step before you commit, ", count: 3) + "and fix what fails."], pullable: true)
+            await shot(queue: q, draft: nil, agent: "claude", dark: dark, notice: tooLong, path: "\(dir)/queued-refused-\(dark ? "dark" : "light").png")
         }
 
         let model = AppModel(store: store)
@@ -102,7 +108,7 @@ extension SnapshotRunner {
 
     /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not
     /// a nested run loop: the composer sizes itself in a main-queue block that a nested run loop would never run.
-    @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, path: String) async {
+    @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, notice: String? = nil, path: String) async {
         let size = NSSize(width: 900, height: 420)
         // The bottom of a pane: the last reply, the queue strip and the composer. (The conversation's scroll view does
         // not draw in an offscreen capture, so the reply is a plain bubble here.)
@@ -120,6 +126,7 @@ extension SnapshotRunner {
                     .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
             }
         }
+        .overlay(alignment: .top) { if let notice { NoticeCapsule(text: notice).padding(.top, 16).padding(.horizontal, 24) } }
         .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
         .frame(width: size.width, height: size.height)
         let host = NSHostingView(rootView: view)

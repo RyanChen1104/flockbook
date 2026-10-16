@@ -611,11 +611,46 @@ async function fakeRun() {
   await p.click("#pull-queued");
   check(await p.until("(document.querySelector('.toast')?.textContent ?? '').includes('Check the agent') && document.querySelector('#composer-text').value.startsWith('Also run the lint step')") === true,
     "queue: a pull that stopped early: the text, and a notice that says why");
+  // A pull QueuePull refuses before any key (too long to check exactly): a notice, the queue stays, nothing comes back.
+  await p.type("#composer-text", "");
+  await p.type("#composer-text", "queue long");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.until("document.querySelector('#pull-queued')?.disabled === false");
+  await p.type("#composer-text", "");
+  await p.click("#pull-queued");
+  check(await p.until("(document.querySelector('.toast')?.textContent ?? '').includes('too long')") === true && await p.eval("document.querySelector('#composer-text').value") === "",
+    "queue: a refused pull: the notice says why, nothing in the composer");
+  check(await p.eval("document.querySelectorAll('.msg.user.queued').length") === 1, "queue: a refused pull: the queue is still shown");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queue-refused");
+  await p.shot("queue-refused", true);
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  check(await p.until("document.querySelectorAll('.msg.user.queued').length === 1 && !!document.querySelector('#pull-queued')") === true,
+    "queue: after the notice: the queue and Pull back as they were");
+  await p.shot("queue-refused-after");
+  // Codex: its queue is shown, with no Pull back; the note says to edit it in Codex's terminal.
+  await p.type("#composer-text", "codex queue");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  check(await p.until("document.querySelectorAll('.msg.user.queued').length === 1") === true, "queue: Codex's queued message is shown");
+  check(await p.eval("!document.querySelector('#pull-queued') && document.querySelector('.queue-foot').textContent.includes('Shift+Left')") === true,
+    "queue: Codex: no Pull back, the note says Shift+Left in its terminal");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queue-codex");
+  await p.shot("queue-codex", true);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "");
   // A pull answered while another agent is open: the text waits for its own agent's composer.
   await p.type("#composer-text", "");
   await p.type("#composer-text", "queue slow");
   await p.click("#composer-send");
   await p.until("!document.querySelector('.toast')", 8000);   // the last notice would cover the button
+  // The hub has taken "queue slow" (the queue stayed on screen after the refused pull, so the button is on already).
+  await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'queue slow')");
   await p.until("document.querySelector('#pull-queued')?.disabled === false");
   await p.type("#composer-text", "");
   await p.click("#pull-queued");

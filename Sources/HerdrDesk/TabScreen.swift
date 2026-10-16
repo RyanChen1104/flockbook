@@ -22,11 +22,7 @@ struct TabScreen: View {
             // Under the top safe area (toolbar), label colour on material: readable in light and dark. Stays ~8 s or until
             // the next notice replaces it; VoiceOver reads it.
             if let n = model.notice {
-                Label(n, systemImage: "exclamationmark.triangle.fill")
-                    .symbolRenderingMode(.multicolor)
-                    .font(.callout).padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.regularMaterial, in: Capsule())
-                    .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                NoticeCapsule(text: n)
                     .padding(.top, 36)   // clear of a pane label row (28)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .task(id: n) {
@@ -445,5 +441,17 @@ struct SearchView: View {
     private func open(_ id: String?, in hits: [Hit]) {
         guard let h = hits.first(where: { $0.id == id }) ?? hits.first else { return }
         model.select(tab: h.tab, in: h.ws)
+    }
+}
+
+/// The app's notice: a capsule over the panes, label colour on material (readable in light and dark).
+struct NoticeCapsule: View {
+    let text: String
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .symbolRenderingMode(.multicolor)
+            .font(.callout).padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
 }
