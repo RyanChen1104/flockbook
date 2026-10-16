@@ -223,6 +223,12 @@ public enum QueuePull {
         let pulled = q.pullsAll ? q.items : Array(q.items.suffix(1))
         guard pulled.allSatisfy({ $0 != nil }) else { return .refused("The queued text cannot be read yet. Nothing was sent.") }
         let expected = pulled.compactMap { $0 }.joined(separator: "\n")
+        // On more than one row, and not exactly in Claude Code's log: a line break and the agent's wrapping look the
+        // same, so no text Flockbook could give back is sure to be the owner's. The terminal keeps it.
+        let fromLog = expect.kind == "claude" && log.items.allSatisfy { $0 != nil } && log.items.compactMap { $0 }.joined(separator: "\n") == expected
+        guard fromLog || !expected.contains("\n") else {
+            return .refused("This queued message is on more than one row, and Flockbook cannot tell its line breaks from wrapping. Edit it in the agent's terminal. Nothing was sent.")
+        }
 
         guard await send([key], io) else { return .refused("Input is off. Nothing was sent.") }
         await io.settle()
@@ -242,10 +248,10 @@ public enum QueuePull {
         guard compact(taken).contains(compact(expected)) else {
             return await held(taken, "The agent's input box did not hold the queued text as expected, so Flockbook did not clear it. \(check)", keep)
         }
-        // Rows of the box joined by a guess: a line break and the agent's wrapping look the same. Clearing them would
-        // leave only the guess, so the box keeps the text exactly.
+        // Rows of the box joined by a guess: a line break and the agent's wrapping look the same. The guess is not the
+        // owner's text, so it goes nowhere: the box keeps the text exactly, and nothing is kept or cleared.
         guard exact else {
-            return await held(taken, "The text spans more than one row of the agent's input box, and Flockbook cannot tell its line breaks from wrapping, so it left the text there too. Clear the agent's input box in its terminal before you send this.", keep)
+            return .failed("The text came back on more than one row of the agent's input box, and Flockbook cannot tell its line breaks from wrapping, so it did not take it. It is in the agent's input box now: edit it in the terminal.")
         }
         guard await keep(taken) else {
             return .partial(taken, "Flockbook could not save the text, so it did not clear the agent's input box. \(check)")

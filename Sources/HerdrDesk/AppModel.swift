@@ -355,10 +355,12 @@ final class AppModel {
 
     func prune() {
         defer { updateVisibleSessions() }
+        // Kept pulled texts: only from a snapshot herdr gave; an empty one (the last tab closed) prunes too, the empty
+        // start does not.
+        if let known = store.knownPanes { pulledTexts.prune(panes: known) }
         let tabs = store.workspaces.flatMap(\.tabs)
         guard !tabs.isEmpty else { return }
         let panes = Set(tabs.flatMap(\.panes).map(\.id))
-        pulledTexts.prune(panes: panes)
         for (k, d) in drafts where !panes.contains(k) { d.images.forEach(PasteImages.remove) }
         drafts = drafts.filter { panes.contains($0.key) }
         queued = queued.filter { panes.contains($0.key) }

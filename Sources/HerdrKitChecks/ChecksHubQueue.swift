@@ -150,6 +150,33 @@ import Foundation
         check(FilePulledStore(url: url).all.isEmpty, "pulled store: taken: gone from the file")
     }
 
+    // r3 P2-4: the device is removed while its pull runs (Up went out): the text is not kept for it (no composer of
+    // it will confirm it), and the box is not cleared (keep says no), so the text stays in the terminal.
+    do {
+        let own = MemoryDeviceStore()
+        own.add(token: "tok-gone", device: HubDevice(id: "d-gone", name: "Old phone", level: .input))
+        let b = FakeHubBackend(workspaces: ws(.working))
+        b.screens["w1:p1"] = screen(["QC reply GAMMA"])
+        b.pullOutcome = .pulled("QC reply GAMMA")
+        let s = HubSession(backend: b, devices: own)
+        _ = await s.receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok-gone","client":"test","clientVersion":"1"}"#))
+        b.pullDelay = .milliseconds(50)
+        Task { @MainActor in try? await Task.sleep(for: .milliseconds(10)); own.revoke(device: "d-gone"); b.pulledTexts.drop(device: "d-gone") }
+        _ = await s.receive(pull)
+        check(b.kept == false && b.pulledTexts.all.isEmpty, "hub queue: r3 P2-4: removed mid-pull: nothing kept for it, keep says no (\(String(describing: b.kept)), \(b.pulledTexts.all.count))")
+        b.pullDelay = .zero
+    }
+
+    // r3 P3-5: the panes there are now, from a snapshot herdr gave (an empty one too); nil before any.
+    do {
+        let none = HerdrStore(session: .named("c9-none"))
+        check(none.knownPanes == nil, "store: r3 P3-5: no snapshot yet: panes not known")
+        none.setPreview(workspaces: [], connected: true)
+        check(none.knownPanes == [], "store: r3 P3-5: an empty snapshot: no panes (the last tab closed) (\(String(describing: none.knownPanes)))")
+        none.setPreview(workspaces: ws(.idle), connected: true)
+        check(none.knownPanes == ["w1:p1"], "store: the snapshot's panes")
+    }
+
     // r2 P2-7: the store has limits (count and bytes): full, it refuses, and the pull then clears nothing. It drops a
     // removed device's texts and those of panes that are gone.
     do {

@@ -283,7 +283,10 @@ extension Hub {
             // (`pulledAck`); a lost connection gets it again after the next hello.
             let entry = UUID().uuidString, store = backend.pulledTexts, deviceID = device.id
             let saved = Flag()
-            let keep: @MainActor @Sendable (String) -> Bool = { text in
+            let keep: @MainActor @Sendable (String) -> Bool = { [weak self] text in
+                // Removed while the pull ran: no composer of it will confirm the text, so it is not kept (and the
+                // agent's box is not cleared: the text stays in the terminal).
+                guard self?.device?.id == deviceID else { saved.on = false; return false }
                 saved.on = store.keep(PulledText(id: entry, pane: id, device: deviceID, text: text, note: PulledText.unfinished))
                 return saved.on
             }

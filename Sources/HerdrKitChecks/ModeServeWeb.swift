@@ -166,6 +166,11 @@ import ImageIO
                     _ = b.pulledTexts.keep(PulledText(pane: pane, device: "d-input", text: t))
                 }
             }
+            // "keep warned": a partial pull's text kept for the other agent (sent again after hello, with its reason).
+            if text == "keep warned" {
+                _ = b.pulledTexts.keep(PulledText(pane: "w1:p2", device: "d-input", text: "Warned one.",
+                                                  note: "Some of it may still be in the agent's input box. Check the agent's terminal before you send it."))
+            }
             // "slow send": the next send takes 1.5 s.
             if text == "slow send" { b.sendDelay = .milliseconds(1500) }
             if text == "queue busy" { b.screens["w2:p2"] = queueScreen(input: "❯ half typed"); setStatus("w2:p2", .working) }

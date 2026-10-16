@@ -192,22 +192,26 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let code = "if ready:\n    run()"
     let cxCode = codexScreen(queued: [], input: "› if ready:\n      run()")
     (r, k) = await pull("codex", [codexScreen(queued: ["if ready:\n        run()"]), cxCode, cxCode, codexScreen(queued: [], input: "› if ready:"), codexScreen(queued: [])])
-    check(r.text == code && r.isPartial && k == [["shift+left"]], "pull: Codex: indentation in the box stays; more than one row: not cleared (\(r), \(k))")
+    check(r.isRefused && k.isEmpty, "pull: r3 P2-1: Codex: a queued message on more than one row: refused before any key (\(r), \(k))")
     let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
     let rows = wrap(long, width: 37)   // 40 columns
     let cxLong = codexScreen(queued: [], input: "› " + rows.joined(separator: "\n  "))
     (r, k) = await pull("codex", [codexScreen(queued: [long]), cxLong, cxLong, codexScreen(queued: [])], cols: 40)
-    check(rows.count > 1 && r.text == long && r.isPartial && k == [["shift+left"]], "pull: Codex: a soft-wrapped line comes back as one line, left in the box too (\(rows), \(r), \(k))")
+    check(rows.count > 1 && r.isFailed && r.text == nil && k == [["shift+left"]] && failedWhy(r).contains("terminal"),
+          "pull: r3 P2-1: Codex: the box wraps it on more than one row: no Ctrl-U, no guess for the composer, edit it in the terminal (\(rows), \(r), \(k))")
     // r2 P2-5: a line break and a wrap look the same in the box (36 columns of text, a line break, then a word, in 37
     // columns). Flockbook cannot tell them apart: it sends no Ctrl-U, the box keeps the text exactly, the owner is told.
     let hard = String(repeating: "a", count: 36) + "\nnext"
     let cxHard = codexScreen(queued: [], input: "› " + String(repeating: "a", count: 36) + "\n  next")
     (r, k) = await pull("codex", [codexScreen(queued: [hard]), cxHard, cxHard, codexScreen(queued: [])], cols: 40)
-    check(r.isPartial && r.text != nil && k == [["shift+left"]] && r.why?.contains("terminal") == true,
-          "pull: r2 P2-5: Codex text on more than one row: no Ctrl-U, the text to the composer, the owner told to clear it (\(r), \(k))")
+    check(r.isFailed && r.text == nil && k == [["shift+left"]] && kept.isEmpty && failedWhy(r).contains("terminal"),
+          "pull: r3 P2-1: a line break or a wrap, not known: no Ctrl-U, nothing kept, no guess for the composer (\(r), \(k))")
     // Claude Code: rows that the log's text does not match (or no log): no Ctrl-U either. One row: no line breaks to lose.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, empty])
-    check(r.isPartial && r.text == gammaDelta && k == [["Up"]], "pull: r2 P2-5: Claude rows without the log's text: no Ctrl-U (\(r), \(k))")
+    check(r.isRefused && k.isEmpty, "pull: r3 P2-1: Claude rows the log does not give exactly: refused before any key (\(r), \(k))")
+    // The screen showed one row, the log had nothing, and Up brought back two: no guess either.
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QD reply DELTA"]), pulledIn, pulledIn, oneRow, empty])
+    check(r.isFailed && r.text == nil && k == [["Up"]] && kept.isEmpty, "pull: r3 P2-1: more rows came back than the log gives: no Ctrl-U, no guess (\(r), \(k))")
     (r, k) = await pull("claude", [claudeScreen(queued: ["QC reply GAMMA"]), oneRow, oneRow, empty])
     check(r == .pulled("QC reply GAMMA") && k == [["Up"], u], "pull: one row without the log: cleared (\(r), \(k))")
     (r, k) = await pull("codex", [cxQueued, cxPulled, cxPulled, codexScreen(queued: ["QB reply BETA"])])
@@ -251,4 +255,6 @@ extension QueuePull.Outcome {
     var isFailed: Bool { if case .failed = self { true } else { false } }
     var isPartial: Bool { if case .partial = self { true } else { false } }
     var why: String? { if case .partial(_, let w) = self { w } else { nil } }
+}
+func failedWhy(_ r: QueuePull.Outcome) -> String { if case .failed(let w) = r { w } else { "" }
 }
