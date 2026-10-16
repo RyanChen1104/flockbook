@@ -38,6 +38,11 @@ export type HubMessage =
   | { type: "conversation"; pane: string; session: string; mode: "replace" | "append" | "prepend"; items: Item[]; hasEarlier: boolean }
   | { type: "screen"; pane: string; text: string }
   | { type: "prompt"; pane: string; approval?: Approval; question?: QuestionRequest }
+  | { type: "queued"; pane: string; agent: string; items: (string | null)[]; pullable: boolean; pullsAll: boolean }
+  | { type: "pulled"; pane: string; text: string; interrupted: boolean }
   | { type: "pong" };
+
+/** The agent's own queue: messages typed while it works, not taken yet. A null item: its text is not readable yet. */
+export interface Queue { agent: string; items: (string | null)[]; pullable: boolean; pullsAll: boolean }
 
 export interface Answer { picks: number[]; other?: string }

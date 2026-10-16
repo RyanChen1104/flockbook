@@ -1,6 +1,6 @@
 // Flockbook PWA: pair, agent list (Needs you first), conversation, approval and question cards, composer (input only).
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
-import type { Answer, Approval, HubMessage, Item, Level, Pane, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
+import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token";
@@ -33,7 +33,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 /** An image picked for the next message. `uploaded`: the hub holds it under `name` on this connection. */
 interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
 const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
-interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest }
+interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
 const state = {
   token: load(TOKEN_KEY),
   pairSecret: null as string | null,
@@ -57,6 +57,8 @@ const state = {
   pushKey: null as string | null,
   /** This device gets notifications; `busy` while turning them on or off. */
   notify: "off" as "off" | "on" | "busy",
+  /** Text the hub pulled back from the agent's queue, for the composer on the next render. */
+  fill: null as { pane: string; text: string } | null,
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -188,6 +190,13 @@ function receive(m: HubMessage): void {
     }
     case "screen":
       view(m.pane).screen = m.text;
+      break;
+    case "queued":
+      view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
+      break;
+    case "pulled":
+      state.fill = { pane: m.pane, text: m.text };
+      if (m.interrupted) toast("The agent's turn stopped after the pull. Your text is in the composer.");
       break;
     case "prompt": {
       const v = view(m.pane);
@@ -352,6 +361,13 @@ function render(): void {
   app.replaceChildren(...body.filter((c): c is Node | string => !!c));
   const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (box && draft !== undefined) box.value = draft;
+  // A pulled queue goes after what the composer holds, on its own line.
+  if (box && state.fill && state.fill.pane === state.watching) {
+    box.value = box.value ? `${box.value}\n${state.fill.text}` : state.fill.text;
+    state.fill = null;
+    box.dispatchEvent(new Event("input"));
+    box.focus();
+  }
   if (focused) document.getElementById(focused)?.focus();
 }
 
@@ -447,6 +463,7 @@ function conversationScreen(pane: string): HTMLElement {
   if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
   if (v.screen && (!v.items.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
   else if (v.screen) items.push(screenView(v.screen, false));
+  if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
   return h("section", { class: "conversation" }, head, h("div", { class: "items" }, ...items), card, composer(pane, !!card, where?.p.agent?.name));
@@ -472,6 +489,31 @@ function itemView(it: Item): HTMLElement {
       return h("div", { class: `logged ${q.state}` }, h("span", { class: "muted" }, "Question: "), q.questions.map((x) => x.text).join(" / "), said);
     }
   }
+}
+
+/** The agent's queued messages: faded user bubbles, when they go in, and Pull back (the hub sends Up or Shift-Left,
+ *  never Escape, and checks the agent's screen before and after). */
+function queueView(pane: string, q: Queue): HTMLElement {
+  const when = q.agent === "claude" ? "Goes in after the current step or when the turn ends." : "Goes in when this turn ends.";
+  const note = q.pullsAll ? (q.items.length > 1 ? `All ${q.items.length} come back as one message.` : "It comes back to the composer.")
+    : "Sending it again adds it to the turn now running.";
+  const blocked = !q.pullable ? "The agent's input box has text. Clear it in the terminal to pull back."
+    : q.items.includes(null) ? "The queued text cannot be read yet." : null;
+  const pull = async (): Promise<void> => {
+    if (state.busy) return;
+    state.busy = true;
+    render();
+    const r = await request({ type: "pullQueued", pane });
+    state.busy = false;
+    if (!r.ok) toast(explain(r.code, r.message));
+    render();
+  };
+  return h("div", { class: "queue", role: "group", "aria-label": "Queued messages" },
+    ...q.items.map((t) => h("div", { class: "msg user queued" }, h("span", { class: "queued-label" }, "Queued"),
+      t === null ? h("p", { class: "unknown" }, "1 queued message") : h("p", {}, t))),
+    h("div", { class: "queue-foot" }, h("span", { class: "fine" }, blocked ?? `${when} ${note}`),
+      canInput() ? h("button", { id: "pull-queued", class: "secondary small", type: "button", disabled: state.busy || blocked !== null, onclick: pull },
+        q.pullsAll ? "Pull back to edit" : "Pull back the newest") : null));
 }
 
 function screenView(text: string, open: boolean): HTMLElement {

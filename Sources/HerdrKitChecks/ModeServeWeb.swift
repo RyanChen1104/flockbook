@@ -94,7 +94,14 @@ import ImageIO
     fflush(stdout)
 
     // Input moves the fake agents on, as herdr would: allow -> working; answer/send -> a new user line.
-    var seen = (0, 0, 0), seenImages = 0
+    var seen = (0, 0, 0), seenImages = 0, seenPulls = 0
+    // A working Claude with two queued messages (its own queue, read from the screen): "queue me", "queue busy", "queue stop".
+    let rule = String(repeating: "─", count: 40)
+    func queueScreen(input: String = "❯ Press up to edit queued messages") -> String {
+        ["⏺ Working on the notes", "❯ Also run the lint step before you commit.", "❯ Then open a draft PR with a short summary.",
+         "  ctrl+enter to send now", "· Baking… (12s)", rule, input, rule].joined(separator: "\n")
+    }
+    let pulledText = "Also run the lint step before you commit.\nThen open a draft PR with a short summary."
     func setStatus(_ pane: String, _ s: AgentStatus) {
         for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == pane {
             ws[wi].tabs[ti].panes[pi].agent?.status = s; ws[wi].tabs[ti].status = s
@@ -102,6 +109,8 @@ import ImageIO
         b.workspaces = ws
     }
     while true {
+        // A pull takes the queue off the agent's screen (before new input, which may set another screen).
+        if b.pulls.count > seenPulls { seenPulls = b.pulls.count; b.screens["w2:p2"] = "⏺ Working on the notes\n" + rule + "\n❯ \n" + rule }
         let now = (b.approved.count, b.answered.count, b.sent.count)
         if now.0 > seen.0, let last = b.approved.last {
             let pane = String(last.split(separator: " ")[0]), allow = last.hasSuffix("true")
@@ -138,6 +147,12 @@ import ImageIO
                 let lines = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
                 b.items[sid, default: []] += SessionLog.parse(lines: lines)
             }
+            if text == "queue me" || text == "queue stop" {
+                b.screens["w2:p2"] = queueScreen()
+                b.pullOutcome = text == "queue me" ? .pulled(pulledText) : .interrupted(pulledText)
+                setStatus("w2:p2", .working)
+            }
+            if text == "queue busy" { b.screens["w2:p2"] = queueScreen(input: "❯ half typed"); setStatus("w2:p2", .working) }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
         }

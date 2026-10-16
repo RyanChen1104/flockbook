@@ -108,7 +108,15 @@ struct PaneView: View {
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
                     .safeAreaBar(edge: .top, spacing: 0) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }
-                    .safeAreaBar(edge: .bottom, spacing: 0) { composer(agent) }
+                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                        VStack(spacing: 0) {
+                            if agent.status == .working, let q = model.queued[pane.id] {
+                                QueuedStrip(queue: q, canPull: model.writesEnabled, pulling: model.pulling.contains(pane.id),
+                                            onPull: { model.pullQueued(pane) })
+                            }
+                            composer(agent)
+                        }
+                    }
                     .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
             } else {
                 if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) }
@@ -131,6 +139,14 @@ struct PaneView: View {
             repeat {
                 await model.checkPrompt(for: pane)
                 guard focused, pane.agent?.status == .blocked || model.hasPending(pane) else { break }
+                try? await Task.sleep(for: .seconds(2))
+            } while !Task.isCancelled
+        }
+        .task(id: pane.agent?.status) {
+            // While the agent works, read its own queue every 2 s (read-only).
+            repeat {
+                await model.checkQueue(for: pane)
+                guard pane.agent?.status == .working else { break }
                 try? await Task.sleep(for: .seconds(2))
             } while !Task.isCancelled
         }
@@ -237,7 +253,7 @@ extension PaneView {
                      },
                      placeholder: focused ? nil : "Click to reply to \(agent.name)",
                      focusRequest: focusRequest)
-            .id(pane.id)
+            .id("\(pane.id)-\(model.composerResets[pane.id] ?? 0)")   // a pulled queue starts the composer again from its draft
             .overlay {
                 if !focused {
                     Button { onFocus(); focusRequest += 1 } label: { Color.clear.contentShape(Rectangle()) }

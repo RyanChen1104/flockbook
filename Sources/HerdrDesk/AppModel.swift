@@ -320,6 +320,11 @@ final class AppModel {
     /// Unsent composer text per pane id. Memory only. Not observed: the composer owns the live text.
     @ObservationIgnored var drafts: [String: ComposerDraft] = [:]
     func setDraft(_ d: ComposerDraft, for paneID: String) { drafts[paneID] = d.isEmpty ? nil : d }
+    /// Bumped when Flockbook puts text in a pane's composer (a pulled queue): the composer starts again from `drafts`.
+    var composerResets: [String: Int] = [:]
+    /// The agents' own queues by pane id (`checkQueue`), and the pulls in flight.
+    var queued: [String: QueuedInput] = [:]
+    var pulling: Set<String> = []
 
     func prune() {
         defer { updateVisibleSessions() }
@@ -328,6 +333,7 @@ final class AppModel {
         let panes = Set(tabs.flatMap(\.panes).map(\.id))
         for (k, d) in drafts where !panes.contains(k) { d.images.forEach(PasteImages.remove) }
         drafts = drafts.filter { panes.contains($0.key) }
+        queued = queued.filter { panes.contains($0.key) }
         rightClickToPane = rightClickToPane.filter { panes.contains($0) }
         let live = Set(tabs.map(\.id))
         focusedPane = focusedPane.filter { live.contains($0.key) }

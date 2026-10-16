@@ -571,6 +571,37 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("queued");
   await p.shot("queued", true);
+  // The agent's own queue: faded "Queued" bubbles at the end, and Pull back puts it in the composer.
+  await p.type("#composer-text", "queue me");
+  await p.click("#composer-send");
+  const queued = "[...document.querySelectorAll('.msg.user.queued')].map(e => e.textContent)";
+  check(await p.until(`${queued}.length === 2`) === true, "queue: two queued bubbles");
+  check(await p.eval(`${queued}.every(t => t.startsWith('Queued'))`) === true && await p.eval("document.querySelector('.items').lastElementChild.classList.contains('queue')") === true,
+    "queue: labelled Queued, at the end of the conversation");
+  check((await p.eval("document.querySelector('.queue-foot').textContent")).includes("All 2 come back as one message."), "queue: the note says Claude merges them");
+  await p.until("!document.querySelector('.toast')", 8000);   // an earlier test's notice would cover the button
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queue");
+  await p.shot("queue", true);
+  await p.type("#composer-text", "My draft");
+  await p.click("#pull-queued");
+  check(await p.until("document.querySelector('#composer-text').value === 'My draft\\nAlso run the lint step before you commit.\\nThen open a draft PR with a short summary.'") === true,
+    "queue: Pull back puts the text after the draft, on its own line");
+  check(await p.until("!document.querySelector('.queue')") === true, "queue: the bubbles go when the agent's queue is empty");
+  await p.shot("queue-pulled");
+  await p.shot("queue-pulled", true);
+  await p.type("#composer-text", "queue busy");
+  await p.click("#composer-send");
+  check(await p.until("document.querySelector('#pull-queued')?.disabled === true") === true, "queue: text in the agent's input box: Pull back is off");
+  check((await p.eval("document.querySelector('.queue-foot').textContent")).includes("input box has text"), "queue: and says why");
+  await p.type("#composer-text", "queue stop");
+  await p.click("#composer-send");
+  await p.until("document.querySelector('#pull-queued')?.disabled === false");
+  await p.type("#composer-text", "");
+  await p.click("#pull-queued");
+  check(await p.until("(document.querySelector('.toast')?.textContent ?? '').includes('turn stopped')") === true, "queue: a stopped turn shows a notice");
+  check(await p.eval("document.querySelector('#composer-text').value.startsWith('Also run the lint step')") === true, "queue: the text still comes back");
+  await p.type("#composer-text", "");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,

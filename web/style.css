@@ -235,3 +235,10 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
   cursor: pointer; text-align: left; max-width: 728px; margin: 0 auto; font: var(--headline); }
 .toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 84px); z-index: 5; color: var(--label); padding: 10px 14px;
   border-radius: var(--r-card); border: .5px solid rgba(var(--primary), .1); box-shadow: var(--shadow-card); text-align: center; max-width: 728px; margin: 0 auto; font: var(--subhead); }
+/* The agent's own queue: faded user bubbles with a dashed edge, then when they go in and Pull back. */
+.queue { display: flex; flex-direction: column; gap: 6px; }
+.msg.user.queued { background: rgba(var(--primary), .04); border: 1px dashed rgba(var(--primary), .25); color: var(--label-2); display: flex; flex-direction: column; gap: 2px; }
+.queued-label { font: var(--caption); font-weight: 600; color: var(--label-2); align-self: flex-end; }
+.msg.user.queued .unknown { font-style: italic; }
+.queue-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; text-align: right; }
+.queue-foot .small { min-height: 36px; padding: 6px 12px; }
