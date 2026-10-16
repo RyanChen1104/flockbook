@@ -686,11 +686,59 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 300));
   await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
   check(await p.until(atEnd, 2000) === true, `newest: own scroll delivered inside a hold, a move without scrolling, let go -> follows (gap ${await p.eval(bottomGap)})`);
-  // Pressed, the page moves without the reader moving the pointer, then let go: following as before the press.
-  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); window.scrollBy(0, -300)");
+  // Pressed and let go, the page did not move: following as before the press.
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
   await new Promise((r) => setTimeout(r, 300));
-  await p.eval("window.dispatchEvent(new Event('blur'))");
-  check(await p.until(atEnd, 2000) === true, `newest: pressed and let go without a move -> follows as before (gap ${await p.eval(bottomGap)})`);
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 400));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: pressed and let go, the page did not move -> follows as before (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls up in steps while rows keep arriving between the steps (an agent writing fast): nothing pulls the
+  // page down during the scrolling, so the reader gets away from the bottom.
+  for (let i = 0; i < 6; i++) {
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -150 })); window.scrollBy(0, -150)");
+    await new Promise((r) => setTimeout(r, 40));
+    await p.eval(grows);
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 600, `newest: scrolled up in steps while rows arrive -> gets away from the bottom (gap ${await p.eval(bottomGap)})`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  // The scroll bar held still while a scroll key moves the page (or a click on the bar's track): that is the reader.
+  // PageUp: not following after the hold ends.
+  const key = (k) => `document.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true }))`;
+  await p.eval(`document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${key("PageUp")}; window.scrollBy(0, -400)`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 300, `newest: scroll bar held, PageUp, let go -> stays (gap ${await p.eval(bottomGap)})`);
+  // End from above the newest rows (scrolled up with the wheel first): following after the hold ends.
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollBy(0, -400)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight)`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held, End, let go -> follows (gap ${await p.eval(bottomGap)})`);
+  // The page scrolls to its end, and in that frame the reader scrolls up: the page's scroll event never arrives on its
+  // own. Later the reader scrolls back to that same end: that is the reader, following again.
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300); });
+    ro.observe(document.body); ${grows}; })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 200, `newest: scrolled up in the frame the page scrolled itself -> stays (gap ${await p.eval(bottomGap)})`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 300 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: then scrolled back to that end -> follows again (gap ${await p.eval(bottomGap)})`);
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
