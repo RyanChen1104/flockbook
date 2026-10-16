@@ -177,6 +177,7 @@ function receive(m: HubMessage): void {
       const v = view(m.pane);
       v.session = m.session;
       v.hasEarlier = m.hasEarlier;
+      if (m.mode === "prepend" && m.pane === state.watching) keepTopRow = true;
       if (m.mode === "replace") v.items = m.items;
       else {
         const known = new Map(m.items.map((i) => [i.id, i]));
@@ -334,6 +335,8 @@ function explain(code?: string, message?: string): string {
 
 // --- Screens.
 function render(): void {
+  const anchor = keepTopRow ? topRow() : null;
+  keepTopRow = false;
   const count = blockedPanes(state.workspaces).length;
   document.title = count ? `(${count}) Flockbook` : "Flockbook";
   const body: Child[] = [];
@@ -356,6 +359,64 @@ function render(): void {
     if (box && draft !== undefined) { box.value = draft; box.dispatchEvent(new Event("input")); }
   }
   if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus();
+  if (anchor) {
+    // Older rows came in above: the row that was on top stays where it was on screen.
+    const row = [...document.querySelectorAll<HTMLElement>(".items > [data-id]")].find((e) => e.dataset.id === anchor.id);
+    const moved = row ? row.getBoundingClientRect().top - anchor.top : 0;
+    if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
+  }
+}
+
+// --- Older rows. The reader scrolling near the top loads them; "Load earlier" stays for a keyboard or screen reader,
+// and to try again after a failure. Auto-loading stops at `AUTO_ITEMS` rows in a pane (the button still loads more).
+const NEAR_TOP = 600, AUTO_ITEMS = 1000;
+/** The next render follows a prepend: it keeps the top row in place. */
+let keepTopRow = false;
+const earlier = { pane: "", busy: false, failed: false };
+/** The first row at least partly in view, and where it is. Read before the new rows are built (they move the old
+ *  row nodes). */
+function topRow(): { id: string; top: number } | null {
+  for (const e of document.querySelectorAll<HTMLElement>(".items > [data-id]")) {
+    const r = e.getBoundingClientRect();
+    if (r.bottom > 0) return { id: e.dataset.id ?? "", top: r.top };
+  }
+  return null;
+}
+async function loadEarlier(pane: string): Promise<void> {
+  const v = view(pane);
+  if (!v.session || !v.hasEarlier || !v.items.length || (earlier.pane === pane && earlier.busy)) return;
+  Object.assign(earlier, { pane, busy: true, failed: false });
+  render();
+  const r = await request({ type: "loadEarlier", session: v.session, before: v.items[0].id });
+  if (earlier.pane !== pane) return;
+  Object.assign(earlier, { busy: false, failed: !r.ok });
+  render();
+}
+function nearTop(): void {
+  const pane = state.watching;
+  if (!pane || !state.welcomed || window.scrollY > NEAR_TOP) return;
+  const v = view(pane);
+  if (v.items.length >= AUTO_ITEMS || (earlier.pane === pane && earlier.failed)) return;
+  loadEarlier(pane);
+}
+addEventListener("scroll", nearTop, { passive: true });
+
+/** Row nodes by pane and item id, with the item they show: a tick that leaves a row as it was keeps its node (no
+ *  markdown parsed again, an open tool list stays open). */
+let rowNodes = new Map<string, { item: string; node: HTMLElement }>();
+let rowPane = "";
+function rowsFor(pane: string, list: Item[]): HTMLElement[] {
+  const old = rowPane === pane ? rowNodes : new Map<string, { item: string; node: HTMLElement }>();
+  rowNodes = new Map();
+  rowPane = pane;
+  return list.map((it) => {
+    const item = JSON.stringify(it);
+    const had = old.get(it.id);
+    const node = had && had.item === item ? had.node : itemView(it);
+    node.dataset.id = it.id;
+    rowNodes.set(it.id, { item, node });
+    return node;
+  });
 }
 
 /** The hub sends news every tick (a compacting or working agent's screen changes each time). The same pane's composer
@@ -470,13 +531,12 @@ function conversationScreen(pane: string): HTMLElement {
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
   const items: Child[] = [];
   if (v.hasEarlier && v.session) {
-    items.push(h("button", { id: "load-earlier", class: "quiet", onclick: async (e: Event) => {
-      (e.currentTarget as HTMLButtonElement).disabled = true;
-      const before = v.items[0]?.id;
-      await request({ type: "loadEarlier", session: v.session, before });
-    } }, "Load earlier"));
+    const mine = earlier.pane === pane;
+    if (mine && earlier.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
+    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: mine && earlier.busy, onclick: () => loadEarlier(pane) },
+      mine && earlier.busy ? "Loading earlier…" : mine && earlier.failed ? "Try again" : "Load earlier"));
   }
-  for (const it of v.items) items.push(itemView(it));
+  items.push(...rowsFor(pane, v.items));
   if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
   if (v.screen && (!v.items.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
   else if (v.screen) items.push(screenView(v.screen, false));

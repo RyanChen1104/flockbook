@@ -359,7 +359,8 @@ async function fakeRun() {
   check(await p.eval("document.querySelector('.msg.assistant strong')?.textContent") === "src/app.ts", "conversation: markdown bold");
   check(await p.eval("document.querySelector('.msg.assistant pre code')?.textContent") === "npm run build", "conversation: code block");
   check(await p.eval("document.querySelector('.chip summary')?.textContent") === "Ran 2 commands", "conversation: tool chip");
-  // Full agent markdown, as the Mac reading view shows it: rendered into a test message in the open conversation.
+  // Full agent markdown, as the Mac reading view shows it: rendered into a test message below the app, in the same
+  // column, so a render of the conversation (an older page loading by itself) does not take it away.
   const md = [
     "## Plan", "", "Some *italic*, **bold** and ~~old~~ text.", "",
     "- one", "  - nested", "- two", "", "1. first", "2. second", "",
@@ -375,7 +376,8 @@ async function fakeRun() {
   ].join("\n");
   await p.eval(`(async () => { const { markdown } = await import('/markdown.js');
     const d = document.createElement('div'); d.className = 'msg assistant'; d.id = 'md-test'; d.append(markdown(${JSON.stringify(md)}));
-    document.querySelector('.msg.assistant').parentElement.append(d); })()`);
+    const host = document.createElement('main'); host.id = 'md-host'; const items = document.createElement('div'); items.className = 'items';
+    items.append(d); host.append(items); document.body.append(host); })()`);
   const q = (s) => `document.querySelector('#md-test ${s}')`;
   check(await p.eval(`${q("h2")}?.textContent`) === "Plan", "markdown: ## heading");
   check(await p.eval(`${q("em")}?.textContent`) === "italic" && await p.eval(`${q("del")}?.textContent`) === "old", "markdown: *italic* and ~~strike~~");
@@ -448,7 +450,7 @@ async function fakeRun() {
   await p.eval("document.querySelectorAll('#md-test .table-wrap')[2].scrollIntoView({ block: 'center' })");
   await p.shot("markdown-end");
   await p.shot("markdown-end", true);
-  await p.eval("document.querySelector('#md-test').remove()");
+  await p.eval("document.querySelector('#md-host').remove()");
   check(await p.eval("document.querySelector('.card.approval .command')?.textContent") === "npm run build", "approval: command shown");
   check(await p.eval("document.querySelector('#composer-text')?.disabled") === true, "composer: off while a prompt is open");
   check(await p.eval(noScroll), "conversation: no sideways scroll");
@@ -630,6 +632,50 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("queued");
   await p.shot("queued", true);
+  // Older rows: a long session. Near the top they load by themselves, one page at a time, and the row that was on top
+  // stays where it was on screen. "Load earlier" still loads (keyboard, screen reader, a retry). A tick does not
+  // rebuild rows that did not change.
+  const rowCount = "document.querySelectorAll('.items > .msg').length";
+  await p.type("#composer-text", "long history");
+  await p.click("#composer-send");
+  check(await p.until("!!document.querySelector('#load-earlier')") === true, "earlier: a long session offers older rows");
+  await p.eval("window.__row = document.querySelector('.items > .msg')");
+  await p.type("#composer-text", "one more");
+  await p.click("#composer-send");
+  await p.until(`${users}.includes('one more')`);
+  check(await p.eval("!!window.__row?.isConnected && document.querySelector('.items > .msg') === window.__row") === true,
+    "earlier: a new row leaves the other rows' nodes in place (no full re-render)");
+  await new Promise((r) => setTimeout(r, 500));
+  const r0 = await p.eval(rowCount);
+  const top0 = JSON.parse(await p.eval(`(() => { window.scrollTo(0, 0);
+    const e = [...document.querySelectorAll('.items > .msg')].find((e) => e.getBoundingClientRect().bottom > 0);
+    return JSON.stringify(e ? { text: e.textContent, top: e.getBoundingClientRect().top } : { text: "", top: NaN }); })()`));
+  check(await p.until(`${rowCount} >= ${r0 + 100}`, 4000) === true, `earlier: at the top, older rows load without a press (${r0} -> ${await p.eval(rowCount)})`);
+  await new Promise((r) => setTimeout(r, 800));
+  const top1 = await p.eval(`[...document.querySelectorAll('.items > .msg')].find((e) => e.textContent === ${JSON.stringify(top0.text)})?.getBoundingClientRect().top ?? NaN`);
+  check(await p.eval(rowCount) > r0 && Math.abs(top1 - top0.top) < 2,
+    `earlier: after the load, the row that was on top stays in place (${Math.round(top0.top)} -> ${Math.round(top1)})`);
+  check(await p.eval(rowCount) === r0 + 100, `earlier: one page per visit to the top, not all at once (${await p.eval(rowCount)})`);
+  await p.shot("earlier-autoload");
+  await p.shot("earlier-autoload", true);
+  const r1 = await p.eval(rowCount);
+  await p.click("#load-earlier");
+  check(await p.until(`${rowCount} >= ${r1 + 100}`, 4000) === true, `earlier: Load earlier still loads (${r1} -> ${await p.eval(rowCount)})`);
+  // A very long session: auto-loading stops near 1000 rows (one more page at most); the button still loads more.
+  await p.type("#composer-text", "longer history");
+  await p.click("#composer-send");
+  await new Promise((r) => setTimeout(r, 500));
+  for (let i = 0, n = -1; i < 15 && n !== await p.eval(rowCount); i++) {
+    n = await p.eval(rowCount);
+    await p.eval("window.scrollTo(0, 0)");
+    await p.until(`${rowCount} > ${n}`, 1500);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const capped = await p.eval(rowCount);
+  check(capped >= 1000 && capped < 1100, `earlier: auto-loading stops at the cap (${capped})`);
+  await p.click("#load-earlier");
+  check(await p.until(`${rowCount} > ${capped}`, 4000) === true, `earlier: past the cap, Load earlier still loads (${await p.eval(rowCount)})`);
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,

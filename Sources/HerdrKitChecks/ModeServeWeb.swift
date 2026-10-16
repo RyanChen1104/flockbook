@@ -140,6 +140,19 @@ import ImageIO
                 let lines = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
                 b.items[sid, default: []] += SessionLog.parse(lines: lines)
             }
+            // "long history": 350 older rows in front of this session (more than the hub sends at once).
+            if text == "long history" {
+                b.items[sid] = (0..<350).map { i in
+                    ConversationItem(id: "\(sid)-old\(i)", kind: i % 3 == 0 ? .userText("Older step \(i): check the parser.")
+                        : .assistantText("Older reply \(i). " + String(repeating: "The reader wraps this text to the column width. ", count: 2 + i % 3)))
+                } + (b.items[sid] ?? [])
+            }
+            // "longer history": 1000 more older rows, past the PWA's auto-load cap.
+            if text == "longer history" {
+                b.items[sid] = (0..<1000).map { i in
+                    ConversationItem(id: "\(sid)-older\(i)", kind: .assistantText("Much older reply \(i)."))
+                } + (b.items[sid] ?? [])
+            }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
             if text == "compact me" { compacting = 1; setStatus("w2:p2", .working) }

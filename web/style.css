@@ -52,7 +52,8 @@
 .glass-float { background: var(--glass-float); }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; background: var(--bg); }
+/* No scroll anchoring by the browser: the page keeps the top row in place itself when older rows come in (app.ts). */
+html { -webkit-text-size-adjust: 100%; background: var(--bg); overflow-anchor: none; }
 body { margin: 0; background: var(--bg); color: var(--label); font: var(--body); overflow-x: hidden; -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
 main { max-width: 760px; margin: 0 auto; padding: 0 16px calc(16px + env(safe-area-inset-bottom)); }
 button { font: inherit; color: inherit; }
