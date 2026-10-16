@@ -57,6 +57,20 @@ import Foundation
     else { check(false, "compaction is a status item") }
 }
 
+// Messages typed while the agent works: Claude Code hands them over mid-turn as a `queued_command` attachment, not a
+// user line. The owner's ones show as user text in log order; task notices, subagent hand-backs and sidechains do not.
+@MainActor func checksQueued() async throws {
+    let q = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
+    let got = describe(SessionLog.parse(lines: q))
+    check(got == [
+        "user:Run the tests, then summarize.", "chips:Ran a command",
+        "user:Also check the lint step.", "user:Here is the failing screen.",
+        "asst:Tests pass and lint is clean.", "user:Thanks.",
+    ], "queued: messages taken mid-turn show as user text, in log order (\(got))")
+    let ids = SessionLog.parse(lines: q).map(\.id)
+    check(ids == SessionLog.parse(lines: q).map(\.id) && Set(ids).count == ids.count, "queued: ids stable and unique")
+}
+
 // Pasted text: Claude Code wraps it in <pasted_content id="…"> … </pasted_content id="…">; it is the owner's message
 @MainActor func checksPasted() async throws {
     let p = String(decoding: fixture("pasted.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)

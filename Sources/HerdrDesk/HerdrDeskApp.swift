@@ -66,6 +66,10 @@ struct HerdrDeskApp: App {
             let dir = args[i + 1]
             DispatchQueue.main.async { SnapshotRunner.run(dir: dir) }
         }
+        if let i = args.firstIndex(of: "--snapshot-log"), args.indices.contains(i + 2) {
+            let path = args[i + 1], dir = args[i + 2]
+            DispatchQueue.main.async { SnapshotRunner.runLog(path: path, dir: dir) }
+        }
         if let i = args.firstIndex(of: "--snapshot-reading"), args.indices.contains(i + 1) {
             let dir = args[i + 1]
             DispatchQueue.main.async { SnapshotRunner.runReading(dir: dir) }

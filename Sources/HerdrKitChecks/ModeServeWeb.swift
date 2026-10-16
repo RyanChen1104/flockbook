@@ -133,6 +133,11 @@ import ImageIO
             b.items[sid, default: []].append(ConversationItem(id: "u\(now.2)", kind: .userText(text)))
             // "block me": another agent starts to wait (the PWA's in-app alert).
             if text == "block me" { b.screens["w2:p1"] = "Waiting for you"; setStatus("w2:p1", .blocked) }
+            // "queued log": the conversation of a Claude log with messages it took mid-turn (Fixtures/queued.jsonl).
+            if text == "queued log" {
+                let lines = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
+                b.items[sid, default: []] += SessionLog.parse(lines: lines)
+            }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
         }

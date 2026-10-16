@@ -559,6 +559,18 @@ async function fakeRun() {
   // A Claude question read from the screen only: shown, answered on the Mac (no answer controls).
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   await p.until("document.querySelector('#composer-text')?.disabled === false");
+  // Messages Claude took mid-turn (queued_command in its log) show as the owner's, in log order.
+  await p.type("#composer-text", "queued log");
+  await p.click("#composer-send");
+  const users = "[...document.querySelectorAll('.msg.user')].map(e => e.textContent)";
+  check(await p.until(`${users}.includes('Thanks.')`) === true, "queued: the log's messages arrive");
+  const queuedOrder = await p.eval(`(() => { const u = ${users}; return [u.indexOf('Run the tests, then summarize.'), u.indexOf('Also check the lint step.'), u.indexOf('Here is the failing screen.'), u.indexOf('Thanks.')]; })()`);
+  check(queuedOrder[0] >= 0 && queuedOrder[0] < queuedOrder[1] && queuedOrder[1] < queuedOrder[2] && queuedOrder[2] < queuedOrder[3], `queued: mid-turn messages shown as user text, in log order (${queuedOrder})`);
+  check(await p.eval(`!${users}.some(t => t.includes('task-notification') || t.includes('Subagent') || t.includes('Sidechain'))`) === true,
+    "queued: task notices, subagent hand-backs and sidechains stay hidden");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queued");
+  await p.shot("queued", true);
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,
