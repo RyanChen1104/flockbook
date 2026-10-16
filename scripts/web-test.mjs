@@ -660,6 +660,17 @@ async function fakeRun() {
   await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
   await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
   await new Promise((r) => setTimeout(r, 300));
+  // The scroll bar let go outside the window (no pointerup reaches the page): the window losing focus ends the hold, and
+  // a hold with no movement for 10 s ends by itself. Following again either way.
+  const grows = "(() => { const d = document.createElement('div'); d.style.height = '400px'; document.getElementById('app').append(d); })()";
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); window.dispatchEvent(new Event('blur'))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar let go outside the window -> follows again (gap ${await p.eval(bottomGap)})`);
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 10500));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held still for 10 s -> follows again (gap ${await p.eval(bottomGap)})`);
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
