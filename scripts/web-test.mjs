@@ -589,7 +589,7 @@ async function fakeRun() {
   await p.shot("newest");
   await p.shot("newest", true);
   // Scrolled up: rows arrive, the reader is not pulled back.
-  await p.eval("window.scrollTo(0, 200)");
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 200)");
   await new Promise((r) => setTimeout(r, 300));
   grow("s3", 3);
   await p.until(`${rows} >= ${before + 36}`);
@@ -613,7 +613,7 @@ async function fakeRun() {
   // The connection drops while the reader is scrolled up: the short "Not connected" screen puts the page at the top. That
   // is not the reader scrolling: back online, rows arrive and the reader is not pulled to the bottom.
   const y = "Math.round(window.scrollY)";
-  await p.eval("window.scrollTo(0, 200)");
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 200)");
   await new Promise((r) => setTimeout(r, 300));
   await p.eval("window.__sockets.at(-1).close()");
   await p.until("document.body.innerText.includes('Not connected')");
@@ -628,15 +628,26 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 300));
   await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
   await p.until("window.visualViewport.scale > 1.5");
-  await p.eval("window.scrollBy(0, -1)");   // the reader's own scroll, zoomed in
-  await new Promise((r) => setTimeout(r, 300));
+  // The reader moves only the zoomed view (the page itself stays at its bottom: no window scroll event).
   const zoomedY = await p.eval(y);
+  await p.cdp("Input.dispatchMouseEvent", { type: "mouseWheel", x: 195, y: 400, deltaX: 0, deltaY: 120 });
+  await p.until("window.visualViewport.offsetTop > 50");
+  const moved = await p.eval("Math.round(window.visualViewport.offsetTop)");
+  await new Promise((r) => setTimeout(r, 300));
   grow("s3", 2);
   await p.until(`${rows} >= ${before + 40}`);
   await new Promise((r) => setTimeout(r, 500));
-  check(await p.eval(y) === zoomedY, `newest: zoomed in above the newest rows -> stays (y ${zoomedY} -> ${await p.eval(y)})`);
+  check(moved > 50 && await p.eval(y) === zoomedY, `newest: zoomed in above the newest rows -> stays (view moved ${moved}, y ${zoomedY} -> ${await p.eval(y)})`);
   await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
   await p.until("window.visualViewport.scale < 1.1");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
+  await new Promise((r) => setTimeout(r, 300));
+  // The reader scrolls up in the same frame as the page grew (before the resize observer saw the new height): their
+  // scroll counts, the page is not pulled back.
+  await p.eval(`(() => { const d = document.createElement('div'); d.style.height = '600px'; document.getElementById('app').append(d);
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300); })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 300, `newest: scrolled up while the page grew -> stays (gap ${await p.eval(bottomGap)})`);
   await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
   await new Promise((r) => setTimeout(r, 300));
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
