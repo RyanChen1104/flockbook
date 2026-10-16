@@ -19,7 +19,7 @@ public enum LaunchGuard {
     public static let content: Set<String> = [
         "--test-sendfail", "--test-loadstate", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search",
         "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn",
-        "--test-question-live", "--bench-conversation", "--test-conversation-churn",
+        "--test-question-live", "--bench-conversation", "--test-conversation-churn", "--test-busy-tab",
     ]
     /// The checks with a real window, run only with the owner's leave.
     public static let realWindow: Set<String> = ["--test-fullscreen-real", "--test-scroll-real"]

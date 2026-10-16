@@ -51,13 +51,26 @@ struct MessageText: NSViewRepresentable {
     private static var next = 0
     private enum Kind: Hashable { case markdown, bubble, plain(mono: CGFloat, error: Bool) }
     private struct Key: Hashable { let kind: Kind; let size: ReadingSize; let text: String }
-    private static var store: [Key: MessageContent] = [:]
+    private static var store: [Key: (content: MessageContent, used: Int)] = [:]
+    private static var uses = 0
+    /// Texts kept. A tab of several long conversations shows more than a few hundred: dropping all of them at once made
+    /// every update rebuild and measure every text on screen (a busy tab kept the main thread at 100%).
+    static let keep = 3000
+    /// Texts built and sizes measured so far (checks: a change must not rebuild what is on screen).
+    static var builds = 0
+    static var measures = 0
 
     private static func cached(_ key: Key, _ build: () -> NSAttributedString) -> MessageContent {
-        if let c = store[key] { return c }
-        if store.count > 400 { store.removeAll(keepingCapacity: true) }
+        uses += 1
+        if let c = store[key] { store[key]!.used = uses; return c.content }
+        if store.count >= keep {
+            // The least recently used quarter goes; what is on screen was used last.
+            let old = store.sorted { $0.value.used < $1.value.used }.prefix(keep / 4).map(\.key)
+            for k in old { store[k] = nil }
+        }
+        builds += 1
         let c = MessageContent(build())
-        store[key] = c
+        store[key] = (c, uses)
         return c
     }
 
@@ -83,6 +96,7 @@ struct MessageText: NSViewRepresentable {
     func size(width: CGFloat, fit: Bool) -> CGSize {
         let key = Int((width * 2).rounded()) * 2 + (fit ? 1 : 0)
         if let s = sizes[key] { return s }
+        Self.measures += 1
         let s = TextMeasure.size(self, width: width, fit: fit)
         if sizes.count > 16 { sizes.removeAll() }
         sizes[key] = s

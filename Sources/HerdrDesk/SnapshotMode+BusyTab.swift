@@ -1,0 +1,91 @@
+import AppKit
+import HerdrKit
+import SwiftUI
+
+/// Offscreen check of a busy tab (`--test-busy-tab`): four panes side by side, each a long conversation (a page of 100 rows of text),
+/// one agent writing. A new row must cost about one new text, not a rebuild of every text on screen; with nothing new,
+/// the main thread must rest. Synthetic items only. Under 30 s.
+extension ContentTests {
+    static func busyTab() async {
+        var failures = 0
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("busy-tab: \(n) \(ok ? "ok" : "FAIL")") }
+        let panes = 4, rows = ConversationWindow.maxRows, page = ConversationView.page
+        // Texts of other tabs read earlier: the store is full before this tab opens.
+        for i in 0..<MessageContent.keep { _ = MessageContent.plain("other tab \(i)", monoSize: 12) }
+        let holder = BusyHolder(panes: (0..<panes).map { p in BusyData.items(p, rows) })
+        let size = NSSize(width: 1600, height: 900)
+        let host = NSHostingView(rootView: BusyView(holder: holder))
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
+        try? await Task.sleep(for: .seconds(2))
+        let shown = Self.all(MessageTextView.self, in: host).count
+        step("first view: \(shown) message text views in \(panes) panes", shown == panes * page)
+
+        // At rest: nothing new, so no text is built or measured again.
+        var b0 = MessageContent.builds, m0 = MessageContent.measures
+        try? await Task.sleep(for: .seconds(2))
+        step("at rest: \(MessageContent.builds - b0) texts built, \(MessageContent.measures - m0) measured in 2 s (want 0)",
+             MessageContent.builds == b0 && MessageContent.measures == m0)
+
+        // One agent writes: each new row costs its own text, not every text on screen again.
+        b0 = MessageContent.builds; m0 = MessageContent.measures
+        var layout: [Double] = []
+        for i in 0..<10 {
+            holder.panes[0].append(ConversationItem(id: "new\(i)", kind: .assistantText("New reply \(i): the agent keeps writing while the other panes wait."),
+                                                    timestamp: Date(timeIntervalSince1970: 1_900_000_000 + Double(i))))
+            let t = Date()
+            host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
+            layout.append(Date().timeIntervalSince(t) * 1000)
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let built = MessageContent.builds - b0, measured = MessageContent.measures - m0
+        print("busy-tab: layout and draw after a new row: \(layout.map { Int($0) }) ms")
+        step("10 new rows: \(built) texts built (want at most 40)", built <= 40)
+        step("10 new rows: \(measured) texts measured (want at most 80)", measured <= 80)
+
+        // Other tabs read before filled the store: what is on screen stays (the least recently used texts go).
+        b0 = MessageContent.builds
+        for i in 10..<15 {
+            holder.panes[1].append(ConversationItem(id: "new\(i)", kind: .assistantText("New reply \(i) after a full store."),
+                                                    timestamp: Date(timeIntervalSince1970: 1_900_000_000 + Double(i))))
+            host.layoutSubtreeIfNeeded()
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let after = MessageContent.builds - b0
+        step("full store, 5 new rows: \(after) texts built (want at most 20)", after <= 20)
+
+        win.orderOut(nil)
+        print("busy-tab: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
+        exit(failures == 0 ? 0 : 1)
+    }
+}
+
+@MainActor @Observable private final class BusyHolder {
+    var panes: [[ConversationItem]]
+    init(panes: [[ConversationItem]]) { self.panes = panes }
+}
+
+private struct BusyView: View {
+    let holder: BusyHolder
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(holder.panes.indices, id: \.self) { p in
+                ConversationView(items: holder.panes[p], agentName: "pane\(p)", loadState: .ready)
+            }
+        }
+    }
+}
+
+/// Every row a message with its own text: user turns and short replies.
+private enum BusyData {
+    static func items(_ pane: Int, _ n: Int) -> [ConversationItem] {
+        (0..<n).map { i in
+            let t = Date(timeIntervalSince1970: 1_800_000_000 + Double(i * 37))
+            return i % 2 == 0
+                ? ConversationItem(id: "p\(pane)u\(i)", kind: .userText("Pane \(pane), step \(i): check the parser."), timestamp: t)
+                : ConversationItem(id: "p\(pane)a\(i)", kind: .assistantText("Pane \(pane), step \(i) done. The reader wraps this text to the column."), timestamp: t)
+        }
+    }
+}
