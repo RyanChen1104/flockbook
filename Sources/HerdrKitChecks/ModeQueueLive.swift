@@ -28,7 +28,7 @@ import Foundation
         init(_ inner: HerdrQueuePullIO) { self.inner = inner }
         func agent() async -> Agent? { await inner.agent() }
         func screen() async -> String? { await inner.screen() }
-        func keys(_ k: [String]) async -> Bool { sent.append(k); return await inner.keys(k) }
+        func keys(_ k: [String], expect: Agent) async -> Bool { sent.append(k); return await inner.keys(k, expect: expect) }
         func settle() async { await inner.settle() }
         func width() async -> Int? { await inner.width() }
     }

@@ -197,7 +197,8 @@ public enum QueuePull {
     public protocol IO {
         func agent() async -> Agent?
         func screen() async -> String?
-        func keys(_ keys: [String]) async -> Bool
+        /// Sends `keys` only if `expect` (the same kind and session) is still the pane's agent right before them.
+        func keys(_ keys: [String], expect: Agent) async -> Bool
         func settle() async
         /// The pane's width in columns (where the agent wraps its input box). Nil: not known.
         func width() async -> Int?
@@ -206,7 +207,8 @@ public enum QueuePull {
     /// Up or Shift-Left, then Ctrl-U one at a time. Before the first Ctrl-U the text Up brought back goes to `keep`
     /// (saved until a composer has it; false: no Ctrl-U at all). Before each Ctrl-U the pull reads the pane again: the
     /// same agent, and an input box that still holds what came back less the rows Ctrl-U took; anything else stops it,
-    /// with no more keys. Whatever came back goes to the composer however the pull ends.
+    /// with no more keys. Every key list goes out only after a fresh read finds the same agent. Only text the box holds
+    /// exactly as the log has it goes on (to `keep` and the composer); anything else goes nowhere.
     public static func run(expect: Agent, log: ClaudeQueueLog, io: some IO, keep: @escaping @MainActor @Sendable (String) -> Bool = { _ in true }) async -> Outcome {
         guard let key = pullKey(agent: expect.kind) else { return .refused("This agent has no queue Flockbook can pull back.") }
         // Only Claude Code's log gives queued text exactly. Codex shows its queue on screen only, where trailing blank
@@ -234,13 +236,23 @@ public enum QueuePull {
         guard fromLog else {
             return .refused("Flockbook cannot read this queued text exactly yet. Edit it in the agent's terminal, or try again in a moment. Nothing was sent.")
         }
+        // The box must show the text character for character: no wrapped row, no trailing space or blank line (the
+        // screen drops them). Else no key: the queue keeps it.
+        guard shows(expected, width: textWidth(before, agent: expect.kind, paneWidth: nil)) else {
+            return .refused("This queued text is too long or has spaces or blank lines that the agent's input box does not show, so Flockbook cannot check it exactly. Edit it in the agent's terminal. Nothing was sent.")
+        }
 
-        guard await send([key], io) else { return .refused("Input is off. Nothing was sent.") }
+        switch await send([key], io, expect) {
+        case .sent: break
+        case .off: return .refused("Input is off. Nothing was sent.")
+        case .otherAgent: return .refused("Another agent is in this pane now. Nothing was sent.")
+        }
         await io.settle()
         let check = "Check the agent's terminal before you send it."
+        let edit = "It may be in the agent's input box now: edit it in the terminal."
         guard let shown = await io.screen() else {
-            // Up went out and nothing tells where the text is now: the composer gets it, the box is left alone.
-            return await held(expected, "Flockbook could not read the agent's input box after the pull, so it did not clear it. \(check)", keep)
+            // Up went out and nothing shows the box holds exactly the text: it goes nowhere, the box is left alone.
+            return .failed("Flockbook could not read the agent's input box after the pull, so it did not take the text or clear it. \(edit)")
         }
         // What came back is what the input box holds now. It may hold more than the screen showed (seen live): then
         // all of it goes to the composer, so Ctrl-U never clears text the owner did not get back.
@@ -248,17 +260,12 @@ public enum QueuePull {
         guard !back.isEmpty, back != [placeholder(expect.kind)] else {
             return .failed("The queued text did not come back to the input box. It is still queued; nothing was cleared.")
         }
-        let cols = await io.width()
-        let (taken, exact) = text(of: back, agent: expect.kind, width: textWidth(shown, agent: expect.kind, paneWidth: cols), log: log.items)
-        // Before any way out that gives text on: the box must hold exactly the log's text. Anything else (other text, a
-        // guess at line breaks) is not the owner's text for sure, so it goes nowhere: not kept, not in a composer, not
-        // cleared. The box keeps it.
-        guard exact else {
-            return .failed("The agent's input box did not hold exactly the queued text, so Flockbook did not take it or clear it. It is in the agent's input box now: edit it in the terminal.")
+        // Before any way out that gives text on: the box must hold the log's text character for character. Anything
+        // else is not the owner's text for sure, so it goes nowhere: not kept, not in a composer, not cleared.
+        guard exact(back, expected) else {
+            return .failed("The agent's input box did not hold exactly the queued text, so Flockbook did not take it or clear it. \(edit)")
         }
-        guard compact(taken).contains(compact(expected)) else {
-            return await held(taken, "The agent's input box did not hold the queued text as expected, so Flockbook did not clear it. \(check)", keep)
-        }
+        let taken = expected
         guard await keep(taken) else {
             return .partial(taken, "Flockbook could not save the text, so it did not clear the agent's input box. \(check)")
         }
@@ -283,8 +290,10 @@ public enum QueuePull {
             }
             left = rows.count
             guard step < most else { break }
-            guard await send(["ctrl+u"], io) else {
-                return .partial(taken, "Input went off while Flockbook cleared the agent's input box. \(check)")
+            switch await send(["ctrl+u"], io, expect) {
+            case .sent: break
+            case .off: return .partial(taken, "Input went off while Flockbook cleared the agent's input box. \(check)")
+            case .otherAgent: return .partial(taken, "Another agent is in this pane now, so Flockbook stopped clearing its input box. \(check)")
             }
             await io.settle()
         }
@@ -301,47 +310,32 @@ public enum QueuePull {
     /// The agent has a session id: without one another agent of its kind in the pane looks the same.
     private static func bound(_ a: Agent) -> Bool { !(a.sessionId ?? "").isEmpty }
 
-    /// Keeps `text` (no keys follow) and gives it to the composer with `why`.
-    private static func held(_ text: String, _ why: String, _ keep: @MainActor @Sendable (String) -> Bool) async -> Outcome {
-        _ = await keep(text)
-        return .partial(text, why)
-    }
-
     /// The text without spaces and line breaks: the screen wraps rows (CJK anywhere, words at spaces).
     static func compact(_ s: String) -> String { String(s.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.map(Character.init)) }
 
-    private static func send(_ keys: [String], _ io: some IO) async -> Bool {
-        guard safe(keys) else { return false }
-        return await io.keys(keys)
+    enum Sent { case sent, off, otherAgent }
+
+    /// Each key list goes out only after a fresh read finds the agent the pull checked still in the pane (the IO checks
+    /// it again right before the keys).
+    private static func send(_ keys: [String], _ io: some IO, _ expect: Agent) async -> Sent {
+        guard safe(keys) else { return .off }
+        guard let a = await io.agent(), same(a, expect) else { return .otherAgent }
+        return await io.keys(keys, expect: expect) ? .sent : .off
     }
 
-    /// The text of the input box rows, and whether it is exact. Claude Code: the log's open entries when they are the
-    /// same text (the log keeps it exactly). Else, and for Codex, the rows joined: a row the agent wrapped (the row
-    /// before it was full) joins the one before it, any other row starts a new line. That is a guess, one row too
-    /// (trailing spaces and blank lines are gone from the screen).
-    static func text(of rows: [String], agent: String, width: Int?, log: [String?]) -> (String, exact: Bool) {
-        if agent == "claude", !log.isEmpty, log.allSatisfy({ $0 != nil }) {
-            let l = log.compactMap { $0 }.joined(separator: "\n")
-            if compact(l) == compact(rows.joined()) { return (l, true) }
-        }
-        return (unwrap(rows, width: width), false)
-    }
+    /// The box rows are the text, character for character: one row per line, nothing joined, trimmed or guessed.
+    static func exact(_ rows: [String], _ text: String) -> Bool { rows.joined(separator: "\n") == text }
 
-    /// Rows back to lines. `width`: the columns a row of text may fill (nil: every row is a line).
-    static func unwrap(_ rows: [String], width: Int?) -> String {
-        guard var out = rows.first else { return "" }
-        var prev = out
-        for row in rows.dropFirst() {
-            defer { prev = row }
-            guard let width, !row.isEmpty, let first = row.first, !first.isWhitespace else { out += "\n" + row; continue }
-            let wide = cells(first) == 2 || prev.last.map { cells($0) == 2 } == true
-            let word = row.prefix { !$0.isWhitespace }
-            // Wrapped here: the next character (CJK) or word (with its space) would not have fit on the row before.
-            let need = wide ? cells(first) : 1 + word.reduce(0) { $0 + cells($1) }
-            if columns(prev) + need > width { out += (wide || !prev.contains(" ") && columns(prev) >= width ? "" : " ") + row }
-            else { out += "\n" + row }
+    /// The input box can show `text` character for character: every line fits on one row (`width`, known), and no
+    /// line ends in a space or tab, no tab or no-break space anywhere, no blank line at the end (the screen drops or
+    /// changes them).
+    static func shows(_ text: String, width: Int?) -> Bool {
+        guard let width, !text.isEmpty else { return false }
+        let lines = text.components(separatedBy: "\n")
+        guard lines.last?.isEmpty == false else { return false }
+        return lines.allSatisfy { l in
+            columns(l) < width && !l.contains("\t") && !l.contains("\u{a0}") && l.last.map { !$0.isWhitespace } != false
         }
-        return out
     }
 
     /// The columns a row of text may fill: Claude Code wraps at its rule's width less 4, Codex at the pane's less 3
@@ -424,8 +418,10 @@ public struct HerdrQueuePullIO: QueuePull.IO {
         (try? await client.snapshot())?.flatMap(\.tabs).flatMap(\.panes).first { $0.id == paneId }?.agent
     }
     public func screen() async -> String? { try? await client.visibleText(paneId: paneId) }
-    public func keys(_ keys: [String]) async -> Bool {
+    public func keys(_ keys: [String], expect: Agent) async -> Bool {
         guard QueuePull.safe(keys), await allowed() else { return false }
+        // The last check before the keys: the pane still runs the agent the pull checked.
+        guard let a = await agent(), a.kind == expect.kind, !(a.sessionId ?? "").isEmpty, a.sessionId == expect.sessionId else { return false }
         return (try? await client.sendNamedKeys(keys, to: paneId)) != nil
     }
     public func settle() async { try? await Task.sleep(for: .milliseconds(400)) }
