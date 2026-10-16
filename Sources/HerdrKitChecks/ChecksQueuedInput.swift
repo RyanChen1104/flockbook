@@ -182,6 +182,35 @@ private func wrap(_ text: String, width: Int) -> [String] {
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, empty], log: gd, agents: [working("claude"), working("codex")])
     check(r.isRefused && k.isEmpty, "pull: r5 P2-3: Codex in the pane when Up would go: refused, no key (\(r), \(k))")
 
+    // r6 P2-1: the log as Claude Code writes it, read through the parser: "fix\n\n" keeps its blank lines, so the box
+    // (which drops them) cannot show it exactly: refused before any key (before r6 the log lost them and "fix" went on).
+    var fixLog = ConversationParser()
+    fixLog.feed(line: #"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-16T09:45:30.000Z","sessionId":"s-claude","content":"fix\n\n"}"#)
+    check(fixLog.queue.items == ["fix\n\n"], "queue: r6 P2-1: the parser keeps the log's text as written (\(fixLog.queue.items))")
+    let fixBox = claudeBox(["fix"])
+    (r, k) = await pull("claude", [claudeScreen(queued: ["fix"]), fixBox, fixBox, empty], log: fixLog.queue)
+    check(r.isRefused && k.isEmpty && kept.isEmpty, "pull: r6 P2-1: 'fix\\n\\n' from the real log: refused before any key (\(r), \(k))")
+    // r6 P2-2: the box's rows count only as they are on screen: a no-break space or a trailing space in the box is
+    // not the log's text (before r6 the rows were cleaned first, and Ctrl-U cleared what the owner had changed).
+    for row in ["a\u{a0}b", "a b "] {
+        let changed = claudeBox([row])
+        (r, k) = await pull("claude", [claudeScreen(queued: ["a b"]), changed, changed, empty], log: ["a b"])
+        check(r.isFailed && r.text == nil && kept.isEmpty && k == [["Up"]], "pull: r6 P2-2: the box holds \(row.debugDescription): not exact, nothing cleared (\(r), \(k))")
+    }
+    // r6 P2-4: only characters of a known width (printable ASCII, CJK and fullwidth): an emoji may take 1 or 2
+    // columns, so it is refused before any key (before r6 U+1FAE0 counted as 1).
+    let melt = "fix \u{1FAE0}"
+    (r, k) = await pull("claude", [claudeScreen(queued: [melt]), claudeBox([melt]), claudeBox([melt]), empty], log: [melt])
+    check(r.isRefused && k.isEmpty, "pull: r6 P2-4: an emoji: refused before any key (\(r), \(k))")
+    // r6 P2-5: a line that looks like the box's rule, and more lines than the screen shows: refused before any key.
+    let ruled = "alpha\n" + String(repeating: "─", count: 12) + "\nbeta"
+    (r, k) = await pull("claude", [claudeScreen(queued: [ruled.replacingOccurrences(of: "\n", with: "\n  ")]), claudeBox(["alpha"]), empty], log: [ruled])
+    check(r.isRefused && k.isEmpty, "pull: r6 P2-5: a line like the box's rule: refused before any key (\(r), \(k))")
+    let tall = (1...40).map { "line \($0)" }.joined(separator: "\n")
+    // The screen (9 rows) cuts the queued message with "…"; it lines up with the log, and 40 lines do not fit.
+    (r, k) = await pull("claude", [claudeScreen(queued: ["line 1\n  line 2…"]), claudeBox(tall.components(separatedBy: "\n")), empty], log: [tall])
+    check(r.isRefused && k.isEmpty, "pull: r6 P2-5: 40 lines on a screen of fewer rows: refused before any key (\(r), \(k))")
+
     // P1-1: the owner types in the terminal while it is cleared: stop, no more keys, the text still goes to the composer.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])], log: gd)
     check(r == .partial(gammaDelta, r.why ?? "") && k == [["Up"], u], "pull: the box changed between two Ctrl-U: stopped, the text kept (\(r), \(k))")
@@ -270,6 +299,14 @@ private func wrap(_ text: String, width: Int) -> [String] {
     n = fake.requests.count
     let toClaude = await liveIO.keys(["Up"], expect: claude)
     check(toClaude && sentKeys(after: n) == 1, "pull: r5 P2-3: the live IO: the same Claude session: the key goes out (\(sentKeys(after: n)))")
+
+    // r6 P2-3: Allow input is asked again after the snapshot, right before the keys (it may go off while herdr answers).
+    var asks = 0
+    let offIO = HerdrQueuePullIO(client: HerdrClient(session: HerdrSession(name: "fake", socketPath: fake.path)), paneId: "w1:p1",
+                                 allowed: { asks += 1; return asks == 1 })
+    n = fake.requests.count
+    let offLate = await offIO.keys(["Up"], expect: claude)
+    check(!offLate && sentKeys(after: n) == 0, "pull: r6 P2-3: input went off while the agent was read: no key goes out (\(asks) asks)")
 
     let flat = Set(allKeys.flatMap { $0 })
     check(flat.isSubset(of: QueuePull.allowedKeys) && !flat.contains { $0.lowercased().hasPrefix("esc") }, "pull: every key sent in every case is Up, shift+left or ctrl+u (the names herdr takes) (\(flat.sorted()))")

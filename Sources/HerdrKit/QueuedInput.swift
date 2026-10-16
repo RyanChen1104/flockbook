@@ -131,7 +131,8 @@ public struct ClaudeQueueLog: Sendable, Hashable, ExpressibleByArrayLiteral {
 
     public mutating func feed(_ o: [String: Any]) {
         guard o["type"] as? String == "queue-operation" else { return }
-        let content = (o["content"] as? String).map { $0.trimmingCharacters(in: .newlines) }
+        // As written: a pull compares it with the agent's input box character for character.
+        let content = o["content"] as? String
         switch o["operation"] as? String {
         case "enqueue":
             items.append(content)
@@ -237,8 +238,8 @@ public enum QueuePull {
             return .refused("Flockbook cannot read this queued text exactly yet. Edit it in the agent's terminal, or try again in a moment. Nothing was sent.")
         }
         // The box must show the text character for character: no wrapped row, no trailing space or blank line (the
-        // screen drops them). Else no key: the queue keeps it.
-        guard shows(expected, width: textWidth(before, agent: expect.kind, paneWidth: nil)) else {
+        // screen drops them), every row on screen. Else no key: the queue keeps it.
+        guard shows(expected, screen: before) else {
             return .refused("This queued text is too long or has spaces or blank lines that the agent's input box does not show, so Flockbook cannot check it exactly. Edit it in the agent's terminal. Nothing was sent.")
         }
 
@@ -262,7 +263,7 @@ public enum QueuePull {
         }
         // Before any way out that gives text on: the box must hold the log's text character for character. Anything
         // else is not the owner's text for sure, so it goes nowhere: not kept, not in a composer, not cleared.
-        guard exact(back, expected) else {
+        guard exact(rawBox(shown), expected) else {
             return .failed("The agent's input box did not hold exactly the queued text, so Flockbook did not take it or clear it. \(edit)")
         }
         let taken = expected
@@ -326,16 +327,41 @@ public enum QueuePull {
     /// The box rows are the text, character for character: one row per line, nothing joined, trimmed or guessed.
     static func exact(_ rows: [String], _ text: String) -> Bool { rows.joined(separator: "\n") == text }
 
-    /// The input box can show `text` character for character: every line fits on one row (`width`, known), and no
-    /// line ends in a space or tab, no tab or no-break space anywhere, no blank line at the end (the screen drops or
-    /// changes them).
-    static func shows(_ text: String, width: Int?) -> Bool {
-        guard let width, !text.isEmpty else { return false }
+    /// The most rows `visibleText` gives.
+    static let visibleRows = 60
+
+    /// The input box can show `text` character for character on `screen` (Claude Code, before the pull): only
+    /// characters of a known width, every line on one row (narrower than the box), no line that ends in a space or
+    /// looks like the box's rule, no blank line at the end, and all the lines on screen with the box's rules and
+    /// what is under it.
+    static func shows(_ text: String, screen: String) -> Bool {
+        guard !text.isEmpty, let width = textWidth(screen, agent: "claude", paneWidth: nil) else { return false }
+        let shown = screen.components(separatedBy: "\n")
+        guard let rule = shown.lastIndex(where: isRule) else { return false }
+        // Under the box: the bottom rule and the lines below it; over it: the top rule and one more line.
+        let room = min(shown.count, visibleRows) - (shown.count - rule) - 2
         let lines = text.components(separatedBy: "\n")
-        guard lines.last?.isEmpty == false else { return false }
+        guard lines.count <= room, lines.last?.isEmpty == false else { return false }
         return lines.allSatisfy { l in
-            columns(l) < width && !l.contains("\t") && !l.contains("\u{a0}") && l.last.map { !$0.isWhitespace } != false
+            guard let cols = knownColumns(l) else { return false }
+            return cols < width && l.last != " " && !(!l.isEmpty && l.unicodeScalars.allSatisfy { (0x2500...0x257F).contains($0.value) })
         }
+    }
+
+    /// The columns of `s` when every character's width is sure: printable ASCII (1), CJK and fullwidth (2), one
+    /// scalar each. Nil for anything else (emoji, combining marks, joiners, tabs, no-break spaces).
+    static func knownColumns(_ s: String) -> Int? {
+        var n = 0
+        for c in s {
+            guard c.unicodeScalars.count == 1, let v = c.unicodeScalars.first?.value else { return nil }
+            switch v {
+            case 0x20...0x7E: n += 1
+            case 0x3000...0x303E, 0x3041...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xAC00...0xD7A3, 0xF900...0xFAFF,
+                 0xFF01...0xFF60, 0xFFE0...0xFFE6: n += 2
+            default: return nil
+            }
+        }
+        return n
     }
 
     /// The columns a row of text may fill: Claude Code wraps at its rule's width less 4, Codex at the pane's less 3
@@ -346,19 +372,6 @@ public enum QueuePull {
             return lines.last(where: isRule).map { $0.trimmingCharacters(in: .whitespaces).count - 4 }
         }
         return paneWidth.map { $0 - 3 }
-    }
-
-    static func columns(_ s: some StringProtocol) -> Int { s.reduce(0) { $0 + cells($1) } }
-
-    /// Terminal cells of a character: 2 for East Asian wide and fullwidth ones, else 1.
-    static func cells(_ c: Character) -> Int {
-        guard let v = c.unicodeScalars.first?.value else { return 1 }
-        switch v {
-        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xA000...0xA4CF,
-             0xAC00...0xD7A3, 0xF900...0xFAFF, 0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6, 0x1F300...0x1F64F,
-             0x1F900...0x1F9FF, 0x20000...0x3FFFD: return 2
-        default: return 1
-        }
     }
 
     static func isRule(_ line: String) -> Bool {
@@ -376,6 +389,19 @@ public enum QueuePull {
     static func box(_ screen: String, agent: String) -> [String] {
         let lines = screen.components(separatedBy: "\n")
         return agent == "claude" ? claudeBox(lines) : codexBox(lines)
+    }
+
+    /// Claude Code's input box rows as the screen has them: only the box's two-column margin is taken off (the prompt
+    /// mark and its space on the first row, two columns on the others), nothing trimmed or replaced.
+    static func rawBox(_ screen: String) -> [String] {
+        let lines = screen.components(separatedBy: "\n")
+        let rules = lines.indices.filter { isRule(lines[$0]) }
+        guard rules.count >= 2 else { return [] }
+        let margin: Set<Character> = [" ", "\u{a0}"]
+        return lines[(rules[rules.count - 2] + 1)..<rules[rules.count - 1]].enumerated().map { i, l in
+            if i == 0 { return l.first == "❯" ? String(l.dropFirst(2)) : l }
+            return l.prefix(2).count == 2 && l.prefix(2).allSatisfy(margin.contains) ? String(l.dropFirst(2)) : l
+        }
     }
 
     /// Claude Code: the rows between the last two rule lines; the first starts with "❯ ".
@@ -422,6 +448,8 @@ public struct HerdrQueuePullIO: QueuePull.IO {
         guard QueuePull.safe(keys), await allowed() else { return false }
         // The last check before the keys: the pane still runs the agent the pull checked.
         guard let a = await agent(), a.kind == expect.kind, !(a.sessionId ?? "").isEmpty, a.sessionId == expect.sessionId else { return false }
+        // Input may have gone off while herdr answered.
+        guard await allowed() else { return false }
         return (try? await client.sendNamedKeys(keys, to: paneId)) != nil
     }
     public func settle() async { try? await Task.sleep(for: .milliseconds(400)) }
