@@ -275,11 +275,21 @@ async function follow(): Promise<void> {
   if (want === state.watching) { render(); return; }
   if (state.watching) request({ type: "unwatch", pane: state.watching });
   state.watching = want;
+  following = true;   // an agent opens at its newest message
   if (state.banner && state.banner.pane === want) state.banner = null;
   render();
-  if (want) { await request({ type: "watch", pane: want }); window.scrollTo(0, document.body.scrollHeight); }
+  if (want) await request({ type: "watch", pane: want });
 }
 addEventListener("hashchange", follow);
+
+// --- The newest message. An open conversation stays at the bottom while rows arrive and lay out (markdown, images),
+// until the reader scrolls up; scrolling back down follows again. Opening, switching or reloading starts at the bottom.
+let following = true;
+function nearBottom(): boolean { return document.documentElement.scrollHeight - window.innerHeight - window.scrollY <= 40; }
+function toBottom(): void { if (state.watching && following) window.scrollTo(0, document.documentElement.scrollHeight); }
+addEventListener("scroll", () => { if (state.watching) following = nearBottom(); }, { passive: true });
+new ResizeObserver(toBottom).observe(document.body);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") toBottom(); });
 function open(pane: string): void { location.hash = `pane=${encodeURIComponent(pane)}`; }
 
 // --- Helpers.
@@ -352,7 +362,8 @@ function render(): void {
   app.replaceChildren(...body.filter((c): c is Node | string => !!c));
   const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (box && draft !== undefined) box.value = draft;
-  if (focused) document.getElementById(focused)?.focus();
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  toBottom();
 }
 
 function pairScreen(): HTMLElement {

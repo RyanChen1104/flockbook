@@ -5,6 +5,7 @@ import ImageIO
 /// `--serve-web`: a hub with the bundled PWA and a fake backend, for the headless browser test (scripts/web-test.mjs).
 /// TLS with a throwaway self-signed certificate, 127.0.0.1 only, never herdr. Prints one JSON line
 /// (port, cert path, tokens), then serves until stdin closes. Input changes the fake state the way an agent would.
+/// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open).
 @MainActor func modeServeWeb() async throws {
     guard CommandLine.arguments.contains("--serve-web") else { return }
     let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkweb-\(UUID().uuidString)")
@@ -138,6 +139,16 @@ import ImageIO
         }
         seen = now
         try? await Task.sleep(for: .milliseconds(100))
+        for line in stdinLines() {
+            let w = line.split(separator: " ").map(String.init)
+            if w.count == 3, w[0] == "grow", let n = Int(w[2]) {
+                let start = b.items[w[1]]?.count ?? 0
+                b.items[w[1], default: []] += (start..<(start + n)).map { i in
+                    ConversationItem(id: "\(w[1])-g\(i)", kind: i % 3 == 0 ? .userText("Step \(i): check the parser.")
+                        : .assistantText("Reply \(i). " + String(repeating: "The reader wraps this text to the column width, long enough to take several lines. ", count: 3 + i % 4)))
+                }
+            }
+        }
         if stdinDone() { break }
     }
     server.stop()
@@ -146,11 +157,20 @@ import ImageIO
 
 /// True once stdin is at end (the test script closed it).
 nonisolated(unsafe) private var stdinEOF = false
-private func stdinDone() -> Bool {
-    if stdinEOF { return true }
+nonisolated(unsafe) private var stdinBuffer: [UInt8] = []
+private func stdinDone() -> Bool { stdinEOF }
+/// Whole lines that arrived on stdin since the last call (reads what is there, never waits).
+private func stdinLines() -> [String] {
     var fds = pollfd(fd: 0, events: Int16(POLLIN), revents: 0)
-    guard poll(&fds, 1, 0) > 0 else { return false }
-    var byte: UInt8 = 0
-    if read(0, &byte, 1) <= 0 { stdinEOF = true }
-    return stdinEOF
+    while !stdinEOF, poll(&fds, 1, 0) > 0 {
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        let n = read(0, &chunk, chunk.count)
+        if n <= 0 { stdinEOF = true } else { stdinBuffer += chunk[..<n] }
+    }
+    var lines: [String] = []
+    while let nl = stdinBuffer.firstIndex(of: 0x0A) {
+        lines.append(String(decoding: stdinBuffer[..<nl], as: UTF8.self))
+        stdinBuffer.removeFirst(nl + 1)
+    }
+    return lines
 }

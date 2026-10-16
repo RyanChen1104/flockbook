@@ -566,6 +566,51 @@ async function fakeRun() {
   check(await p.eval("!document.querySelector('#submit-answer') && !document.querySelector('.option')") === true, "question: no answer controls for it");
   await p.shot("question-mac");
 
+  // The newest message: a conversation opens at the bottom and stays there while rows arrive, after a switch, a reload
+  // and a return from the background. A reader who scrolled up stays where they are.
+  const bottomGap = "Math.round(document.documentElement.scrollHeight - window.innerHeight - window.scrollY)";
+  const atEnd = `${bottomGap} <= 4`;
+  const grow = (session, n) => hub.stdin.write(`grow ${session} ${n}\n`);
+  const rows = "document.querySelectorAll('.msg').length";
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  await p.until(`${rows} > 0`);
+  const before = await p.eval(rows);
+  grow("s3", 30);   // the agent writes after the page opened
+  await p.until(`${rows} >= ${before + 30}`);
+  check(await p.until(atEnd, 2000) === true, `newest: rows that arrive after opening -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  grow("s3", 3);
+  await p.until(`${rows} >= ${before + 33}`);
+  check(await p.until(atEnd, 2000) === true, `newest: more rows while at the bottom -> still there (gap ${await p.eval(bottomGap)})`);
+  await p.until("!document.querySelector('.toast')", 8000);   // an earlier check's message would cover the end
+  await p.shot("newest");
+  await p.shot("newest", true);
+  // Scrolled up: rows arrive, the reader is not pulled back.
+  await p.eval("window.scrollTo(0, 200)");
+  await new Promise((r) => setTimeout(r, 300));
+  grow("s3", 3);
+  await p.until(`${rows} >= ${before + 36}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval("Math.round(window.scrollY)") === 200, `newest: scrolled up -> stays (y ${await p.eval("Math.round(window.scrollY)")})`);
+  // Another agent, then back: each opens at its newest message.
+  grow("s4", 30);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until(`${rows} >= 30`);
+  check(await p.until(atEnd, 2000) === true, `newest: switch to another agent -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  await p.until(`${rows} >= ${before + 36}`);
+  check(await p.until(atEnd, 2000) === true, `newest: back to the first agent -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  // Reload.
+  await p.goto(origin + "/#pane=w2%3Ap1");
+  await p.until(`${rows} >= ${before + 36}`, 8000);
+  check(await p.until(atEnd, 2000) === true, `newest: reload -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  // The page goes to the background, rows arrive, it comes back.
+  await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'))`);
+  grow("s3", 5);
+  await p.until(`${rows} >= ${before + 41}`);
+  await p.eval(`delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))`);
+  check(await p.until(atEnd, 2000) === true, `newest: back from the background -> at the bottom (gap ${await p.eval(bottomGap)})`);
+
   for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
 }
 
