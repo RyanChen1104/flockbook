@@ -130,19 +130,20 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let empty = rule + "\n❯ \n" + rule
     let pulledIn = claudeBox(["QC reply GAMMA", "QD reply DELTA"])
     let oneRow = claudeBox(["QC reply GAMMA"])
+    let qcBlank = claudeBox(["QC reply GAMMA", ""])   // Ctrl-U emptied the second row; the next one takes its line break
     let gammaDelta = "QC reply GAMMA\nQD reply DELTA"
     let gd: ClaudeQueueLog = ["QC reply GAMMA", "QD reply DELTA"]
     let u = ["ctrl+u"]
 
-    // Claude Code: Up, then one Ctrl-U at a time; the box is read again before each and must still hold what Up
-    // brought back, less the rows Ctrl-U took (Ctrl-U takes one row; an emptied row's line break takes one more).
-    var (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, oneRow, "· Pouncing… (13s)\n" + empty], log: gd)
+    // Claude Code: Up, then one Ctrl-U at a time; the box is read again before each and must be exactly what the keys
+    // so far left (Ctrl-U empties the last row; on an emptied row it takes the line break).
+    var (r, k) = await pull("claude", [two, pulledIn, pulledIn, qcBlank, oneRow, "· Pouncing… (13s)\n" + empty], log: gd)
     check(r == .pulled(gammaDelta) && k == [["Up"], u, u, u], "pull: Claude: Up, then one Ctrl-U per key list until the box is empty (\(r), \(k))")
     check(kept.map(\.0) == [gammaDelta] && kept.first?.1 == 1, "pull: the text is kept after Up, before the first Ctrl-U (\(kept))")
     // The screen showed fewer rows than Up brought back (seen live: one row drawn, two queued): the composer gets every
     // line that came back, never only the expected ones (the rest would be cleared and lost).
     let more = claudeBox(["QK reply KILO", "QL reply LIMA"])
-    (r, k) = await pull("claude", [claudeScreen(queued: ["QL reply LIMA"]), more, more, claudeBox(["QK reply KILO"]), empty], log: ["QK reply KILO", "QL reply LIMA"])
+    (r, k) = await pull("claude", [claudeScreen(queued: ["QL reply LIMA"]), more, more, claudeBox(["QK reply KILO", ""]), claudeBox(["QK reply KILO"]), empty], log: ["QK reply KILO", "QL reply LIMA"])
     check(r == .pulled("QK reply KILO\nQL reply LIMA"), "pull: more came back than the screen showed: all of it (\(r))")
     // r5 P2-1: the box shows the message on two rows (wrapped, or a line break): the rows are not the same characters
     // as the log's text, so nothing goes on (before r5 the rows were joined and matched without spaces).
@@ -162,7 +163,7 @@ private func wrap(_ text: String, width: Int) -> [String] {
     }
     let code = "if ready:\n    run()"
     let codeBox = claudeBox(["if ready:", "    run()"])
-    (r, k) = await pull("claude", [claudeScreen(queued: [code]), codeBox, codeBox, claudeBox(["if ready:"]), empty], log: [code])
+    (r, k) = await pull("claude", [claudeScreen(queued: [code]), codeBox, codeBox, claudeBox(["if ready:", ""]), claudeBox(["if ready:"]), empty], log: [code])
     check(r == .pulled(code) && k.first == ["Up"], "pull: r5: lines that fit, indentation kept: the same characters, pulled (\(r), \(k))")
     // r4 P2-2: Up brought back something else than the log gives: not exact, so nothing is kept, nothing goes to the
     // composer, nothing is cleared (before r4 it went to the composer as it was).
@@ -228,10 +229,24 @@ private func wrap(_ text: String, width: Int) -> [String] {
     }
     check(QueuePull.shows("ok\n\u{8C48}x", screen: two), "pull: r7: the same text without the mark passes the check")
 
+    // r8 P2: before the first Ctrl-U the box must be the text as drawn, blank rows too: two line breaks added after
+    // the first read stop it (before r8 trailing blank rows were dropped and Ctrl-U cleared the new ones too).
+    (r, k) = await pull("claude", [claudeScreen(queued: ["a"]), claudeBox(["a"]), claudeBox(["a", "", ""]), claudeBox(["a", "", ""]), empty], log: ["a"])
+    check(r.isPartial && k == [["Up"]], "pull: r8 P2: two blank rows added before the first Ctrl-U: stopped, no Ctrl-U (\(r), \(k))")
+    // r8: a read that still shows the box before the last Ctrl-U (not redrawn yet): no key, the next read decides.
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, pulledIn, qcBlank, oneRow, empty], log: gd)
+    check(r == .pulled(gammaDelta) && k == [["Up"], u, u, u], "pull: r8: the screen not redrawn after a Ctrl-U: no extra key (\(r), \(k))")
+    // r8 P3: the text's last row is the placeholder's words: that row is still text, not an empty box.
+    let ph = QueuedInput.claudePlaceholder
+    let phText = ph + "\nmore"
+    (r, k) = await pull("claude", [claudeScreen(queued: [ph + "\n  more"]), claudeBox([ph, "more"]), claudeBox([ph, "more"]), claudeBox([ph, ""]),
+                                   claudeBox([ph]), empty], log: [phText])
+    check(r == .pulled(phText) && k == [["Up"], u, u, u], "pull: r8 P3: the placeholder's words left as text: one more Ctrl-U, then empty (\(r), \(k))")
+
     // P1-1: the owner types in the terminal while it is cleared: stop, no more keys, the text still goes to the composer.
     (r, k) = await pull("claude", [two, pulledIn, pulledIn, claudeBox(["QC reply GAMMA", "QD reply DELTA and more"])], log: gd)
     check(r == .partial(gammaDelta, r.why ?? "") && k == [["Up"], u], "pull: the box changed between two Ctrl-U: stopped, the text kept (\(r), \(k))")
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, oneRow, claudeBox(["QC reply GAMMA typed"])], log: gd)
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, qcBlank, claudeBox(["QC reply GAMMA typed"])], log: gd)
     check(r.isPartial && r.text == gammaDelta && k == [["Up"], u, u], "pull: text typed into a row Ctrl-U left: stopped, no more keys (\(r), \(k))")
     // P1-1: another agent in the pane after Up: no Ctrl-U at all.
     var other = working("claude"); other.sessionId = "another"
@@ -294,10 +309,10 @@ private func wrap(_ text: String, width: Int) -> [String] {
     check(r.isRefused && k == [["Up"]], "pull: input went off: nothing went out, no more keys")
     (r, k) = await pull("claude", [two, two], log: gd)
     check(r.isFailed && k == [["Up"]], "pull: the text did not come back (still queued): failed, no Ctrl-U")
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, "  ⎿  Interrupted · What should Claude do instead?\n" + empty], log: gd)
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, qcBlank, oneRow, "  ⎿  Interrupted · What should Claude do instead?\n" + empty], log: gd)
     check(r == .interrupted(gammaDelta), "pull: an interrupt notice after the keys: interrupted, the text kept (\(r))")
     var blocked = working("claude"); blocked.status = .blocked
-    (r, k) = await pull("claude", [two, pulledIn, pulledIn, empty], log: gd, agents: [working("claude"), working("claude"), working("claude"), blocked])
+    (r, k) = await pull("claude", [two, pulledIn, pulledIn, qcBlank, oneRow, empty], log: gd, agents: Array(repeating: working("claude"), count: 9) + [blocked])
     check(r == .interrupted(gammaDelta), "pull: the agent no longer working or done after the keys: interrupted (\(r))")
 
     // r5 P2-3: the live IO checks the pane's agent once more right before the keys (a fresh herdr snapshot).

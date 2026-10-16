@@ -271,12 +271,14 @@ public enum QueuePull {
             return .partial(taken, "Flockbook could not save the text, so it did not clear the agent's input box. \(check)")
         }
 
-        // One Ctrl-U at a time (it takes one row; an emptied row's line break takes one more), each after a read that
-        // finds the same agent and only rows of the text left, as drawn (an emptied last row holds nothing).
+        // One Ctrl-U at a time, each after a read that finds the same agent and the box exactly as the keys so far left
+        // it: Ctrl-U empties the last row, and on an emptied row takes its line break. No row is ever dropped from a
+        // read: a blank row or text the owner added stops it. A read that still shows the box before the last key
+        // (the screen not redrawn yet) waits for the next read.
         let raw = rawBox(shown)
-        var left = raw.count, after = shown
-        let most = 2 * raw.count + 2
-        for step in 0...most {
+        var cur = raw, sent = false, done = false, after = shown
+        let most = 4 * raw.count + 4
+        for _ in 0...most {
             guard let a = await io.agent(), same(a, expect) else {
                 return .partial(taken, "Another agent is in this pane now, so Flockbook stopped clearing its input box. \(check)")
             }
@@ -284,23 +286,26 @@ public enum QueuePull {
                 return .partial(taken, "Flockbook could not read the agent's input box, so it stopped clearing it. \(check)")
             }
             after = s
-            var rows = rawBox(s)
-            while rows.last == "" { rows.removeLast() }
-            // None of it left: an empty box or the placeholder. Anything else must be the text's first rows exactly.
-            if rows.isEmpty || rows == [placeholder(expect.kind)] { left = 0; break }
-            guard rows.count <= left, zip(raw, rows).allSatisfy({ same($0, $1) }) else {
+            let rows = rawBox(s)
+            if sent {
+                let next = cleared(cur)
+                // The placeholder is an empty box only when no text row is left that reads like it.
+                let empty = rows.isEmpty || rows == [""] || (!sameRows(cur, [placeholder(expect.kind)]) && rows == [placeholder(expect.kind)])
+                if next.isEmpty, empty { done = true; break }
+                if !next.isEmpty, sameRows(rows, next) { cur = next; sent = false }
+                else if sameRows(rows, cur) { await io.settle(); continue }
+                else { return .partial(taken, "The agent's input box changed while Flockbook cleared it, so it stopped. \(check)") }
+            } else if !sameRows(rows, cur) {
                 return .partial(taken, "The agent's input box changed while Flockbook cleared it, so it stopped. \(check)")
             }
-            left = rows.count
-            guard step < most else { break }
             switch await send(["ctrl+u"], io, expect) {
-            case .sent: break
+            case .sent: sent = true
             case .off: return .partial(taken, "Input went off while Flockbook cleared the agent's input box. \(check)")
             case .otherAgent: return .partial(taken, "Another agent is in this pane now, so Flockbook stopped clearing its input box. \(check)")
             }
             await io.settle()
         }
-        guard left == 0 else { return .partial(taken, "The text is still in the agent's input box. \(check)") }
+        guard done else { return .partial(taken, "The text is still in the agent's input box. \(check)") }
         let status = await io.agent()?.status
         if interrupts(after) > interrupts(before) || !(status == .working || status == .idle || status == .done) {
             return .interrupted(taken)
@@ -328,6 +333,14 @@ public enum QueuePull {
 
     /// The box rows are the text, character for character: one row per line, nothing joined, trimmed or guessed.
     static func exact(_ rows: [String], _ text: String) -> Bool { same(rows.joined(separator: "\n"), text) }
+
+    /// The box after one Ctrl-U: the last row emptied, or an empty last row gone; [] when the box is empty.
+    static func cleared(_ rows: [String]) -> [String] {
+        guard rows.count > 1 else { return [] }
+        return rows.last == "" ? Array(rows.dropLast()) : Array(rows.dropLast()) + [""]
+    }
+
+    static func sameRows(_ a: [String], _ b: [String]) -> Bool { a.count == b.count && zip(a, b).allSatisfy { same($0, $1) } }
 
     /// The same Unicode scalars (Swift's `==` takes canonically equal text as equal: U+F900 and U+8C48).
     static func same(_ a: String, _ b: String) -> Bool { a.unicodeScalars.elementsEqual(b.unicodeScalars) }
