@@ -75,9 +75,9 @@ private func working(_ kind: String) -> Agent { Agent(name: kind, kind: kind, st
     check(QueuedInput.read(agent: working("codex"), screen: codexScreen(queued: ["QB"], input: "› typing here"), log: [])?.pullable == false, "queue: Codex input with text: not pullable")
 
     // Keys: only Up, Shift-Left and Ctrl-U, never Escape.
-    check(!QueuePull.safe(["Escape"]) && !QueuePull.safe(["Up", "Escape"]) && !QueuePull.safe(["Enter"]) && !QueuePull.safe(["\u{1b}"]) && !QueuePull.safe([]),
+    check(!QueuePull.safe(["Escape"]) && !QueuePull.safe(["esc"]) && !QueuePull.safe(["escape"]) && !QueuePull.safe(["Up", "Escape"]) && !QueuePull.safe(["Enter"]) && !QueuePull.safe(["\u{1b}"]) && !QueuePull.safe([]),
           "pull: Escape, Enter and raw bytes are refused")
-    check(QueuePull.pullKey(agent: "claude") == "Up" && QueuePull.pullKey(agent: "codex") == "S-Left" && QueuePull.pullKey(agent: "pi") == nil, "pull: Up for Claude, Shift-Left for Codex")
+    check(QueuePull.pullKey(agent: "claude") == "Up" && QueuePull.pullKey(agent: "codex") == "shift+left" && QueuePull.pullKey(agent: "pi") == nil, "pull: Up for Claude, Shift-Left for Codex")
     check(QueuePull.interrupts("• Working (2s • esc to interrupt)") == 0 && QueuePull.interrupts("  ⎿  Interrupted · What should Claude do instead?") == 1,
           "pull: 'esc to interrupt' is not an interrupt notice")
 
@@ -93,11 +93,11 @@ private func working(_ kind: String) -> Agent { Agent(name: kind, kind: kind, st
     let pulledIn = "⏺ ALPHA\n· Pouncing… (12s)\n" + rule + "\n❯ QC reply GAMMA\n  QD reply DELTA\n" + rule
 
     var (r, k) = await pull("claude", [two, pulledIn, "· Pouncing… (13s)\n" + empty])
-    check(r == .pulled("QC reply GAMMA\nQD reply DELTA") && k == [["Up"], ["C-u", "C-u", "C-u"]], "pull: Claude: Up, then Ctrl-U per input row and one more; every queued message, one per line (\(r), \(k))")
+    check(r == .pulled("QC reply GAMMA\nQD reply DELTA") && k == [["Up"], ["ctrl+u", "ctrl+u", "ctrl+u"]], "pull: Claude: Up, then Ctrl-U per input row and one more; every queued message, one per line (\(r), \(k))")
     let cxQueued = codexScreen(queued: ["QB reply BETA", "QD reply DELTA"])
     let cxPulled = codexScreen(queued: ["QB reply BETA"], input: "› QD reply DELTA")
     (r, k) = await pull("codex", [cxQueued, cxPulled, codexScreen(queued: ["QB reply BETA"])])
-    check(r == .pulled("QD reply DELTA") && k == [["S-Left"], ["C-u", "C-u"]], "pull: Codex: Shift-Left takes the newest only (\(r), \(k))")
+    check(r == .pulled("QD reply DELTA") && k == [["shift+left"], ["ctrl+u", "ctrl+u"]], "pull: Codex: Shift-Left takes the newest only (\(r), \(k))")
 
     (r, k) = await pull("claude", [claudeScreen(queued: ["QC"], input: "❯ half typed")])
     check(r.isRefused && k.isEmpty, "pull: input box not empty: refused, no key")
@@ -122,7 +122,7 @@ private func working(_ kind: String) -> Agent { Agent(name: kind, kind: kind, st
     check(r == .interrupted("QC reply GAMMA\nQD reply DELTA"), "pull: the agent no longer working or done after the keys: interrupted (\(r))")
 
     let flat = Set(allKeys.flatMap { $0 })
-    check(flat.isSubset(of: QueuePull.allowedKeys) && !flat.contains("Escape"), "pull: every key sent in every case is Up, S-Left or C-u (\(flat.sorted()))")
+    check(flat.isSubset(of: QueuePull.allowedKeys) && !flat.contains { $0.lowercased().hasPrefix("esc") }, "pull: every key sent in every case is Up, shift+left or ctrl+u (the names herdr takes) (\(flat.sorted()))")
 }
 
 extension QueuePull.Outcome {

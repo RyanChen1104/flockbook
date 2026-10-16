@@ -150,12 +150,12 @@ public enum QueuePull {
     }
 
     /// The only keys this feature ever sends.
-    public static let allowedKeys: Set<String> = ["Up", "S-Left", "C-u"]
+    public static let allowedKeys: Set<String> = ["Up", "shift+left", "ctrl+u"]
 
     public static func pullKey(agent: String) -> String? {
         switch agent {
         case "claude": "Up"
-        case "codex": "S-Left"
+        case "codex": "shift+left"
         default: nil
         }
     }
@@ -199,7 +199,7 @@ public enum QueuePull {
         }
         // One Ctrl-U per input row (it clears one line), and one more.
         let rows = max(1, inputRows(moved, agent: expect.kind).count)
-        guard await send(Array(repeating: "C-u", count: rows + 1), io) else {
+        guard await send(Array(repeating: "ctrl+u", count: rows + 1), io) else {
             return .failed("The text is in the agent's input box: input went off before it was cleared.")
         }
         await io.settle()
