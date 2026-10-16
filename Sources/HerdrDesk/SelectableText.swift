@@ -51,11 +51,14 @@ struct MessageText: NSViewRepresentable {
     private static var next = 0
     private enum Kind: Hashable { case markdown, bubble, plain(mono: CGFloat, error: Bool) }
     private struct Key: Hashable { let kind: Kind; let size: ReadingSize; let text: String }
-    private static var store: [Key: (content: MessageContent, used: Int)] = [:]
+    private static var store: [Key: (content: MessageContent, used: Int, chars: Int)] = [:]
     private static var uses = 0
-    /// Texts kept. A tab of several long conversations shows more than a few hundred: dropping all of them at once made
-    /// every update rebuild and measure every text on screen (a busy tab kept the main thread at 100%).
+    /// Texts kept, and their characters (the source text and the built text, UTF-16). The store used to drop every text
+    /// once it held 400: a tab of four panes with 100 rows each passed that on one update, so a new row rebuilt more
+    /// than a hundred texts and measured them several hundred times (a 281 ms stall in --test-busy-tab).
     static let keep = 3000
+    static let keepChars = 8_000_000
+    private(set) static var chars = 0
     /// Texts built and sizes measured so far (checks: a change must not rebuild what is on screen).
     static var builds = 0
     static var measures = 0
@@ -63,14 +66,18 @@ struct MessageText: NSViewRepresentable {
     private static func cached(_ key: Key, _ build: () -> NSAttributedString) -> MessageContent {
         uses += 1
         if let c = store[key] { store[key]!.used = uses; return c.content }
-        if store.count >= keep {
-            // The least recently used quarter goes; what is on screen was used last.
-            let old = store.sorted { $0.value.used < $1.value.used }.prefix(keep / 4).map(\.key)
-            for k in old { store[k] = nil }
-        }
         builds += 1
         let c = MessageContent(build())
-        store[key] = (c, uses)
+        let n = key.text.utf16.count + c.text.length
+        if store.count >= keep || chars + n > keepChars {
+            // The least recently used go, down to three quarters of each limit; what is on screen was used last.
+            for (k, e) in store.sorted(by: { $0.value.used < $1.value.used }) {
+                guard store.count > keep * 3 / 4 || chars + n > keepChars * 3 / 4 else { break }
+                store[k] = nil; chars -= e.chars
+            }
+        }
+        store[key] = (c, uses, n)
+        chars += n
         return c
     }
 

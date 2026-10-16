@@ -10,8 +10,10 @@ extension ContentTests {
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("busy-tab: \(n) \(ok ? "ok" : "FAIL")") }
         let panes = 4, rows = ConversationWindow.maxRows, page = ConversationView.page
-        // Texts of other tabs read earlier: the store is full before this tab opens.
-        for i in 0..<MessageContent.keep { _ = MessageContent.plain("other tab \(i)", monoSize: 12) }
+        // Texts of other tabs read earlier, 2 KB each: the store is full before this tab opens.
+        let filler = String(repeating: "tool output line ", count: 120)
+        for i in 0..<MessageContent.keep { _ = MessageContent.plain("other tab \(i) " + filler, monoSize: 12) }
+        print("busy-tab: memory before this tab: \(footprint() / 1_048_576) MB (phys_footprint)")
         let holder = BusyHolder(panes: (0..<panes).map { p in BusyData.items(p, rows) })
         let size = NSSize(width: 1600, height: 900)
         let host = NSHostingView(rootView: BusyView(holder: holder))
@@ -54,12 +56,28 @@ extension ContentTests {
             try? await Task.sleep(for: .milliseconds(100))
         }
         let after = MessageContent.builds - b0
+        print("busy-tab: memory with a full store: \(footprint() / 1_048_576) MB (phys_footprint)")
         step("full store, 5 new rows: \(after) texts built (want at most 20)", after <= 20)
+
+        // Long texts (tool output): the store keeps at most `keepChars` characters.
+        let big = String(repeating: "0123456789 ", count: 100_000)   // 1.1 M characters
+        for i in 0..<12 { _ = MessageContent.plain("\(i) " + big, monoSize: 12) }
+        step("long texts: the store keeps \(MessageContent.chars) characters (at most \(MessageContent.keepChars))",
+             MessageContent.chars <= MessageContent.keepChars)
+        print("busy-tab: memory \(footprint() / 1_048_576) MB (phys_footprint)")
 
         win.orderOut(nil)
         print("busy-tab: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         exit(failures == 0 ? 0 : 1)
     }
+}
+
+/// The process's physical footprint in bytes (Activity Monitor's "Memory").
+private func footprint() -> UInt64 {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let r = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) } }
+    return r == KERN_SUCCESS ? info.phys_footprint : 0
 }
 
 @MainActor @Observable private final class BusyHolder {
