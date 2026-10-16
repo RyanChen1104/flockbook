@@ -667,15 +667,30 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   await p.eval(grows);
   check(await p.until(atEnd, 2000) === true, `newest: scroll bar let go outside the window -> follows again (gap ${await p.eval(bottomGap)})`);
-  // Held, the page grows a moment later, and then nothing happens at all: after 10 s still the page catches up by itself.
-  // First let the last scroll to the bottom be delivered (a busy machine sends it late; inside the hold it would count as
-  // the reader's).
-  await new Promise((r) => setTimeout(r, 500));
-  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
-  await new Promise((r) => setTimeout(r, 100));
-  await p.eval(grows);
+  // The page's own scroll to the bottom is delivered late: the page grows, the page scrolls to its end, and in the same
+  // frame the scroll bar is pressed and the page grows again, so that scroll event arrives inside the hold, above the new
+  // end. It is the page's, not the reader's; the hold is never let go and nothing else happens. After the 10 s limit the
+  // page is at the newest rows. (A second resize observer runs after the page's, which is the one that scrolls.)
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${grows}; });
+    ro.observe(document.body); ${grows}; })()`);
   await new Promise((r) => setTimeout(r, 10500));
-  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held still for 10 s, no event after the page grew -> follows again (gap ${await p.eval(bottomGap)})`);
+  check(await p.until(atEnd, 2000) === true, `newest: own scroll delivered inside a still hold, never let go -> at the bottom after 10 s (gap ${await p.eval(bottomGap)})`);
+  // The same late scroll, then the hand moves a little on the held bar without scrolling, and lets go: the hold had a move,
+  // so only knowing the page's own scroll keeps it following.
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${grows}; });
+    ro.observe(document.body); ${grows}; })()`);
+  await new Promise((r) => setTimeout(r, 200));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  check(await p.until(atEnd, 2000) === true, `newest: own scroll delivered inside a hold, a move without scrolling, let go -> follows (gap ${await p.eval(bottomGap)})`);
+  // Pressed, the page moves without the reader moving the pointer, then let go: following as before the press.
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); window.scrollBy(0, -300)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("window.dispatchEvent(new Event('blur'))");
+  check(await p.until(atEnd, 2000) === true, `newest: pressed and let go without a move -> follows as before (gap ${await p.eval(bottomGap)})`);
   // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
   // the reader either: back in front, the page is at the newest message.
   await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });

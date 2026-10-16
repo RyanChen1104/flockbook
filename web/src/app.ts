@@ -293,7 +293,15 @@ function nearBottom(): boolean {
   const seen = v ? v.pageTop + v.height : window.scrollY + window.innerHeight;
   return document.documentElement.scrollHeight - seen <= 40;
 }
-function toBottom(): void { if (state.watching && following && !reading()) window.scrollTo(0, document.documentElement.scrollHeight); }
+/** Where the page last scrolled itself, until that scroll's event arrives (it can come a frame late, after the reader
+ * pressed the scroll bar): that event is the page's, not the reader's. */
+let ownScrollY = -1;
+function toBottom(): void {
+  if (!state.watching || !following || reading()) return;
+  const end = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  if (Math.abs(window.scrollY - end) >= 1) ownScrollY = end;
+  window.scrollTo(0, end);
+}
 /** When the reader last scrolled by hand (wheel, touch, scroll keys, the scroll bar). For a moment after, their scroll
  * counts even when the page grew in the same frame, and nothing pulls the page to the bottom under them. */
 let readerAt = -Infinity;
@@ -303,10 +311,19 @@ const readerMs = 700;
  * ends with the window's focus or the page, or after 10 s without a move. */
 let holdingBar = false;
 let barStill = 0;
+/** Whether the pointer moved during the hold, and following before it: a hold without a move gives that back. */
+let barMoved = false;
+let followingBeforeBar = true;
 const barStillMs = 10000;
 function reading(): boolean { return holdingBar || performance.now() - readerAt < readerMs; }
 /** Ends the hold; the reader's moment starts again, and its end catches up with what arrived meanwhile. */
-function letGoBar(): void { if (holdingBar) { holdingBar = false; clearTimeout(barStill); readerScrolls(); } }
+function letGoBar(): void {
+  if (!holdingBar) return;
+  holdingBar = false;
+  clearTimeout(barStill);
+  if (!barMoved) following = followingBeforeBar;
+  readerScrolls();
+}
 function holdBar(): void { holdingBar = true; clearTimeout(barStill); barStill = setTimeout(letGoBar, barStillMs); }
 function readerScrolls(): void {
   readerAt = performance.now();
@@ -316,8 +333,12 @@ function readerScrolls(): void {
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerScrolls, { passive: true });
 addEventListener("keydown", (e) => { if (scrollKeys.has(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) readerScrolls(); });
-addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) { holdBar(); readerScrolls(); } });
-addEventListener("pointermove", () => { if (holdingBar) holdBar(); }, { passive: true });
+addEventListener("pointerdown", (e) => {
+  if (e.target !== document.documentElement) return;
+  if (!holdingBar) { barMoved = false; followingBeforeBar = following; }
+  holdBar(); readerScrolls();
+});
+addEventListener("pointermove", () => { if (holdingBar) { barMoved = true; holdBar(); } }, { passive: true });
 for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur", "pagehide"]) addEventListener(type, letGoBar);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") letGoBar(); });
 /** Only the reader's own scrolling in the conversation changes `following`: not a move on the short "Not connected"
@@ -325,6 +346,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
  * a frame; a scroll right after the reader's input still counts) and not a move while the page is in the background. */
 function scrolled(): void {
   if (!state.watching || !state.welcomed || document.visibilityState !== "visible") return;
+  if (ownScrollY >= 0 && Math.abs(window.scrollY - ownScrollY) < 1) { ownScrollY = -1; return; }   // the page's own scroll
   if (reading() || document.documentElement.scrollHeight === laidOutHeight) following = nearBottom();
 }
 addEventListener("scroll", scrolled, { passive: true });
