@@ -166,7 +166,7 @@ public final class HerdrStore {
     }
 
     /// Claude Code's queue as that session's log has it (`ClaudeQueueLog`). Read with the screen (`QueuedInput.read`).
-    public func queuedInLog(for sessionId: String?) -> [String?] {
+    public func queuedInLog(for sessionId: String?) -> ClaudeQueueLog {
         guard !isPreview, let sessionId else { return [] }
         return logItems[sessionId]?.queued ?? []
     }

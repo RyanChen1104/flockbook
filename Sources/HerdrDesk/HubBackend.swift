@@ -37,6 +37,7 @@ import Foundation
         let model = model
         let may: @MainActor @Sendable () -> Bool = { model.writesEnabled && allowed() }
         guard may() else { return .failed }
+        guard !model.pulling.contains(id) else { return .changed }   // a pull is clearing the agent's input box
         // herdr has no compare-and-send: this read and the keys are two calls, so a small window stays.
         guard await store.client.readyForText(paneId: id, agent: agent) else { return .changed }
         guard may() else { return .failed }
@@ -63,16 +64,22 @@ import Foundation
         return true
     }
 
-    func queuedLog(session: String) -> [String?] { store.queuedInLog(for: session) }
+    func queuedLog(session: String) -> ClaudeQueueLog { store.queuedInLog(for: session) }
+    var pulledTexts: MemoryPulledStore { model.pulledTexts }
 
     /// The agent's own queue back into the phone's composer (`QueuePull`): Up or Shift-Left, then Ctrl-U; never Escape.
-    func pullQueued(pane id: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
+    /// One pull per pane at a time, the Mac's included.
+    func pullQueued(pane id: String, agent: Agent, log: ClaudeQueueLog, keep: @escaping @MainActor @Sendable (String) -> Bool,
+                    allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
         let model = model
+        guard !model.pulling.contains(id) else { return .refused("A pull of this pane is running. Nothing was sent.") }
+        model.pulling.insert(id)
+        defer { model.pulling.remove(id) }
         let io = HerdrQueuePullIO(client: store.client, paneId: id, allowed: { model.writesEnabled && allowed() })
-        let r = await QueuePull.run(expect: agent, log: log, io: io)
+        let r = await QueuePull.run(expect: agent, log: log, io: io, keep: keep)
         switch r {
         case .interrupted: remoteLog.error("pullQueued \(id, privacy: .public): the agent's turn stopped")
-        case .failed(let why): remoteLog.error("pullQueued \(id, privacy: .public): \(why, privacy: .public)")
+        case .failed(let why), .partial(_, let why): remoteLog.error("pullQueued \(id, privacy: .public): \(why, privacy: .public)")
         case .pulled, .refused: break
         }
         return r

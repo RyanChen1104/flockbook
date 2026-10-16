@@ -60,16 +60,24 @@ import Foundation
         approved.append("\(pane) \(prompt) \(allow)"); return approveOK
     }
     /// Claude Code's queue per session, as a log would have it.
-    var queuedLogs: [String: [String?]] = [:]
-    func queuedLog(session: String) -> [String?] { queuedLogs[session] ?? [] }
+    var queuedLogs: [String: ClaudeQueueLog] = [:]
+    func queuedLog(session: String) -> ClaudeQueueLog { queuedLogs[session] ?? [] }
+    var pulledTexts = MemoryPulledStore()
     var pullOutcome = QueuePull.Outcome.refused("not set")
     /// "pane session" per pull.
     private(set) var pulls: [String] = []
-    func pullQueued(pane: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
+    /// How long a pull takes (the web test switches agents meanwhile).
+    var pullDelay: Duration = .zero
+    /// What `keep` answered for the last pull with text (nil: not asked).
+    private(set) var kept: Bool?
+    func pullQueued(pane: String, agent: Agent, log: ClaudeQueueLog, keep: @escaping @MainActor @Sendable (String) -> Bool,
+                    allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
         beforeKeys?()
         allowedAtKeys.append(allowed())
         guard allowed() else { return .refused("Input is off. Nothing was sent.") }
         pulls.append("\(pane) \(agent.sessionId ?? "")")
+        if pullDelay > .zero { try? await Task.sleep(for: pullDelay) }
+        kept = pullOutcome.text.map(keep)
         return pullOutcome
     }
     /// The hook's newest call per agent session.

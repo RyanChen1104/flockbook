@@ -152,6 +152,20 @@ import ImageIO
                 b.pullOutcome = text == "queue me" ? .pulled(pulledText) : .interrupted(pulledText)
                 setStatus("w2:p2", .working)
             }
+            // "queue slow": a pull that takes 1.5 s; "queue partial": one that stopped before the box was empty.
+            if text == "queue slow" || text == "queue partial" {
+                b.screens["w2:p2"] = queueScreen()
+                b.pullDelay = text == "queue slow" ? .milliseconds(1500) : .zero
+                b.pullOutcome = text == "queue slow" ? .pulled("Slow one.")
+                    : .partial(pulledText, "The agent's input box changed while Flockbook cleared it, so it stopped. Check the agent's terminal before you send it.")
+                setStatus("w2:p2", .working)
+            }
+            // "keep three": texts the hub kept for this phone and never got a pulledAck for (sent again after hello).
+            if text == "keep three" {
+                for (pane, t) in [("w2:p2", "Kept one."), ("w1:p2", "Kept for the other agent."), ("w2:p2", "Kept two.")] {
+                    _ = b.pulledTexts.keep(PulledText(pane: pane, device: "d-input", text: t))
+                }
+            }
             if text == "queue busy" { b.screens["w2:p2"] = queueScreen(input: "❯ half typed"); setStatus("w2:p2", .working) }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }

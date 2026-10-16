@@ -14,11 +14,11 @@ import Foundation
     var failures = 0
     func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("queue-live: \(n) \(ok ? "ok" : "FAIL")") }
     func agent() async -> Agent? { (try? await client.snapshot())?.flatMap(\.tabs).flatMap(\.panes).first { $0.id == pane }?.agent }
-    func log() -> [String?] {
+    func log() -> ClaudeQueueLog {
         guard let logPath, let d = FileManager.default.contents(atPath: logPath) else { return [] }
         var p = ConversationParser()
         for l in String(decoding: d, as: UTF8.self).split(separator: "\n") { p.feed(line: String(l)) }
-        return p.queue.items
+        return p.queue
     }
 
     /// The live pane, with every key list it sends.
@@ -30,6 +30,7 @@ import Foundation
         func screen() async -> String? { await inner.screen() }
         func keys(_ k: [String]) async -> Bool { sent.append(k); return await inner.keys(k) }
         func settle() async { await inner.settle() }
+        func width() async -> Int? { await inner.width() }
     }
 
     let start = Date()
@@ -40,19 +41,22 @@ import Foundation
         else { try? await Task.sleep(for: .milliseconds(300)) }
     }
     guard let (ag, q, before) = found else { step("a working agent with a queue on screen within 90 s", false); exit(1) }
-    print("queue-live: \(ag.kind) queue \(q.items.map { $0 ?? "<no text>" }) pullable \(q.pullable) (log \(log().count) entries)")
+    print("queue-live: \(ag.kind) queue \(q.items.map { $0 ?? "<no text>" }) pullable \(q.pullable) (log \(log().items.count) entries)")
     step("the agent works before the keys", ag.status == .working)
 
     let logged = log()
     let io = Recorder(HerdrQueuePullIO(client: client, paneId: pane, allowed: { true }))
-    let r = await QueuePull.run(expect: ag, log: logged, io: io)
+    let store = MemoryPulledStore()
+    let r = await QueuePull.run(expect: ag, log: logged, io: io) { store.keep(PulledText(pane: pane, device: "queue-live", text: $0)) }
     print("queue-live: outcome \(r)")
     print("queue-live: keys \(io.sent)")
     let flat = io.sent.flatMap { $0 }
     step("only Up, shift+left and ctrl+u went out; never Escape", flat.allSatisfy(QueuePull.allowedKeys.contains) && !flat.contains { $0.lowercased().hasPrefix("esc") })
     // Claude: every message its log has open (the screen may draw fewer for a moment); Codex: the newest row.
-    let want = (q.pullsAll ? (logged.count > q.items.count ? logged : q.items) : Array(q.items.suffix(1))).compactMap { $0 }.joined(separator: "\n")
+    let want = (q.pullsAll ? (logged.items.count > q.items.count ? logged.items : q.items) : Array(q.items.suffix(1))).compactMap { $0 }.joined(separator: "\n")
     step("pulled: the queued text came back (\(want.debugDescription))", r == .pulled(want))
+    step("the text was kept before the first Ctrl-U", store.all.map(\.text) == [want])
+    step("one Ctrl-U per key list (the box read again before each)", io.sent.dropFirst().allSatisfy { $0 == ["ctrl+u"] })
 
     // The turn after the keys: read again now and 3 s later. Working, or a turn that ended normally; no interrupt notice.
     for wait in [0, 3] {

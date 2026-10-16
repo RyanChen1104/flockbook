@@ -54,6 +54,19 @@ extension SnapshotRunner {
         model.putInComposer("first", pane: "px")
         model.putInComposer("second", pane: "px")
         step("a second pull goes after the first, on its own line", model.drafts["px"]?.text == "first\nsecond" && model.composerResets["px"] == 2)
+
+        // A pull kept its text, and the app quit before the composer had it: the pane's next check puts it there.
+        let back = AppModel(store: store)
+        _ = back.pulledTexts.keep(PulledText(id: "k1", pane: idle.id, device: PulledText.mac, text: "if ready:\n    run()"))
+        _ = back.pulledTexts.keep(PulledText(id: "k2", pane: idle.id, device: "phone-1", text: "the phone's"))
+        back.pulling = [idle.id]
+        await back.checkQueue(for: idle)
+        step("a kept text waits while a pull of the pane runs", back.drafts[idle.id] == nil && back.pulledTexts.all.count == 2)
+        back.pulling = []
+        await back.checkQueue(for: idle)
+        step("a kept text goes into the composer, exactly, once", back.drafts[idle.id]?.text == "if ready:\n    run()" && back.pulledTexts.pending(device: PulledText.mac).isEmpty)
+        await back.checkQueue(for: idle)
+        step("a phone's kept text stays for the phone", back.drafts[idle.id]?.text == "if ready:\n    run()" && back.pulledTexts.all.map(\.id) == ["k2"])
         print("snapshot-queued: \(failures == 0 ? "PASS" : "FAIL x\(failures)"), written to \(dir)")
         exit(failures == 0 ? 0 : 1)
     }

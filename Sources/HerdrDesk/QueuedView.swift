@@ -5,6 +5,7 @@ import SwiftUI
 extension AppModel {
     /// READ-ONLY: the pane's queue from its screen and log. Nothing unless the agent works and has a queue Flockbook reads.
     func checkQueue(for pane: Pane) async {
+        deliverPulled(pane: pane.id)
         guard let a = pane.agent, a.status == .working, QueuePull.pullKey(agent: a.kind) != nil else {
             if queued[pane.id] != nil { queued[pane.id] = nil }
             return
@@ -29,15 +30,21 @@ extension AppModel {
         Task {
             defer { pulling.remove(id) }
             let io = HerdrQueuePullIO(client: store.client, paneId: id, allowed: { [weak self] in self?.writesEnabled == true })
-            let r = await QueuePull.run(expect: a, log: store.queuedInLog(for: a.sessionId), io: io)
+            // Kept before the first Ctrl-U, taken once the composer has it (a quit in between: `deliverPulled`).
+            let entry = UUID().uuidString, texts = pulledTexts
+            let r = await QueuePull.run(expect: a, log: store.queuedInLog(for: a.sessionId), io: io) { text in
+                texts.keep(PulledText(id: entry, pane: id, device: PulledText.mac, text: text))
+            }
+            if let t = r.text { putInComposer(texts.take(id: entry, device: PulledText.mac)?.text ?? t, pane: id) }
             switch r {
             case .pulled(let t):
                 noticeLog.info("queue pull pane \(id, privacy: .public): pulled \(t.count) chars")
-                putInComposer(t, pane: id)
-            case .interrupted(let t):
+            case .interrupted:
                 noticeLog.error("queue pull pane \(id, privacy: .public): the turn stopped after the keys")
-                putInComposer(t, pane: id)
                 notice = "The agent's turn stopped after the pull. Your text is in the composer."
+            case .partial(_, let why):
+                noticeLog.error("queue pull pane \(id, privacy: .public): stopped early: \(why, privacy: .public)")
+                notice = "Your text is in the composer. " + why
             case .refused(let why):
                 noticeLog.info("queue pull pane \(id, privacy: .public): refused: \(why, privacy: .public)")
                 notice = why
@@ -49,6 +56,22 @@ extension AppModel {
             await store.refresh()
             if let now = store.workspaces.flatMap(\.tabs).flatMap(\.panes).first(where: { $0.id == id }) { await checkQueue(for: now) }
         }
+    }
+
+    /// Pulled texts of this pane the Mac's composer does not have yet (the app quit between the pull and the
+    /// composer), into the composer. Not while a pull of the pane runs (it delivers its own).
+    func deliverPulled(pane id: String) {
+        guard !pulling.contains(id) else { return }
+        for p in pulledTexts.pending(device: PulledText.mac) where p.pane == id {
+            if let t = pulledTexts.take(id: p.id, device: PulledText.mac) { putInComposer(t.text, pane: id) }
+        }
+    }
+
+    /// Where the app keeps pulled texts: one file per herdr session (pane ids are per session).
+    static func pulledTextsFile(session: String?) -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let name = session.map { "pulled-" + $0.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" ? String($0) : "_" }.joined() } ?? "pulled"
+        return support.appendingPathComponent("Flockbook/\(name).json")
     }
 
     /// Adds `text` after what the composer holds and starts the composer again from that draft.

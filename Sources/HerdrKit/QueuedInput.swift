@@ -19,10 +19,10 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     public var pullsAll: Bool { agent == "claude" }
 
     /// The queue of a pane, or nil when none is open. `log`: the queue rebuilt from a Claude log (`ClaudeQueueLog`).
-    public static func read(agent: Agent?, screen: String?, log: [String?]) -> QueuedInput? {
+    public static func read(agent: Agent?, screen: String?, log: ClaudeQueueLog, now: Date = Date()) -> QueuedInput? {
         guard let agent, agent.status == .working, let screen else { return nil }
         switch agent.kind {
-        case "claude": return claude(screen: screen, log: log)
+        case "claude": return claude(screen: screen, log: log, now: now)
         case "codex": return codex(screen: screen)
         default: return nil
         }
@@ -33,8 +33,9 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     static let claudeHint = "ctrl+enter to send now"
     static let claudePlaceholder = "Press up to edit queued messages"
 
-    /// The queue as Claude Code shows it: the "❯" rows right above the "ctrl+enter to send now" line, oldest first,
-    /// and whether its input box holds only the placeholder.
+    /// The queue as Claude Code shows it: the "❯" rows right above the "ctrl+enter to send now" line, oldest first
+    /// (rows that continue one keep their indentation past the two-column margin), and whether its input box holds
+    /// only the placeholder.
     public static func claudeScreen(_ screen: String) -> (items: [String], inputEmpty: Bool)? {
         let lines = screen.components(separatedBy: "\n")
         guard let hint = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == claudeHint }) else { return nil }
@@ -43,69 +44,80 @@ public struct QueuedInput: Codable, Hashable, Sendable {
         while i >= 0 {
             let l = lines[i]
             if l.hasPrefix("❯ ") {
-                groups.insert(([String(l.dropFirst(2))] + cont.reversed()).joined(separator: "\n").trimmingCharacters(in: .whitespaces), at: 0)
+                groups.insert(([trailing(String(l.dropFirst(2)))] + cont.reversed()).joined(separator: "\n"), at: 0)
                 cont = []
             } else if l.hasPrefix("  "), !l.trimmingCharacters(in: .whitespaces).isEmpty {
-                cont.append(l.trimmingCharacters(in: .whitespaces))
+                cont.append(trailing(String(l.dropFirst(2))))
             } else { break }
             i -= 1
         }
         guard !groups.isEmpty else { return nil }
-        let input = claudeInput(lines)
-        return (groups, input.count == 1 && input[0] == "❯ " + claudePlaceholder)
+        let input = QueuePull.claudeBox(lines)
+        return (groups, input == [claudePlaceholder])
     }
 
-    /// The rows of Claude Code's input box: between the last two rule lines.
-    static func claudeInput(_ lines: [String]) -> [String] {
-        let rules = lines.indices.filter { i in
-            let t = lines[i].trimmingCharacters(in: .whitespaces)
-            return t.count >= 10 && t.allSatisfy { $0 == "─" }
-        }
-        guard rules.count >= 2 else { return [] }
-        let (a, b) = (rules[rules.count - 2], rules[rules.count - 1])
-        return lines[(a + 1)..<b].map { $0.replacingOccurrences(of: "\u{a0}", with: " ").trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
-
-    static func claude(screen: String, log: [String?]) -> QueuedInput? {
+    /// The log and the screen, lined up by their text from the newest back (never by count alone). The screen may
+    /// also show a sent prompt above the queue, and right after an enqueue it may draw only the newest row: log entries
+    /// older than the rows it shows stay while the newest enqueue is less than `drawLag` old, else they are entries the
+    /// log never closed (a restart) and go. A log that does not line up with the screen (not caught up, or other text):
+    /// the screen's rows.
+    static func claude(screen: String, log: ClaudeQueueLog, now: Date) -> QueuedInput? {
         guard let shown = claudeScreen(screen) else { return nil }
-        // The log is exact; the screen may also show a sent prompt right above the queue. So the log sets the count,
-        // and the screen's newest rows fill in what the log left out. A queue the log has not caught up with yet:
-        // the screen's rows.
-        guard !log.isEmpty else { return QueuedInput(agent: "claude", items: shown.items, pullable: shown.inputEmpty) }
-        // More in the log than on screen: older entries the log never closed (a restart). The newest ones count.
-        let log = Array(log.suffix(shown.items.count))
-        let rows = Array(shown.items.suffix(log.count))
-        let pad = log.count - rows.count
-        let items = log.enumerated().map { i, t in t ?? (i >= pad ? rows[i - pad] : nil) }
-        return QueuedInput(agent: "claude", items: items, pullable: shown.inputEmpty)
+        let rows = shown.items, entries = log.items
+        var m = 0
+        while m < entries.count, m < rows.count, same(entries[entries.count - 1 - m], rows[rows.count - 1 - m]) { m += 1 }
+        guard m > 0 else { return QueuedInput(agent: "claude", items: rows, pullable: shown.inputEmpty) }
+        let matched: [String?] = (0..<m).reversed().map { (k: Int) -> String? in entries[entries.count - 1 - k] ?? rows[rows.count - 1 - k] }
+        let older = Array(entries.dropLast(m))
+        let drawing = log.newest.map { now.timeIntervalSince($0) < drawLag } ?? false
+        return QueuedInput(agent: "claude", items: (drawing ? older : []) + matched, pullable: shown.inputEmpty)
+    }
+
+    /// How long Claude Code may take to draw every queued row after an enqueue (seen live: about a second).
+    static let drawLag: TimeInterval = 5
+
+    /// A log entry and a screen row are the same message: the same characters apart from spaces and line breaks (the
+    /// screen wraps); a row cut with "…" matches the start. A log entry without text matches any row.
+    static func same(_ entry: String?, _ row: String) -> Bool {
+        guard let entry else { return true }
+        let e = QueuePull.compact(entry), r = QueuePull.compact(row)
+        return e == r || (r.hasSuffix("…") && e.hasPrefix(String(r.dropLast())))
+    }
+
+    /// Without trailing spaces (the screen pads rows); leading ones are the text's own indentation.
+    static func trailing(_ s: String) -> String {
+        var s = s.replacingOccurrences(of: "\u{a0}", with: " ")
+        while s.last?.isWhitespace == true { s.removeLast() }
+        return s
     }
 
     // MARK: Codex
 
     static let codexHeader = "• Queued follow-up inputs"
     static let codexHint = "⇧← edit last queued message"
-    static let codexPlaceholder = "› Ask Codex to do anything"
+    static let codexPlaceholder = "Ask Codex to do anything"
 
-    /// The queue as Codex shows it ("↳" rows under "• Queued follow-up inputs"), and whether its input box holds
-    /// only the placeholder (the row after the "⇧←" hint).
+    /// The queue as Codex shows it ("↳" rows under "• Queued follow-up inputs"; rows that continue one keep their
+    /// indentation past the four-column margin), and whether its input box holds only the placeholder.
     public static func codexScreen(_ screen: String) -> (items: [String], inputEmpty: Bool)? {
         let lines = screen.components(separatedBy: "\n")
         guard let head = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == codexHeader }) else { return nil }
         var items: [String] = []
+        var margin = 4   // where a row's text starts: after "  ↳ "
         var i = head + 1
-        var hint: Int?
         while i < lines.count {
-            let t = lines[i].trimmingCharacters(in: .whitespaces)
-            if t == codexHint { hint = i; break }
-            if t.hasPrefix("↳ ") { items.append(String(t.dropFirst(2))) }
-            else if !t.isEmpty, lines[i].hasPrefix("    "), !items.isEmpty { items[items.count - 1] += "\n" + t }
-            else { break }
+            let l = lines[i], t = l.trimmingCharacters(in: .whitespaces)
+            if t == codexHint { break }
+            if t.hasPrefix("↳ ") {
+                margin = l.count - t.count + 2
+                items.append(trailing(String(t.dropFirst(2))))
+            } else if !t.isEmpty, l.hasPrefix(String(repeating: " ", count: margin)), !items.isEmpty {
+                items[items.count - 1] += "\n" + trailing(String(l.dropFirst(margin)))
+            } else { break }
             i += 1
         }
         guard !items.isEmpty else { return nil }
-        let input = hint.flatMap { h in lines[(h + 1)...].first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }
-        return (items, input?.trimmingCharacters(in: .whitespaces) == codexPlaceholder)
+        return (items, QueuePull.codexBox(lines) == [codexPlaceholder])
     }
 
     static func codex(screen: String) -> QueuedInput? {
@@ -116,15 +128,21 @@ public struct QueuedInput: Codable, Hashable, Sendable {
 /// Claude Code's queue from its session log: `enqueue` adds (its `content`, or none during compaction), `remove`
 /// takes the message the agent read mid-turn, `dequeue` the oldest at a turn's end, `popAll` the ones the owner pulled
 /// back with Up.
-public struct ClaudeQueueLog: Sendable, Equatable {
+public struct ClaudeQueueLog: Sendable, Hashable, ExpressibleByArrayLiteral {
     public private(set) var items: [String?] = []
+    /// When the newest enqueue happened (the line's timestamp). Nil: not known.
+    public private(set) var newest: Date?
     public init() {}
+    public init(arrayLiteral items: String?...) { self.items = items }
+    public init(_ items: [String?], newest: Date? = nil) { self.items = items; self.newest = newest }
 
     public mutating func feed(_ o: [String: Any]) {
         guard o["type"] as? String == "queue-operation" else { return }
-        let content = (o["content"] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let content = (o["content"] as? String).map { $0.trimmingCharacters(in: .newlines) }
         switch o["operation"] as? String {
-        case "enqueue": items.append(content)
+        case "enqueue":
+            items.append(content)
+            newest = ConversationParser.parseTime(o["timestamp"] as? String) ?? newest
         case "dequeue": if !items.isEmpty { items.removeFirst() }
         case "remove", "popAll":
             if let i = items.firstIndex(where: { $0 == content }) ?? items.firstIndex(where: { $0 == nil }) { items.remove(at: i) }
@@ -147,6 +165,17 @@ public enum QueuePull {
         case refused(String)
         /// Keys went out but the screen did not change as expected; no more keys were sent.
         case failed(String)
+        /// The text came back and goes to the composer, but the pull stopped before the agent's input box was empty
+        /// (the reason): some of it may still be there.
+        case partial(String, String)
+
+        /// The text for the composer, if any came back.
+        public var text: String? {
+            switch self {
+            case .pulled(let t), .interrupted(let t), .partial(let t, _): t
+            case .refused, .failed: nil
+            }
+        }
     }
 
     /// The only keys this feature ever sends.
@@ -175,11 +204,17 @@ public enum QueuePull {
         func screen() async -> String?
         func keys(_ keys: [String]) async -> Bool
         func settle() async
+        /// The pane's width in columns (where the agent wraps its input box). Nil: not known.
+        func width() async -> Int?
     }
 
-    public static func run(expect: Agent, log: [String?], io: some IO) async -> Outcome {
+    /// Up or Shift-Left, then Ctrl-U one at a time. Before the first Ctrl-U the text Up brought back goes to `keep`
+    /// (saved until a composer has it; false: no Ctrl-U at all). Before each Ctrl-U the pull reads the pane again: the
+    /// same agent, and an input box that still holds what came back less the rows Ctrl-U took; anything else stops it,
+    /// with no more keys. Whatever came back goes to the composer however the pull ends.
+    public static func run(expect: Agent, log: ClaudeQueueLog, io: some IO, keep: @escaping @MainActor @Sendable (String) -> Bool = { _ in true }) async -> Outcome {
         guard let key = pullKey(agent: expect.kind) else { return .refused("This agent has no queue Flockbook can pull back.") }
-        guard let now = await io.agent(), now.kind == expect.kind, now.sessionId == expect.sessionId else {
+        guard let now = await io.agent(), same(now, expect) else {
             return .refused("Another agent is in this pane now. Nothing was sent.")
         }
         guard now.status == .working else { return .refused("The agent is not working, so nothing is queued. Nothing was sent.") }
@@ -189,27 +224,56 @@ public enum QueuePull {
         guard q.pullable else { return .refused("The agent's input box is not empty. Nothing was sent.") }
         let pulled = q.pullsAll ? q.items : Array(q.items.suffix(1))
         guard pulled.allSatisfy({ $0 != nil }) else { return .refused("The queued text cannot be read yet. Nothing was sent.") }
-        let text = pulled.compactMap { $0 }.joined(separator: "\n")
+        let expected = pulled.compactMap { $0 }.joined(separator: "\n")
 
         guard await send([key], io) else { return .refused("Input is off. Nothing was sent.") }
         await io.settle()
-        // What came back is what the input box holds now. It must hold the queued text; it may hold more than the
-        // screen showed (seen live): then all of it goes to the composer, so Ctrl-U never clears text the owner did
-        // not get back.
-        let back = await io.screen().map { inputRows($0, agent: expect.kind) } ?? []
-        let got = squash(back.joined(separator: " ")), want = squash(text)
-        guard !want.isEmpty, got.contains(want) else {
-            return .failed("The queued text did not come back to the input box. Check the agent's terminal.")
+        let check = "Check the agent's terminal before you send it."
+        guard let shown = await io.screen() else {
+            // Up went out and nothing tells where the text is now: the composer gets it, the box is left alone.
+            return await held(expected, "Flockbook could not read the agent's input box after the pull, so it did not clear it. \(check)", keep)
         }
-        let taken = got == want ? text : back.joined(separator: "\n")
-        // One Ctrl-U per input row (it clears one line), and one more.
-        guard await send(Array(repeating: "ctrl+u", count: back.count + 1), io) else {
-            return .failed("The text is in the agent's input box: input went off before it was cleared.")
+        // What came back is what the input box holds now. It may hold more than the screen showed (seen live): then
+        // all of it goes to the composer, so Ctrl-U never clears text the owner did not get back.
+        let back = box(shown, agent: expect.kind)
+        guard !back.isEmpty, back != [placeholder(expect.kind)] else {
+            return .failed("The queued text did not come back to the input box. It is still queued; nothing was cleared.")
         }
-        await io.settle()
-        guard let after = await io.screen(), !inputRows(after, agent: expect.kind).contains(where: back.contains) else {
-            return .failed("The text is still in the agent's input box. Check the agent's terminal.")
+        let cols = await io.width()
+        let taken = text(of: back, agent: expect.kind, width: textWidth(shown, agent: expect.kind, paneWidth: cols), log: log.items)
+        guard compact(taken).contains(compact(expected)) else {
+            return await held(taken, "The agent's input box did not hold the queued text as expected, so Flockbook did not clear it. \(check)", keep)
         }
+        guard await keep(taken) else {
+            return .partial(taken, "Flockbook could not save the text, so it did not clear the agent's input box. \(check)")
+        }
+
+        // One Ctrl-U at a time (it takes one row; an emptied row's line break takes one more), each after a read that
+        // finds the same agent and only rows of `back` left.
+        var left = back.count, after = shown
+        let most = 2 * back.count + 2
+        for step in 0...most {
+            guard let a = await io.agent(), same(a, expect) else {
+                return .partial(taken, "Another agent is in this pane now, so Flockbook stopped clearing its input box. \(check)")
+            }
+            guard let s = await io.screen() else {
+                return .partial(taken, "Flockbook could not read the agent's input box, so it stopped clearing it. \(check)")
+            }
+            after = s
+            let rows = box(s, agent: expect.kind)
+            // None of it left: an empty box, the placeholder, or only rows that are not ours (typed after it emptied).
+            if !rows.contains(where: { r in back.contains { !$0.isEmpty && r.hasPrefix($0) } }) { left = 0; break }
+            guard rows.count <= left, Array(back.prefix(rows.count)) == rows else {
+                return .partial(taken, "The agent's input box changed while Flockbook cleared it, so it stopped. \(check)")
+            }
+            left = rows.count
+            guard step < most else { break }
+            guard await send(["ctrl+u"], io) else {
+                return .partial(taken, "Input went off while Flockbook cleared the agent's input box. \(check)")
+            }
+            await io.settle()
+        }
+        guard left == 0 else { return .partial(taken, "The text is still in the agent's input box. \(check)") }
         let status = await io.agent()?.status
         if interrupts(after) > interrupts(before) || !(status == .working || status == .idle || status == .done) {
             return .interrupted(taken)
@@ -217,31 +281,115 @@ public enum QueuePull {
         return .pulled(taken)
     }
 
-    /// Words only: the input box wraps long lines, so compare without line breaks and runs of spaces.
-    static func squash(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+    /// The agent the pull checked: the same kind and session.
+    private static func same(_ a: Agent, _ b: Agent) -> Bool { a.kind == b.kind && a.sessionId == b.sessionId }
+
+    /// Keeps `text` (no keys follow) and gives it to the composer with `why`.
+    private static func held(_ text: String, _ why: String, _ keep: @MainActor @Sendable (String) -> Bool) async -> Outcome {
+        _ = await keep(text)
+        return .partial(text, why)
+    }
+
+    /// The text without spaces and line breaks: the screen wraps rows (CJK anywhere, words at spaces).
+    static func compact(_ s: String) -> String { String(s.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.map(Character.init)) }
 
     private static func send(_ keys: [String], _ io: some IO) async -> Bool {
         guard safe(keys) else { return false }
         return await io.keys(keys)
     }
 
-    /// The agent's input box rows (Claude Code: between the last two rules; Codex: the "›" row above the footer and
-    /// the rows that continue it).
-    static func inputRows(_ screen: String, agent: String) -> [String] {
-        let lines = screen.components(separatedBy: "\n")
+    /// The text of the input box rows. Claude Code: the log's open entries when they are the same text (the log keeps
+    /// it exactly); else, and for Codex, the rows joined: a row the agent wrapped (the row before it was full) joins
+    /// the one before it, any other row starts a new line.
+    static func text(of rows: [String], agent: String, width: Int?, log: [String?]) -> String {
+        if agent == "claude", !log.isEmpty, log.allSatisfy({ $0 != nil }) {
+            let l = log.compactMap { $0 }.joined(separator: "\n")
+            if compact(l) == compact(rows.joined()) { return l }
+        }
+        return unwrap(rows, width: width)
+    }
+
+    /// Rows back to lines. `width`: the columns a row of text may fill (nil: every row is a line).
+    static func unwrap(_ rows: [String], width: Int?) -> String {
+        guard var out = rows.first else { return "" }
+        var prev = out
+        for row in rows.dropFirst() {
+            defer { prev = row }
+            guard let width, !row.isEmpty, let first = row.first, !first.isWhitespace else { out += "\n" + row; continue }
+            let wide = cells(first) == 2 || prev.last.map { cells($0) == 2 } == true
+            let word = row.prefix { !$0.isWhitespace }
+            // Wrapped here: the next character (CJK) or word (with its space) would not have fit on the row before.
+            let need = wide ? cells(first) : 1 + word.reduce(0) { $0 + cells($1) }
+            if columns(prev) + need > width { out += (wide || !prev.contains(" ") && columns(prev) >= width ? "" : " ") + row }
+            else { out += "\n" + row }
+        }
+        return out
+    }
+
+    /// The columns a row of text may fill: Claude Code wraps at its rule's width less 4, Codex at the pane's less 3
+    /// (both seen live: Claude Code 2.1, Codex 0.163).
+    static func textWidth(_ screen: String, agent: String, paneWidth: Int?) -> Int? {
         if agent == "claude" {
-            // The first row starts with the "❯ " prompt mark; it is not text.
-            var rows = QueuedInput.claudeInput(lines)
-            if let f = rows.first, f.hasPrefix("❯") { rows[0] = String(f.dropFirst()).trimmingCharacters(in: .whitespaces) }
-            return rows.filter { !$0.isEmpty }
+            let lines = screen.components(separatedBy: "\n")
+            return lines.last(where: isRule).map { $0.trimmingCharacters(in: .whitespaces).count - 4 }
         }
+        return paneWidth.map { $0 - 3 }
+    }
+
+    static func columns(_ s: some StringProtocol) -> Int { s.reduce(0) { $0 + cells($1) } }
+
+    /// Terminal cells of a character: 2 for East Asian wide and fullwidth ones, else 1.
+    static func cells(_ c: Character) -> Int {
+        guard let v = c.unicodeScalars.first?.value else { return 1 }
+        switch v {
+        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xA000...0xA4CF,
+             0xAC00...0xD7A3, 0xF900...0xFAFF, 0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6, 0x1F300...0x1F64F,
+             0x1F900...0x1F9FF, 0x20000...0x3FFFD: return 2
+        default: return 1
+        }
+    }
+
+    static func isRule(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.count >= 10 && t.allSatisfy { $0 == "─" }
+    }
+
+    /// The input box's placeholder when the queue is open.
+    static func placeholder(_ agent: String) -> String {
+        agent == "claude" ? QueuedInput.claudePlaceholder : QueuedInput.codexPlaceholder
+    }
+
+    /// The agent's input box rows, without the box's margin (the prompt mark, then two columns) and trailing
+    /// spaces; a row's own indentation stays. Blank rows at the end are dropped.
+    static func box(_ screen: String, agent: String) -> [String] {
+        let lines = screen.components(separatedBy: "\n")
+        return agent == "claude" ? claudeBox(lines) : codexBox(lines)
+    }
+
+    /// Claude Code: the rows between the last two rule lines; the first starts with "❯ ".
+    static func claudeBox(_ lines: [String]) -> [String] {
+        let rules = lines.indices.filter { isRule(lines[$0]) }
+        guard rules.count >= 2 else { return [] }
+        let (a, b) = (rules[rules.count - 2], rules[rules.count - 1])
+        return rows(Array(lines[(a + 1)..<b]), mark: "❯")
+    }
+
+    /// Codex: the last row that starts with "› ", and the rows under it down to the footer (the line with the model's
+    /// "% left" or "? for shortcuts").
+    static func codexBox(_ lines: [String]) -> [String] {
         guard let i = lines.lastIndex(where: { $0.hasPrefix("› ") }) else { return [] }
-        var rows = [String(lines[i].dropFirst(2))]
-        for l in lines[(i + 1)...] {
-            guard l.hasPrefix("  "), !l.trimmingCharacters(in: .whitespaces).isEmpty, !l.contains(" · ") else { break }
-            rows.append(l.trimmingCharacters(in: .whitespaces))
+        guard let end = lines[(i + 1)...].firstIndex(where: { $0.contains("% left") || $0.contains("? for shortcuts") }) else { return [] }
+        return rows(Array(lines[i..<end]), mark: "›")
+    }
+
+    private static func rows(_ lines: [String], mark: Character) -> [String] {
+        var out = lines.enumerated().map { i, l -> String in
+            let l = l.replacingOccurrences(of: "\u{a0}", with: " ")
+            if i == 0, l.first == mark { return QueuedInput.trailing(String(l.dropFirst(2))) }
+            return QueuedInput.trailing(l.hasPrefix("  ") ? String(l.dropFirst(2)) : l)
         }
-        return rows
+        while out.last?.isEmpty == true { out.removeLast() }
+        return out
     }
 }
 
@@ -263,4 +411,18 @@ public struct HerdrQueuePullIO: QueuePull.IO {
         return (try? await client.sendNamedKeys(keys, to: paneId)) != nil
     }
     public func settle() async { try? await Task.sleep(for: .milliseconds(400)) }
+    /// herdr's layout for the pane (read-only).
+    public func width() async -> Int? { await client.paneWidth(paneId: paneId) }
+}
+
+extension HerdrClient {
+    /// The pane's width in columns, from herdr's layout (read-only). Nil: not known.
+    public func paneWidth(paneId: String) async -> Int? {
+        guard let data = try? await rawRequest(method: "pane.layout", params: ["pane_id": paneId]),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let layout = (o["result"] as? [String: Any])?["layout"] as? [String: Any],
+              let panes = layout["panes"] as? [[String: Any]],
+              let p = panes.first(where: { $0["pane_id"] as? String == paneId }) else { return nil }
+        return (p["rect"] as? [String: Any])?["width"] as? Int
+    }
 }

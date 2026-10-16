@@ -108,6 +108,7 @@ struct HerdrDeskApp: App {
             Task { @MainActor in await SnapshotRunner.runSettings(dir: dir) }
         }
         let m = AppModel(store: store)
+        m.pulledTexts = FilePulledStore(url: AppModel.pulledTextsFile(session: store.session.name))
         if args.contains("--test-fullscreen-real") {
             let dir = ProcessInfo.processInfo.environment["FS_REAL_DIR"] ?? "build/fullscreen-real/latest"
             // The one check with a real window (owner's leave): an unbundled binary starts without one.

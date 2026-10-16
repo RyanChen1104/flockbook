@@ -7,7 +7,7 @@ public enum Hub {
     public static let version = 1
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
-    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued"]
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck"]
     public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
@@ -161,6 +161,9 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case pushUnsubscribe(endpoint: String)
         /// Take the agent's own queue back into this device's composer (`QueuePull`). Answered with `pulled`.
         case pullQueued(pane: String)
+        /// The composer has the `pulled` text with this id: the hub forgets it. Until then the hub sends it again
+        /// after each hello.
+        case pulledAck(pulled: String)
 
         public var type: String {
             switch self {
@@ -177,6 +180,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             case .pushSubscribe: "pushSubscribe"
             case .pushUnsubscribe: "pushUnsubscribe"
             case .pullQueued: "pullQueued"
+            case .pulledAck: "pulledAck"
             }
         }
     }
@@ -184,7 +188,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth, pulled }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -204,6 +208,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case "pushSubscribe": body = .pushSubscribe(endpoint: try s(.endpoint), p256dh: try s(.p256dh), auth: try s(.auth))
         case "pushUnsubscribe": body = .pushUnsubscribe(endpoint: try s(.endpoint))
         case "pullQueued": body = .pullQueued(pane: try s(.pane))
+        case "pulledAck": body = .pulledAck(pulled: try s(.pulled))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -237,6 +242,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(endpoint, forKey: .endpoint); try c.encode(p256dh, forKey: .p256dh); try c.encode(auth, forKey: .auth)
         case .pushUnsubscribe(let endpoint):
             try c.encode(endpoint, forKey: .endpoint)
+        case .pulledAck(let pulled):
+            try c.encode(pulled, forKey: .pulled)
         }
     }
 }
@@ -319,11 +326,17 @@ public struct HubQueued: Codable, Hashable, Sendable {
 }
 
 /// The queue's text, out of the agent and into the composer. `interrupted`: the agent's turn stopped meanwhile.
+/// `id`: the hub keeps the text until `pulledAck` with it (sent again after each hello); nil: not kept, no ack.
+/// `note`: the pull stopped early and some of the text may still be in the agent's input box (why).
 public struct HubPulled: Codable, Hashable, Sendable {
+    public var id: String?
     public var pane: String
     public var text: String
     public var interrupted: Bool
-    public init(pane: String, text: String, interrupted: Bool) { self.pane = pane; self.text = text; self.interrupted = interrupted }
+    public var note: String?
+    public init(id: String? = nil, pane: String, text: String, interrupted: Bool, note: String? = nil) {
+        self.id = id; self.pane = pane; self.text = text; self.interrupted = interrupted; self.note = note
+    }
 }
 
 /// The last `attach` part was taken: the re-encoded image's size.

@@ -60,7 +60,7 @@ import Foundation
         let s = await session(b)
         b.pullOutcome = .pulled("QC reply GAMMA")
         let out = await s.receive(pull)
-        check(pulled(out) == HubPulled(pane: "w1:p1", text: "QC reply GAMMA", interrupted: false) && reply(out)?.ok == true && types(out).last == "reply",
+        check(pulled(out).map { ($0.pane, $0.text, $0.interrupted, $0.note) } ?? ("", "", true, nil) == ("w1:p1", "QC reply GAMMA", false, nil) && reply(out)?.ok == true && types(out).last == "reply",
               "hub queue: pullQueued -> pulled (the text for the composer), reply ok (\(types(out)))")
         check(b.pulls == ["w1:p1 s1"], "hub queue: the backend pulls with the agent the hub checked")
         b.pullOutcome = .interrupted("QC reply GAMMA")
@@ -85,6 +85,56 @@ import Foundation
         check(reply(await other.receive(pull))?.ok == false, "hub queue: an agent without a queue Flockbook reads: refused")
     }
 
+    // P1-3: the hub keeps the text until the device's composer has it (pulledAck), and sends it again after each
+    // hello: a phone that lost the connection before `pulled` arrived still gets it.
+    do {
+        let b = FakeHubBackend(workspaces: ws(.working))
+        b.screens["w1:p1"] = screen(["QC reply GAMMA"])
+        b.pullOutcome = .pulled("QC reply GAMMA")
+        let s = await session(b)
+        let p = pulled(await s.receive(pull))
+        check(b.kept == true && p?.id != nil && p?.id == b.pulledTexts.all.first?.id && b.pulledTexts.pending(device: "d-input").map(\.text) == ["QC reply GAMMA"],
+              "hub queue: the text is kept for the device that pulled it, and `pulled` carries its id (\(String(describing: p)))")
+        func hello(_ token: String) async -> (HubSession, [HubMessage]) {
+            let c = HubSession(backend: b, devices: devices)
+            return (c, await c.receive(msg(#"{"v":1,"type":"hello","id":"h","token":"\#(token)","client":"test","clientVersion":"1"}"#)))
+        }
+        let (again, h) = await hello("tok-input")
+        check(pulled(h)?.id == p?.id && pulled(h)?.text == "QC reply GAMMA" && types(h).last == "reply",
+              "hub queue: after hello the device gets the text its composer did not confirm (\(types(h)))")
+        let (other, oh) = await hello("tok-read")
+        check(pulled(oh) == nil, "hub queue: another device does not get it")
+        let ack = msg(#"{"v":1,"type":"pulledAck","id":"a1","pulled":"\#(p?.id ?? "")"}"#)
+        _ = await other.receive(ack)
+        check(b.pulledTexts.all.count == 1, "hub queue: another device's pulledAck does not remove it")
+        check(reply(await again.receive(ack))?.ok == true && b.pulledTexts.all.isEmpty, "hub queue: pulledAck: the hub forgets it")
+        check(pulled(await hello("tok-input").1) == nil, "hub queue: confirmed: not sent again")
+        check(reply(await again.receive(ack))?.ok == true, "hub queue: pulledAck again (an id already gone): ok")
+
+        b.pullOutcome = .partial("QC reply GAMMA", "The agent's input box changed while Flockbook cleared it.")
+        let part = pulled(await s.receive(pull))
+        check(part?.text == "QC reply GAMMA" && part?.note == "The agent's input box changed while Flockbook cleared it." && part?.id != nil,
+              "hub queue: a pull that stopped early: the text, kept, with the reason as a note (\(String(describing: part)))")
+        b.pulledTexts = FailingPulledStore()
+        b.pullOutcome = .partial("QC reply GAMMA", "Could not keep the text.")
+        let unkept = pulled(await s.receive(pull))
+        check(b.kept == false && unkept?.id == nil && unkept?.text == "QC reply GAMMA", "hub queue: not kept: still sent, without an id (\(String(describing: unkept)))")
+    }
+
+    // The kept texts live in a file (mode 600): a quit or a crash between the pull and the composer loses nothing.
+    do {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "pulled-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appending(path: "pulled.json")
+        let f = FilePulledStore(url: url)
+        check(f.keep(PulledText(id: "x1", pane: "w1:p1", device: PulledText.mac, text: "if ready:\n    run()")), "pulled store: keeps")
+        let mode = (try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int) ?? 0
+        check(FilePulledStore(url: url).pending(device: PulledText.mac).map(\.text) == ["if ready:\n    run()"] && mode == 0o600,
+              "pulled store: a new start reads it back, exactly; the file is mode 600 (\(String(mode, radix: 8)))")
+        check(f.take(id: "x1", device: "d-other") == nil && f.take(id: "x1", device: PulledText.mac)?.text == "if ready:\n    run()", "pulled store: only its device takes it")
+        check(FilePulledStore(url: url).all.isEmpty, "pulled store: taken: gone from the file")
+    }
+
     // Wire format.
     let q = HubQueued(pane: "w1:p1", agent: "codex", items: ["a", nil], pullable: true, pullsAll: false)
     let back = try Hub.decodeHub(try Hub.encode(HubMessage.queued(q)))
@@ -92,4 +142,13 @@ import Foundation
     let p = HubPulled(pane: "w1:p1", text: "a\nb", interrupted: true)
     check(try Hub.decodeHub(try Hub.encode(HubMessage.pulled(p))) == .pulled(p), "hub queue: pulled round-trips")
     check(try Hub.decodeClient(pull).body == .pullQueued(pane: "w1:p1"), "hub queue: pullQueued decodes")
+    let ackBack = try Hub.decodeClient(try JSONEncoder().encode(ClientMessage(id: "a", body: .pulledAck(pulled: "x1"))))
+    check(ackBack.body == .pulledAck(pulled: "x1"), "hub queue: pulledAck round-trips")
+    let withId = HubPulled(id: "x1", pane: "w1:p1", text: "a", interrupted: false, note: "n")
+    check(try Hub.decodeHub(try Hub.encode(HubMessage.pulled(withId))) == .pulled(withId), "hub queue: pulled with id and note round-trips")
+}
+
+/// A pulled-text store whose saves fail (a full disk).
+@MainActor final class FailingPulledStore: MemoryPulledStore {
+    override func save() -> Bool { false }
 }

@@ -324,7 +324,11 @@ final class AppModel {
     var composerResets: [String: Int] = [:]
     /// The agents' own queues by pane id (`checkQueue`), and the pulls in flight.
     var queued: [String: QueuedInput] = [:]
+    /// Panes with a pull running, from the Mac or a phone: one at a time per pane, and no send meanwhile.
     var pulling: Set<String> = []
+    /// Pulled texts kept until a composer has them (`PulledText`): the Mac's own, and the phones' (the hub's).
+    /// The app keeps them in a file (`HerdrDeskApp`); offscreen runs in memory.
+    @ObservationIgnored var pulledTexts = MemoryPulledStore()
 
     func prune() {
         defer { updateVisibleSessions() }

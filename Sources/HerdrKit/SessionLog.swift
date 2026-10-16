@@ -173,7 +173,7 @@ public final class SessionLog: Sendable {
         /// Where the first read stands. `.ready` with no items means the log exists and has nothing to show yet.
         public var load: ConversationLoadState = .ready
         /// Claude Code's queue as the log has it (`ClaudeQueueLog`), oldest first.
-        public var queued: [String?] = []
+        public var queued = ClaudeQueueLog()
     }
 
     /// Full item list, re-yielded whenever the file grows. Yields `[]` first.
@@ -271,7 +271,7 @@ public final class SessionLog: Sendable {
                 var misses = 0
                 func report(_ l: ConversationLoadState) {   // state-only change (no new items)
                     guard l != reported else { return }
-                    reported = l; cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, load: l, queued: parser.queue.items))
+                    reported = l; cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, load: l, queued: parser.queue))
                 }
                 var wakes = watch.stream.makeAsyncIterator()
                 while !Task.isCancelled {
@@ -320,7 +320,7 @@ public final class SessionLog: Sendable {
                             let consumed = leftoverPos
                             state.lock.withLock { state.consumed = consumed }
                             reported = .ready
-                            cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, queued: parser.queue.items))
+                            cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, queued: parser.queue))
                         }
                         report(.ready)   // located and read, even when the file is still empty
                         if backfill {   // the short first view is out; fill in the rest of the tail now
@@ -340,7 +340,7 @@ public final class SessionLog: Sendable {
                                 if let t = String(data: raw, encoding: .utf8) { parser.feed(line: t, offset: pos) }
                                 pos += UInt64(raw.count) + 1
                             }
-                            cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, queued: parser.queue.items))
+                            cont.yield(Snapshot(items: parser.items(), hasOpenToolUse: parser.hasOpenToolUse, queued: parser.queue))
                         }
                     }
                     if await wakes.next() == nil { break }

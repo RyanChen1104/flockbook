@@ -34,10 +34,13 @@ import CryptoKit
     /// The newest AskUserQuestion call the Claude hook saved for this agent session (`ClaudeQuestionHook`), if any.
     func hookedQuestion(session: String) -> QuestionRequest?
     /// Claude Code's queue as the session's log has it (`ClaudeQueueLog`), oldest first; [] when the log has none.
-    func queuedLog(session: String) -> [String?]
+    func queuedLog(session: String) -> ClaudeQueueLog
     /// Takes the agent's own queue back (`QueuePull.run`): the text for the device's composer. Called only after the
-    /// hub saw a queue it may pull. `allowed` as for `send`.
-    func pullQueued(pane: String, agent: Agent, log: [String?], allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome
+    /// hub saw a queue it may pull. `allowed` as for `send`; `keep` saves the text before the first Ctrl-U (false: none).
+    func pullQueued(pane: String, agent: Agent, log: ClaudeQueueLog, keep: @escaping @MainActor @Sendable (String) -> Bool,
+                    allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome
+    /// Pulled texts kept until the device that pulled them has them (`PulledText`).
+    var pulledTexts: MemoryPulledStore { get }
     /// The hub's VAPID public key (base64url) for the PWA; nil: no Web Push.
     var pushKey: String? { get }
     /// Keeps the device's push subscription (one per device). False: refused (invalid, or push is off).
@@ -195,7 +198,10 @@ extension Hub {
             lastSnapshot = snapshot()
             return [.welcome(HubWelcome(hub: backend.hubName, hubVersion: backend.hubVersion, level: d.level, session: backend.sessionName,
                                         pushKey: backend.pushKey, pushOn: backend.pushKey == nil ? nil : backend.pushSubscribed(device: d.id))),
-                    .snapshot(lastSnapshot ?? []), ok(m.id)]
+                    .snapshot(lastSnapshot ?? [])]
+                // Pulled texts this device's composer did not confirm yet (the connection dropped before).
+                + backend.pulledTexts.pending(device: d.id).map { .pulled(HubPulled(id: $0.id, pane: $0.pane, text: $0.text, interrupted: false)) }
+                + [ok(m.id)]
         }
         guard let device else { closed = true; return [fail(m.id, .unauthorized, deviceID == nil ? "Send hello first." : "This device was removed.")] }
         let canInput = inputAllowed
@@ -270,13 +276,27 @@ extension Hub {
             guard let q = st.queued, !q.items.isEmpty else { return [fail(m.id, .failed, "No queued message. Nothing was sent.")] }
             guard q.pullable else { return [fail(m.id, .failed, "The agent's input box is not empty. Nothing was sent.")] }
             let log = agent.sessionId.map { backend.queuedLog(session: $0) } ?? []
-            switch await backend.pullQueued(pane: id, agent: agent, log: log, allowed: allowed) {
-            case .pulled(let text): return [.pulled(HubPulled(pane: id, text: text, interrupted: false)), ok(m.id)]
-            case .interrupted(let text): return [.pulled(HubPulled(pane: id, text: text, interrupted: true)), ok(m.id)]
+            // The text is kept for this device before the agent's box is cleared, until its composer confirms it
+            // (`pulledAck`); a lost connection gets it again after the next hello.
+            let entry = UUID().uuidString, store = backend.pulledTexts, deviceID = device.id
+            let saved = Flag()
+            let keep: @MainActor @Sendable (String) -> Bool = { text in
+                saved.on = store.keep(PulledText(id: entry, pane: id, device: deviceID, text: text))
+                return saved.on
+            }
+            let r = await backend.pullQueued(pane: id, agent: agent, log: log, keep: keep, allowed: allowed)
+            let kept = saved.on ? entry : nil
+            switch r {
+            case .pulled(let text): return [.pulled(HubPulled(id: kept, pane: id, text: text, interrupted: false)), ok(m.id)]
+            case .interrupted(let text): return [.pulled(HubPulled(id: kept, pane: id, text: text, interrupted: true)), ok(m.id)]
+            case .partial(let text, let why): return [.pulled(HubPulled(id: kept, pane: id, text: text, interrupted: false, note: why)), ok(m.id)]
             case .refused(let why), .failed(let why):
                 if !inputAllowed { return [readOnly(m.id)] }
                 return [fail(m.id, .failed, why)]
             }
+        case .pulledAck(let pulled):
+            _ = backend.pulledTexts.take(id: pulled, device: device.id)
+            return [ok(m.id)]
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
@@ -508,3 +528,6 @@ extension Hub {
         return [.conversation(HubConversation(pane: p.id, session: session, mode: .prepend, items: older, hasEarlier: lo > 0 || more)), ok(re)]
     }
 }
+
+/// A flag a `@Sendable` closure on the main actor sets.
+@MainActor final class Flag { var on = false }
