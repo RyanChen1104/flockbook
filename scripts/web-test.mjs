@@ -922,6 +922,52 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   check(await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Load earlier'`) === true,
     `earlier: another session in the pane starts without the other's failure (${await p.eval("document.getElementById('load-earlier')?.textContent")})`);
+  // Older rows of a real reply's weight, on a CPU slowed 4x (a phone): near the top a "Loading earlier" notice shows over
+  // the rows (it moves none of them) until the rows are in, and the page never stalls past the budget. The meter: the
+  // longest gap between ticks of a 5 ms timer (the Mac churn check's meter). WEB_PROFILE=<dir>: a CPU profile of the load.
+  // Budget: all of a page put in at once, the page laid every row out again, stalled 127-137 ms here; rows a few per
+  // frame, the others left in place, 18-61 ms over 12 runs on a busy machine. 80 sits between the two.
+  const STALL_BUDGET = 80;
+  hub.stdin.write("session w2:p2 s10 120\nrich s10 400\n");
+  await p.until("document.body.innerText.includes('New session reply 119')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.cdp("Emulation.setCPUThrottlingRate", { rate: 4 });
+  await p.eval(`(() => { window.__gap = 0; let last = performance.now();
+    clearInterval(window.__meter); window.__meter = setInterval(() => { const n = performance.now(); window.__gap = Math.max(window.__gap, n - last); last = n; }, 5); })()`);
+  const pill = `(() => { const e = document.querySelector('.earlier-pill'); if (!e) return null; const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+    return r.height > 0 && r.top >= 0 && r.bottom <= innerHeight && s.visibility !== 'hidden' && Number(s.opacity) > 0.5 ? Math.round(r.top) : null; })()`;
+  const rich0 = await p.eval(rowCount);
+  if (process.env.WEB_PROFILE) { await p.cdp("Profiler.enable"); await p.cdp("Profiler.setSamplingInterval", { interval: 200 }); await p.cdp("Profiler.start"); }
+  await p.eval("window.__holdEarlier = 1; window.__gap = 0");
+  const richTop = JSON.parse(await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0); return ${readRow}; })()`));
+  await new Promise((r) => setTimeout(r, 250));
+  const pillAt = await p.eval(pill), richBusy = await p.eval(topOf(richTop.text));
+  check(pillAt !== null && Math.abs(richBusy - richTop.top) < 2,
+    `earlier: while older rows load, a notice shows at the top (at ${pillAt}) and the row being read stays (${Math.round(richTop.top)} -> ${Math.round(richBusy)})`);
+  await p.shot("earlier-loading");
+  await p.shot("earlier-loading", true);
+  // Each frame while the rows go in (a few per frame), before it is painted: the row being read never moves.
+  await p.eval(`(() => { window.__moved = 0; window.__looks = 0; const at = ${richTop.top};
+    const look = () => { const t = ${topOf(richTop.text)}; if (!Number.isNaN(t)) { window.__moved = Math.max(window.__moved, Math.abs(t - at)); window.__looks++; }
+      if (window.__looking) requestAnimationFrame(look); };
+    window.__looking = true; requestAnimationFrame(look); })()`);
+  check(await p.until(`${rowCount} >= ${rich0 + 100}`, 8000) === true, `earlier: heavy older rows load (${rich0} -> ${await p.eval(rowCount)})`);
+  await new Promise((r) => setTimeout(r, 1500));
+  if (process.env.WEB_PROFILE) {
+    const { profile } = await p.cdp("Profiler.stop");
+    writeFileSync(join(process.env.WEB_PROFILE, "earlier.cpuprofile"), JSON.stringify(profile));
+  }
+  const richMoved = await p.eval("window.__looking = false; window.__moved"), looks = await p.eval("window.__looks");
+  check(looks > 10 && richMoved < 2, `earlier: while the rows go in, the row being read never moves (worst ${Math.round(richMoved)} px over ${looks} frames)`);
+  const gap = await p.eval("window.__gap"), richAfter = await p.eval(topOf(richTop.text));
+  check(await p.eval(pill) === null, "earlier: the notice goes when the rows are in");
+  check(Math.abs(richAfter - richTop.top) < 2, `earlier: after the heavy load, the row being read stays in place (${Math.round(richTop.top)} -> ${Math.round(richAfter)})`);
+  check(gap < STALL_BUDGET, `earlier: loading heavy older rows stalls the page at most ${Math.round(gap)} ms (CPU 4x slower; budget ${STALL_BUDGET})`);
+  await p.eval("clearInterval(window.__meter)");
+  await p.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+  hub.stdin.write("session w2:p2 s4\n");
+  await p.until("!document.body.innerText.includes('New session reply 119')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");

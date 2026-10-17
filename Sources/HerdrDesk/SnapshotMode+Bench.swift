@@ -131,6 +131,38 @@ extension ContentTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         print("bench: ui same items again (re-render): \(stats(same))")
+
+        // (C) Autoload: the reader scrolls back through the log, page after page (rows never shown before, as in the app;
+        // when the rows on hand run out, the log reads older). Each round: just outside the zone that loads, then into it;
+        // the longest main-thread stall in the next 1.2 s, and the main-thread time spent parsing markdown, building and
+        // measuring texts in that time. BENCH_AUTOLOAD=<rounds> (default 10; more for `sample`).
+        holder.load = { await log.loadEarlier() }
+        let snaps = it
+        let feed = Task { @MainActor in var s = snaps; while let n = await s.next() { holder.items = n.items } }
+        if let sv = scrollView(host) {
+            let rounds = ProcessInfo.processInfo.environment["BENCH_AUTOLOAD"].flatMap(Int.init) ?? 10
+            print("bench: pid \(ProcessInfo.processInfo.processIdentifier) autoload x\(rounds)"); fflush(stdout)
+            let stall = StallMeter(); stall.start()
+            var worsts: [Duration] = []
+            for r in 0..<rounds {
+                sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top + ConversationView.nearTop + 400)); sv.reflectScrolledClipView(sv.contentView)
+                try? await Task.sleep(for: .milliseconds(400))
+                let p0 = MarkdownCache.parseTime, b0 = MessageContent.buildTime, m0 = MessageContent.measureTime
+                let n0 = MessageContent.builds, c0 = holder.items.count
+                let k0 = (MarkdownView.bodies, MessageText.makes, MessageText.updates, MessageText.fits)
+                _ = stall.take()
+                sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top)); sv.reflectScrolledClipView(sv.contentView)
+                try? await Task.sleep(for: .milliseconds(1200))
+                let worst = Duration.seconds(stall.take())
+                worsts.append(worst)
+                print("bench: autoload round \(r): stall \(ms(worst)); parse \(ms(MarkdownCache.parseTime - p0)), build \(ms(MessageContent.buildTime - b0)), "
+                      + "measure \(ms(MessageContent.measureTime - m0)); \(MessageContent.builds - n0) texts built; items \(c0) -> \(holder.items.count); "
+                      + "md bodies \(MarkdownView.bodies - k0.0), text views made \(MessageText.makes - k0.1), updated \(MessageText.updates - k0.2), sized \(MessageText.fits - k0.3)")
+            }
+            stall.stop()
+            print("bench: autoload stall: \(stats(worsts))")
+        }
+        feed.cancel()
         win.orderOut(nil)
         print("bench: total \(Int(Date().timeIntervalSince(started))) s")
         exit(0)
@@ -139,12 +171,13 @@ extension ContentTests {
 
 @MainActor @Observable private final class BenchItems {
     var items: [ConversationItem]
+    var load: (() async -> Bool)?
     init(items: [ConversationItem]) { self.items = items }
 }
 
 private struct BenchConversation: View {
     let holder: BenchItems
     var body: some View {
-        ConversationView(items: holder.items, agentName: "bench", loadState: .ready)
+        ConversationView(items: holder.items, agentName: "bench", loadState: .ready, onLoadEarlier: holder.load)
     }
 }

@@ -30,6 +30,8 @@ struct ConversationView: View {
     /// Counts the sessions the view showed: a read of an older session's log that ends later changes nothing.
     @State private var earlierSession = 0
     @State private var spinnerDue = false
+    /// The "Loading earlier" notice over the top of the rows: the number of the load it shows for, nil when none.
+    @State private var notice: Int?
     /// Rows shown at first; "Show earlier" adds this many again. A check may raise it (a long session read far back).
     static var page = ConversationWindow.page
     /// The rows shown: at most `ConversationWindow.maxRows`, the newest unless "Show earlier" went past that.
@@ -50,7 +52,7 @@ struct ConversationView: View {
                 list
             }
         }
-        .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false }
+        .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false; notice = nil; tracker.adding = false }
     }
 
     /// Which empty view to show, or nil for the list.
@@ -130,11 +132,34 @@ struct ConversationView: View {
         var fixDue = false
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
+        /// Older rows are going into the window, a few per frame.
+        var adding = false
+        /// Loads counted (the notice's number) and when the notice showed.
+        var loads = 0
+        var noticeSince = Date.distantPast
+
+        /// Called while the frame is drawn, when the anchor row was placed: the view moves by as much as the row did, in
+        /// the frame that shows the new rows. False when the clip view cannot move that far yet.
+        @discardableResult func fixNow(_ sv: NSScrollView) -> Bool {
+            guard !atBottom, let a = anchor, a.until > Date(), let top = tops[a.key], abs(top - a.top) > 0.5 else { return true }
+            let offset = a.offset + top - a.top, clip = sv.contentView, was = clip.bounds.origin
+            clip.scroll(to: NSPoint(x: was.x, y: offset))
+            guard abs(clip.bounds.minY - offset) < 0.5 else { clip.scroll(to: was); return false }   // clamped: no half move
+            sv.reflectScrolledClipView(clip)
+            anchor = (a.key, top, offset, a.until); self.offset = offset
+            return true
+        }
+        let merged = MergedRows()
     }
     /// Closer than this to the top, the reader's scrolling loads older rows by itself (Show earlier stays as the button).
     /// Half a page at a time: the stack lays out every new row in one pass, and 100 at once came near the 250 ms stall limit.
     static let nearTop: CGFloat = 400
     static var autoPage: Int { max(1, page / 2) }
+    /// Rows that go into the window per frame. All at once, the stack lays out and draws every new row in one pass: a
+    /// hitch the reader sees mid-scroll (about 100 ms for half a page).
+    static let batch = 10
+    /// The notice stays at least this long (a flash reads as a glitch).
+    static let noticeMin: TimeInterval = 0.5
     @State private var tracker = BottomTracker()
     @State private var position = ScrollPosition(edge: .bottom)
 
@@ -156,18 +181,23 @@ struct ConversationView: View {
                         .onAppear { ConversationProbe.set(.earlier, probeId) { showEarlier() } }
                         .onDisappear { ConversationProbe.clear(.earlier, probeId) }
                     }
-                    let rows = Self.displayRows(items[range])
+                    let rows = Self.displayRows(items[range], merged: tracker.merged)
                     let lastReply = window.detached ? nil : rows.last { if case .assistantText = $0.kind { true } else { false } }?.id
                     let entries = Self.entries(rows)
-                    ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
-                        entryView(e, foldable: e.item?.id != lastReply)
+                    // By key, with the gap above worked out here: a row's inputs stay the same when rows come in above it, so
+                    // SwiftUI skips it (an index in the inputs re-rendered every row of the window on each page).
+                    ForEach(Self.placed(entries), id: \.entry.key) { p in
+                        EntryRow(entry: p.entry, foldable: p.entry.item?.id != lastReply, size: size, liveCard: liveCard, agentName: agentName,
+                                 onAllow: onAllow, onDeny: onDeny, onOpenTerminal: onOpenTerminal)
+                            .equatable()
                             // The row's own top, without the gap above it (the first row has none; it gets one when older rows come in).
                             // The anchor row moved: older rows came in above (also when as many newer rows left, same height).
                             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.rowSpace)).minY } action: {
-                                tracker.tops[e.key] = $0
-                                if tracker.anchor?.key == e.key { holdAnchor() }
+                                tracker.tops[p.entry.key] = $0
+                                if tracker.anchor?.key == p.entry.key { holdAnchor() }
                             }
-                            .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
+                            .background { if tracker.anchor?.key == p.entry.key { AnchorProbe(tracker: tracker) } }
+                            .padding(.top, p.gap)
                     }
                     if window.detached {
                         Button { jumpToLatest() } label: {
@@ -187,6 +217,13 @@ struct ConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition($position)
+            // Over the rows, not among them: it moves none of them.
+            .overlay(alignment: .top) {
+                if notice != nil {
+                    EarlierNotice().padding(.top, 8).transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: notice != nil)
             // Following: the reader is "at the bottom" only through their own scrolling (offset changes alone).
             // When the content or the viewport changes size (a new message, a tool result, markdown settling, a window or
             // composer resize, safe-area insets settling) a reader at the bottom stays there.
@@ -214,23 +251,70 @@ struct ConversationView: View {
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
-                if window.takeLoaded(items.map(\.id), page: tracker.loadPage), let a = tracker.anchor { tracker.anchor?.until = max(a.until, Date().addingTimeInterval(1.5)) }
+                // A few at a time, like rows at hand (all at once is one long layout pass).
+                guard window.pendingLoad != nil, !tracker.adding else { return }
+                window.loadEnded(window.pendingLoad!)
+                add(tracker.loadPage, notice: notice ?? showNotice())
             }
     }
 
-    /// A page of older rows: from the rows at hand, else read from the log (the window takes them when they arrive).
+    /// A page of older rows: from the rows at hand, else read from the log (the window takes them when they arrive). A
+    /// notice shows over the top of the rows until they are in.
     private func showEarlier(page: Int = Self.page) {
         let ids = items.map(\.id)
-        if window.range(ids).lowerBound > 0 { keepTop(ids); window.showEarlier(ids, page: page); return }
+        guard !tracker.adding else { return }
+        if window.range(ids).lowerBound > 0 { add(page, notice: showNotice()); return }
         guard let load = onLoadEarlier, moreEarlier, !loadingEarlier else { return }
         loadingEarlier = true
         tracker.loadPage = page
         keepTop(ids, for: 4)
-        let token = window.beginLoad(), mine = earlierSession
+        let token = window.beginLoad(), mine = earlierSession, shown = showNotice()
         Task {
             let more = await load()
             if earlierSession == mine { moreEarlier = more; loadingEarlier = false }
+            // Nothing came in (the log had nothing older, or a read that failed): the notice goes.
+            try? await Task.sleep(for: .milliseconds(300))
+            if window.pendingLoad == token, !tracker.adding { hideNotice(shown) }
             try? await Task.sleep(for: .seconds(3)); window.loadEnded(token)   // nothing arrived (a newer read stays pending)
+            if notice == shown, !tracker.adding { hideNotice(shown) }
+        }
+    }
+
+    /// `count` rows at hand go into the window, `batch` per frame, the row on top staying in place; then the notice goes.
+    /// The notice is drawn before the first rows go in.
+    private func add(_ count: Int, notice shown: Int) {
+        tracker.adding = true
+        let mine = earlierSession
+        Task { @MainActor in
+            defer { if earlierSession == mine { tracker.adding = false; hideNotice(shown) } }
+            try? await Task.sleep(for: .milliseconds(16))
+            var left = count
+            while left > 0 {
+                guard earlierSession == mine else { return }
+                let ids = items.map(\.id)
+                guard window.range(ids).lowerBound > 0 else { return }
+                keepTop(ids)
+                window.showEarlier(ids, page: min(Self.batch, left))
+                left -= Self.batch
+                // Two frames: the rows are laid out and drawn, and the anchor fixed, before the next ones go in.
+                try? await Task.sleep(for: .milliseconds(32))
+            }
+        }
+    }
+
+    private func showNotice() -> Int {
+        tracker.loads += 1
+        if notice == nil { tracker.noticeSince = Date() }
+        notice = tracker.loads
+        return tracker.loads
+    }
+
+    /// The notice of load `shown` goes, once it has been up `noticeMin` (a newer load keeps its own).
+    private func hideNotice(_ shown: Int) {
+        let wait = Self.noticeMin - Date().timeIntervalSince(tracker.noticeSince)
+        Task { @MainActor in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            if notice == shown { notice = nil }
         }
     }
 
@@ -249,9 +333,12 @@ struct ConversationView: View {
     /// Older rows came in above and moved the anchor row: the view moves by as much. Next turn of the run loop, after the
     /// update pass, when every row reported its new top (scrolling inside the pass makes SwiftUI report "multiple times per frame").
     private func holdAnchor() {
+        // The anchor row's probe moves the view while the frame is drawn; this is the fallback a frame later (a clip view
+        // that could not move that far yet). Moving here, before the rows are drawn, would show them in the wrong place.
         guard !tracker.fixDue else { return }
         tracker.fixDue = true
         Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(20))
             tracker.fixDue = false
             guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
             let offset = a.offset + top - a.top
@@ -324,6 +411,12 @@ struct ConversationView: View {
         return out
     }
 
+    /// Each entry with the gap above it (none above the first).
+    struct Placed { let entry: Entry; let gap: CGFloat }
+    static func placed(_ entries: [Entry]) -> [Placed] {
+        entries.indices.map { i in Placed(entry: entries[i], gap: i == 0 ? 0 : entries[i].gap(after: entries[i - 1])) }
+    }
+
     private static func clock(_ d: Date) -> String { d.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) }
     private static func duration(_ s: TimeInterval) -> String {
         let n = Int(s.rounded())
@@ -335,6 +428,75 @@ struct ConversationView: View {
         if cal.isDateInYesterday(d) { return "Yesterday \(clock(d))" }
         return d.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + " " + clock(d)
     }
+
+    /// Adjacent tool-chip items form one chip row. With `merged`, a run of tool rows that is the same as last time gives
+    /// the same chip row (the same arrays): comparing it with the row on screen is then cheap.
+    static func displayRows(_ items: ArraySlice<ConversationItem>, merged: MergedRows? = nil) -> [ConversationItem] {
+        var out: [ConversationItem] = []
+        var run: [ConversationItem] = []
+        func flush() {
+            guard let first = run.first else { return }
+            defer { run = [] }
+            if run.count == 1 { out.append(first); return }
+            if let m = merged?.rows[first.id], m.parts == run { out.append(m.row); merged?.next[first.id] = m; return }
+            let chips: [ToolChip] = run.flatMap { (r: ConversationItem) -> [ToolChip] in if case .toolChips(let c) = r.kind { c } else { [] } }
+            let row = ConversationItem(id: first.id, kind: .toolChips(chips), timestamp: first.timestamp)
+            merged?.next[first.id] = (run, row)
+            out.append(row)
+        }
+        for it in items {
+            if case .toolChips = it.kind { run.append(it) } else { flush(); out.append(it) }
+        }
+        flush()
+        merged?.turn()
+        return out
+    }
+    /// The chip rows made last time, by the id of their first tool row (only those still shown are kept).
+    @MainActor final class MergedRows {
+        fileprivate var rows: [String: (parts: [ConversationItem], row: ConversationItem)] = [:]
+        fileprivate var next: [String: (parts: [ConversationItem], row: ConversationItem)] = [:]
+        fileprivate func turn() { rows = next; next = [:] }
+    }
+
+    /// Vertical gap between rows (reading.md §3): 32 before a user bubble, 20 after it, 8 around chips.
+    static func gap(_ a: ConversationItem, _ b: ConversationItem) -> CGFloat {
+        switch (a.kind, b.kind) {
+        case (_, .userText): return 32
+        case (.userText, _): return 20
+        case (.toolChips, _), (_, .toolChips): return 8
+        case (_, .status), (.status, _): return 16
+        default: return 14
+        }
+    }
+
+}
+
+/// One entry of the conversation. Equatable: a row whose entry and settings are the same is not rendered again when the
+/// rows around it change (a page of older rows coming in). A pending request is always rendered again: its card's
+/// actions come from the view above.
+private struct EntryRow: View, Equatable {
+    typealias Entry = ConversationView.Entry
+    let entry: Entry
+    let foldable: Bool
+    let size: ReadingSize
+    let liveCard: String?
+    let agentName: String
+    let onAllow: (PermissionRequest) -> Void
+    let onDeny: (PermissionRequest) -> Void
+    let onOpenTerminal: () -> Void
+
+    nonisolated static func == (a: EntryRow, b: EntryRow) -> Bool {
+        guard a.entry.key == b.entry.key, a.foldable == b.foldable, a.size == b.size, a.liveCard == b.liveCard, a.agentName == b.agentName else { return false }
+        switch (a.entry.kind, b.entry.kind) {
+        case (.row(let x), .row(let y)):
+            if case .permissionRequest = x.kind { return false }
+            return x == y
+        case (.separator(let x), .separator(let y)), (.footer(let x), .footer(let y)): return x == y
+        default: return false
+        }
+    }
+
+    var body: some View { entryView(entry, foldable: foldable) }
 
     @ViewBuilder private func entryView(_ e: Entry, foldable: Bool) -> some View {
         switch e.kind {
@@ -349,28 +511,6 @@ struct ConversationView: View {
         case .footer(let t):
             Text(t).font(.subheadline.weight(.medium).monospacedDigit()).foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// Adjacent tool-chip items form one chip row.
-    static func displayRows(_ items: ArraySlice<ConversationItem>) -> [ConversationItem] {
-        var out: [ConversationItem] = []
-        for it in items {
-            if case .toolChips(let c) = it.kind, let last = out.last, case .toolChips(let prev) = last.kind {
-                out[out.count - 1] = ConversationItem(id: last.id, kind: .toolChips(prev + c), timestamp: last.timestamp)
-            } else { out.append(it) }
-        }
-        return out
-    }
-
-    /// Vertical gap between rows (reading.md §3): 32 before a user bubble, 20 after it, 8 around chips.
-    static func gap(_ a: ConversationItem, _ b: ConversationItem) -> CGFloat {
-        switch (a.kind, b.kind) {
-        case (_, .userText): return 32
-        case (.userText, _): return 20
-        case (.toolChips, _), (_, .toolChips): return 8
-        case (_, .status), (.status, _): return 16
-        default: return 14
         }
     }
 
@@ -400,9 +540,46 @@ struct ConversationView: View {
     @ViewBuilder private func approval(_ r: PermissionRequest) -> some View {
         ApprovalCard(request: r, agentName: agentName, canRespond: true, onAllow: { onAllow(r) }, onDeny: { onDeny(r) }, onOpen: onOpenTerminal)
     }
+}
 
-    private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+/// In the background of the anchor row: when SwiftUI places the row (while the frame is drawn), the view moves by as much
+/// as the row did, so that frame shows the row where it was.
+private struct AnchorProbe: NSViewRepresentable {
+    let tracker: ConversationView.BottomTracker
+    final class Probe: NSView {
+        weak var tracker: ConversationView.BottomTracker?
+        private var watched: NSView?
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            if let w = watched { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
+            watched = superview
+            guard let host = superview else { return }
+            host.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSView.frameDidChangeNotification, object: host)
+            moved()
+        }
+        /// The first placement comes before the probe is in a window (no scroll view yet).
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); moved() }
+        @objc func moved() { if let sv = enclosingScrollView { tracker?.fixNow(sv) } }
+    }
+    func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; return v }
+    func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker }
+}
+
+/// "Loading earlier…" over the top of the rows while older rows come in.
+private struct EarlierNotice: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text("Loading earlier…").font(.callout).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .glassCard(radius: 14)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading earlier messages")
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.loading = $0 }
+        .onDisappear { ConversationProbe.loading = .zero }
     }
 }
 
@@ -413,6 +590,8 @@ struct ConversationView: View {
     /// Only a check turns them on: the actions keep the view's state alive.
     static var enabled = false
     static var earlier = CGRect.zero, latest = CGRect.zero
+    /// The "Loading earlier" notice while older rows load (window coordinates), else zero.
+    static var loading = CGRect.zero
     private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
     private static var owners: [Button: UUID] = [:]
     enum Button { case earlier, latest }

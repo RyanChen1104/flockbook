@@ -15,7 +15,10 @@ struct MessageText: NSViewRepresentable {
     /// Folded: this tall at most, the bottom 48 pt fading out.
     var maxHeight: CGFloat? = nil
 
+    /// Calls so far (the bench counts how many rows a change touches).
+    static var makes = 0, updates = 0, fits = 0
     func makeNSView(context: Context) -> MessageTextView {
+        Self.makes += 1
         let tv = MessageTextView.make()
         tv.load(content)
         tv.fold = maxHeight
@@ -23,11 +26,13 @@ struct MessageText: NSViewRepresentable {
     }
 
     func updateNSView(_ tv: MessageTextView, context: Context) {
+        Self.updates += 1
         if tv.contentID != content.id { tv.load(content) }
         if tv.fold != maxHeight { tv.fold = maxHeight }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MessageTextView, context: Context) -> CGSize? {
+        Self.fits += 1
         let offered = proposal.width ?? .infinity
         let width = offered.isFinite ? max(1, offered) : 100_000
         var s = content.size(width: width, fit: fit || !offered.isFinite)
@@ -71,6 +76,8 @@ struct MessageText: NSViewRepresentable {
     /// Texts built and sizes measured so far (checks: a change must not rebuild what is on screen).
     static var builds = 0
     static var measures = 0
+    /// Main-thread time spent building and measuring texts (the bench splits a stall by these).
+    static var buildTime = Duration.zero, measureTime = Duration.zero
 
     private static func cached(_ key: Key, _ build: () -> NSAttributedString) -> MessageContent {
         uses += 1
@@ -78,7 +85,9 @@ struct MessageText: NSViewRepresentable {
         let h = key.hashValue
         if let c = held[h]?.lazy.compactMap(\.content).first(where: { $0.key == key }) { insert(c, key); return c }
         builds += 1
+        let t = ContinuousClock.now, parsed = MarkdownCache.parseTime
         let c = MessageContent(build())
+        buildTime += ContinuousClock.now - t - (MarkdownCache.parseTime - parsed)   // a parse inside the build counts as parse
         c.key = key
         if held.count >= heldPrune {
             held = held.compactMapValues { e in let live = e.filter { $0.content != nil }; return live.isEmpty ? nil : live }
@@ -127,7 +136,9 @@ struct MessageText: NSViewRepresentable {
         let key = Int((width * 2).rounded()) * 2 + (fit ? 1 : 0)
         if let s = sizes[key] { return s }
         Self.measures += 1
+        let t = ContinuousClock.now
         let s = TextMeasure.size(self, width: width, fit: fit)
+        Self.measureTime += ContinuousClock.now - t
         if sizes.count > 16 { sizes.removeAll() }
         sizes[key] = s
         return s

@@ -8,6 +8,10 @@ import SwiftUI
 /// does the scroll view come to rest (no scroll or layout loop)? And how long did the main thread stall at most?
 /// Synthetic items only. Under 60 s.
 extension ContentTests {
+    /// The longest main-thread stall an autoload may cause (a hitch the reader sees mid-scroll). Half a page at once, every
+    /// row of the window rendered again, stalled about 100 ms here; a few rows per frame, only new rows rendered, 35–50 ms
+    /// (this check runs a debug build; a quiet scroll alone is about 20 ms). 60 keeps a margin for a busy machine.
+    static let autoloadBudget: Double = 60
     static func conversationChurn(_ args: [String]) async {
         // `--test-conversation-churn <rows>`: rows on screen (default 150, one page); a long session read far back has more.
         if let i = args.firstIndex(of: "--test-conversation-churn"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { ConversationView.page = n }
@@ -38,6 +42,9 @@ extension ContentTests {
         let host = NSHostingView(rootView: ChurnView(holder: holder))
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        // CHURN_DARK=1: the whole run in dark mode (the loading notice's shot gets a -dark name).
+        let dark = ProcessInfo.processInfo.environment["CHURN_DARK"] == "1"
+        if dark { win.appearance = NSAppearance(named: .darkAqua) }
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
         print("churn-test: first view: laid out and drawn in \(Int(Date().timeIntervalSince(opened) * 1000)) ms (\(ConversationView.page) rows)")
@@ -157,7 +164,7 @@ extension ContentTests {
             if rest >= 0, rest < 40 { blanks.append("\(name)#\(i) rest \(rest)") }
         }
         /// After a scenario: the view must come to rest within 1.5 s, then stay still for 2 s.
-        func settle(_ name: String) async {
+        func settle(_ name: String, budget: Double = 250) async {
             try? await Task.sleep(for: .milliseconds(1000))
             moves = 0
             let before = sv.contentView.bounds.origin.y
@@ -169,7 +176,7 @@ extension ContentTests {
             let worst = stall.take() * 1000, p = (passes[name] ?? []).sorted()
             let p95 = p.isEmpty ? 0 : p[min(p.count - 1, p.count * 95 / 100)]
             print("churn-test: \(name): at \(Int(Date().timeIntervalSince(t0))) s; layout pass after a change: median \(Int(p.isEmpty ? 0 : p[p.count / 2])) ms, p95 \(Int(p95)) ms")
-            step("\(name): longest main-thread stall \(Int(worst)) ms (under 250)", worst < 250)
+            step("\(name): longest main-thread stall \(Int(worst)) ms (under \(Int(budget)))", worst < budget)
         }
 
         // 1. Appends at the bottom (each new reply folds the one before it).
@@ -273,14 +280,27 @@ extension ContentTests {
             _ = stall.take()
             sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top)); sv.reflectScrolledClipView(sv.contentView)
             let before = topMessage(), count = Self.all(MessageTextView.self, in: host).count
+            // Feedback: a "Loading earlier" notice over the top of the rows (it moves none of them), gone when they are in.
+            // Between run-loop turns (when a frame is committed), the top message stays where it was all through the load.
+            var worst: CGFloat = 0, looks = 0
+            func look() { if let b = before, let d = y(of: b.text) { worst = max(worst, abs(d - b.y)); looks += 1 } else { worst = .infinity } }
+            for _ in 0..<15 { try? await Task.sleep(for: .milliseconds(8)); look() }
+            let pill = ConversationProbe.loading, viewport = sv.convert(sv.bounds, to: nil)
+            step("autoload: a Loading earlier notice shows at the top while rows load (\(pill))",
+                 pill.height > 0 && pill.minY >= viewport.minY && pill.maxY <= viewport.maxY)
+            stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-loading\(dark ? "-dark" : "").png"); stall.resume()
+            for _ in 0..<60 { try? await Task.sleep(for: .milliseconds(8)); look() }
+            step("autoload: while rows come in, the top message never moves (worst \(Int(worst)) pt over \(looks) looks)",
+                 before != nil && worst < 3)
             try? await Task.sleep(for: .milliseconds(900))
             let now = Self.all(MessageTextView.self, in: host).count, loaded = now > count
             let after = before.flatMap { y(of: $0.text) }
             step("autoload: at the top, older rows load without a press (\(count) -> \(now) messages)", loaded)
             step("autoload: after the load, the top message stays in place (\(before.map { Int($0.y) } ?? -1) -> \(after.map { Int($0) } ?? -1) pt)",
                  loaded && before != nil && after != nil && abs(after! - before!.y) < 3)
+            step("autoload: the notice goes when the rows are in (\(ConversationProbe.loading))", ConversationProbe.loading == .zero)
             stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload.png"); stall.resume()
-            await settle("autoload")
+            await settle("autoload", budget: Self.autoloadBudget)
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
 
@@ -307,7 +327,7 @@ extension ContentTests {
             await intoTop()
             let capBefore = topMessage(), capOld = evens()
             _ = stall.take()
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .milliseconds(1500))
             let capNew = evens()
             let capLoaded = !capOld.isEmpty && !capNew.isEmpty && capNew[0] < capOld[0] && capNew.last! < capOld.last!
             let capAfter = capBefore.flatMap { y(of: $0.text) }
@@ -315,7 +335,7 @@ extension ContentTests {
                  latest.height > 0 && capLoaded)
             step("autoload-cap: the top message stays in place (\(capBefore.map { Int($0.y) } ?? -1) -> \(capAfter.map { Int($0) } ?? -1) pt)",
                  capLoaded && capBefore != nil && capAfter != nil && abs(capAfter! - capBefore!.y) < 3)
-            await settle("autoload-cap")
+            await settle("autoload-cap", budget: Self.autoloadBudget)
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
 
@@ -393,7 +413,7 @@ private struct ProbeView: View {
 }
 
 /// Longest gap between ticks of a 5 ms main-thread timer.
-@MainActor private final class StallMeter {
+@MainActor final class StallMeter {
     private var timer: Timer?
     private var last = Date()
     private var worst: TimeInterval = 0

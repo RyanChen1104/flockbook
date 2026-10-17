@@ -234,6 +234,19 @@ import ImageIO
                 } } }
                 b.workspaces = ws
             }
+            // `rich <session> <rows>`: that many older rows in front, of a real reply's weight (paragraphs, lists, code).
+            if w.count == 3, w[0] == "rich", let n = Int(w[2]) {
+                b.items[w[1]] = (0..<n).map { i in
+                    if i % 4 == 0 { return ConversationItem(id: "\(w[1])-rich\(i)", kind: .userText("Rich step \(i): check the parser and report what changed.")) }
+                    var s = "Rich reply \(i)."
+                    for p in 0..<(1 + (i * 7) % 6) {
+                        s += "\n\nParagraph \(p): the reader shows this text wrapped to the column width, with **bold** and `code` spans, long enough to take several lines."
+                        if p % 3 == 1 { s += "\n\n- first point\n- second point with more words\n- third" }
+                        if p % 4 == 2 { s += "\n\n```swift\nlet value = parse(line)\nprint(value)\n```" }
+                    }
+                    return ConversationItem(id: "\(w[1])-rich\(i)", kind: .assistantText(s))
+                } + (b.items[w[1]] ?? [])
+            }
             if w.count == 3, w[0] == "grow", let n = Int(w[2]) {
                 let start = b.items[w[1]]?.count ?? 0
                 b.items[w[1], default: []] += (start..<(start + n)).map { i in

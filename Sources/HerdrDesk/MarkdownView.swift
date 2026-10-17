@@ -13,7 +13,10 @@ struct MarkdownView: View {
 
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
 
+    /// Body evaluations so far (the bench counts how many rows a change renders again).
+    static var bodies = 0
     var body: some View {
+        let _ = Self.bodies += 1
         let lines = MarkdownCache.blocksAndLines(for: text, size: size).lines
         let fold = foldable && !expanded && lines > 40
         VStack(alignment: .leading, spacing: 0) {
@@ -62,13 +65,17 @@ struct MarkdownView: View {
 @MainActor enum MarkdownCache {
     private struct Entry { var blocks: [MBlock]; var lines: [ReadingSize: Int] = [:] }
     private static var store: [String: Entry] = [:]
+    /// Main-thread time spent parsing markdown (the bench splits a stall by it).
+    static var parseTime = Duration.zero
     static func blocks(for text: String) -> [MBlock] { blocksAndLines(for: text, size: nil).blocks }
     /// One lookup for both: hashing a long reply is itself a cost on every render.
     static func blocksAndLines(for text: String, size: ReadingSize?) -> (blocks: [MBlock], lines: Int) {
         let cached = store[text]
         if let cached, let size, let n = cached.lines[size] { return (cached.blocks, n) }
         if let cached, size == nil { return (cached.blocks, 0) }
+        let t = ContinuousClock.now
         var e = cached ?? Entry(blocks: MBlock.parse(text))
+        if cached == nil { parseTime += ContinuousClock.now - t }
         let lines = size.map { MarkdownView.estimatedLines(text, size: $0) } ?? 0
         if let size { e.lines[size] = lines }
         if cached == nil, store.count > 400 { store.removeAll(keepingCapacity: true) }

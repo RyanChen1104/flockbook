@@ -33,7 +33,8 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 /** An image picked for the next message. `uploaded`: the hub holds it under `name` on this connection. */
 interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
 const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
-interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
+/** `waiting`: older rows that came in and go in front of `items` a few per frame (oldest first). */
+interface PaneView { session?: string; items: Item[]; waiting?: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
 const state = {
   token: load(TOKEN_KEY),
   pairSecret: null as string | null,
@@ -195,15 +196,21 @@ function receive(m: HubMessage): void {
       const v = view(m.pane);
       // The pane shows another session (a new agent there): it opens at its newest message, like a switch.
       if (m.pane === state.watching && v.session !== undefined && v.session !== m.session) { cancelRound(); following = true; }
+      if (v.session !== m.session) v.waiting = undefined;
       v.session = m.session;
       v.hasEarlier = m.hasEarlier;
       if (m.mode === "prepend" && m.pane === state.watching) keepTopRow = true;
-      if (m.mode === "replace") v.items = m.items;
+      if (m.mode === "replace") { v.items = m.items; v.waiting = undefined; }
       else {
         const known = new Map(m.items.map((i) => [i.id, i]));
         const kept = v.items.map((i) => known.get(i.id) ?? i);
-        const added = m.items.filter((i) => !v.items.some((o) => o.id === i.id));
-        v.items = m.mode === "prepend" ? [...added, ...kept] : [...kept, ...added];
+        const have = new Set([...v.items, ...(v.waiting ?? [])].map((i) => i.id));
+        const added = m.items.filter((i) => !have.has(i.id));
+        if (v.waiting) v.waiting = v.waiting.map((i) => known.get(i.id) ?? i);
+        v.items = kept;
+        // Older rows go in a few per frame (all at once, the page lays them all out in one long frame).
+        if (m.mode === "prepend") { v.waiting = [...added, ...(v.waiting ?? [])]; addWaiting(m.pane); return; }
+        v.items.push(...added);
       }
       break;
     }
@@ -490,9 +497,10 @@ function render(): void {
   // Keep each agent's composer text (its own) across renders.
   const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
-  if (!keepComposer(nodes)) {
-    // Another screen or pane: that pane's own draft comes back (not the text of the composer before).
-    app.replaceChildren(...nodes);
+  const kept = keepScreen(nodes);
+  if (!kept) { fillItems(nodes); app.replaceChildren(...nodes); }
+  if (!kept?.composer) {
+    // Another screen, pane or composer: that pane's own draft comes back (not the text of the composer before).
     const fresh = document.getElementById("composer-text") as HTMLTextAreaElement | null;
     if (fresh && state.watching) { fresh.value = state.drafts[state.watching] ?? ""; fitText(fresh); }
   }
@@ -525,12 +533,12 @@ function render(): void {
 
 // --- Older rows. The reader scrolling near the top loads them; "Load earlier" stays for a keyboard or screen reader,
 // and to try again after a failure. Auto-loading stops at `AUTO_ITEMS` rows in a pane (the button still loads more).
-const NEAR_TOP = 600, AUTO_ITEMS = 1000;
+const NEAR_TOP = 600, AUTO_ITEMS = 1000, EARLIER_NOTICE_MS = 500, EARLIER_BATCH = 12;
 /** The next render follows a prepend: it keeps the top row in place. */
 let keepTopRow = false;
 /** The last read of older rows: its pane, session and number. Another pane or session does not see it, and a reply to
  *  an older read changes nothing. */
-let earlier = { pane: "", session: "", gen: 0, busy: false, failed: false };
+let earlier = { pane: "", session: "", gen: 0, busy: false, failed: false, noticeUntil: 0 };
 const earlierOf = (pane: string): typeof earlier | null => (earlier.pane === pane && earlier.session === view(pane).session ? earlier : null);
 /** The first row at least partly in view, and where it is. Read before the new rows are built (they move the old
  *  row nodes). */
@@ -541,16 +549,32 @@ function topRow(): { id: string; top: number } | null {
   }
   return null;
 }
+/** The next few older rows that came in go in front, the row on top staying in place; the rest a frame later. */
+const addTimers = new Map<string, number>();
+function addWaiting(pane: string): void {
+  clearTimeout(addTimers.get(pane));   // one run per pane: new rows that come in while one runs join it
+  addTimers.delete(pane);
+  const v = view(pane);
+  if (!v.waiting?.length) { v.waiting = undefined; render(); return; }
+  v.items = [...v.waiting.splice(Math.max(0, v.waiting.length - EARLIER_BATCH)), ...v.items];
+  if (!v.waiting.length) v.waiting = undefined;
+  keepTopRow = state.watching === pane;
+  render();
+  if (v.waiting) { const session = v.session; addTimers.set(pane, setTimeout(() => { if (view(pane).session === session) addWaiting(pane); }, 16)); }
+}
 async function loadEarlier(pane: string): Promise<void> {
   const v = view(pane), session = v.session;
   if (!session || !v.hasEarlier || !v.items.length || earlierOf(pane)?.busy) return;
   const gen = earlier.gen + 1;
-  earlier = { pane, session, gen, busy: true, failed: false };
+  earlier = { pane, session, gen, busy: true, failed: false, noticeUntil: performance.now() + EARLIER_NOTICE_MS };
   // The notice and the button above the rows change: the row on top stays in place (the page has no scroll anchoring).
   keepTopRow = state.watching === pane;
   render();
-  const r = await request({ type: "loadEarlier", session, before: v.items[0].id });
+  const r = await request({ type: "loadEarlier", session, before: (v.waiting?.[0] ?? v.items[0]).id });
   if (earlier.gen !== gen) return;
+  // The notice stays half a second at least (a flash reads as a glitch); the read itself is over.
+  const wait = earlier.noticeUntil - performance.now();
+  if (wait > 0) setTimeout(render, wait);
   Object.assign(earlier, { busy: false, failed: !r.ok });
   keepTopRow = state.watching === pane;
   render();
@@ -560,7 +584,7 @@ function nearTop(): void {
   const pane = state.watching;
   if (!pane || !state.welcomed || !reader.active || viewTop() >= reader.from || window.scrollY > NEAR_TOP) return;
   const v = view(pane);
-  if (v.items.length >= AUTO_ITEMS || earlierOf(pane)?.failed) return;
+  if (v.waiting || v.items.length >= AUTO_ITEMS || earlierOf(pane)?.failed) return;
   loadEarlier(pane);
 }
 addEventListener("scroll", nearTop, { passive: true });
@@ -583,34 +607,63 @@ function rowsFor(pane: string, list: Item[]): HTMLElement[] {
   });
 }
 
+/** A new screen's rows' list and the rows that go in it. */
+const itemsOf = new WeakMap<Element, Child[]>();
+const rowsIn = (list: Element): (Node | string)[] => (itemsOf.get(list) ?? []).filter((c): c is Node | string => c !== null && c !== undefined && c !== false);
+/** A screen that is not kept: its rows go in its list. */
+function fillItems(nodes: (Node | string)[]): void {
+  for (const n of nodes) if (n instanceof Element) for (const l of n.querySelectorAll(".items")) if (itemsOf.has(l)) { l.append(...rowsIn(l)); itemsOf.delete(l); }
+}
+/** Makes `parent`'s children `desired`, in order, moving only what changed: a node already in its place stays in the
+ *  page. A node taken out and put back loses its layout, and a page that put every row back on each render laid out
+ *  every row again (a long stall when older rows came in). */
+function syncChildren(parent: Node, desired: (Node | string)[]): void {
+  const want = desired.map((n) => typeof n === "string" ? document.createTextNode(n) : n);
+  const keep = new Set(want);
+  let cur = parent.firstChild;
+  for (const n of want) {
+    while (cur && !keep.has(cur)) { const next = cur.nextSibling; parent.removeChild(cur); cur = next; }
+    if (cur === n) { cur = cur.nextSibling; continue; }
+    parent.insertBefore(n, cur);
+  }
+  while (cur) { const next = cur.nextSibling; parent.removeChild(cur); cur = next; }
+}
+
+/** The same pane's conversation stays in the page across renders: its rows' list and the rows in it stay where they
+ *  are (only new and changed rows go in), and so does its composer (see `keepComposer`). Null: another screen or pane,
+ *  nothing done. */
+function keepScreen(nodes: (Node | string)[]): { composer: boolean } | null {
+  const oldSection = app.querySelector<HTMLElement>(":scope > section.conversation");
+  const newSection = nodes.find((n): n is HTMLElement => n instanceof HTMLElement && n.matches("section.conversation"));
+  if (!oldSection || !newSection || oldSection.dataset.pane !== newSection.dataset.pane) return null;
+  const swap = new Map<Node, Node>([[newSection, oldSection]]);
+  const oldItems = oldSection.querySelector(":scope > .items"), newItems = newSection.querySelector(":scope > .items");
+  if (oldItems && newItems) { syncChildren(oldItems, rowsIn(newItems)); swap.set(newItems, oldItems); }
+  else fillItems([newSection]);
+  const form = keepComposer(oldSection, newSection);
+  if (form) swap.set(form.fresh, form.old);
+  syncChildren(oldSection, [...newSection.childNodes].map((n) => swap.get(n) ?? n));
+  syncChildren(app, nodes.map((n) => (typeof n === "string" ? n : swap.get(n) ?? n)));
+  return { composer: !!form };
+}
+
 /** The hub sends news every tick (a compacting or working agent's screen changes each time). The same pane's composer
  *  stays in the page and only its controls are swapped: a phone keyboard closes when its text field leaves the page,
- *  and focusing a new one from script does not bring it back. Its text, caret, focus and IME input stay. False: no
+ *  and focusing a new one from script does not bring it back. Its text, caret, focus and IME input stay. Null: no
  *  composer for the same pane before and after, nothing done. */
-function keepComposer(nodes: (Node | string)[]): boolean {
-  const oldForm = app.querySelector<HTMLFormElement>("form.composer");
-  const newSection = nodes.find((n): n is HTMLElement => n instanceof HTMLElement && !!n.querySelector("form.composer"));
-  const newForm = newSection?.querySelector<HTMLFormElement>("form.composer");
-  const oldSection = oldForm?.parentElement;
-  if (!oldForm || !newForm || !newSection || !oldSection || oldSection.parentElement !== app || newForm.parentElement !== newSection
-    || oldForm.dataset.pane !== newForm.dataset.pane) return false;
+function keepComposer(oldSection: HTMLElement, newSection: HTMLElement): { old: HTMLFormElement; fresh: HTMLFormElement } | null {
+  const oldForm = oldSection.querySelector<HTMLFormElement>(":scope > form.composer");
+  const newForm = newSection.querySelector<HTMLFormElement>(":scope > form.composer");
+  if (!oldForm || !newForm || oldForm.dataset.pane !== newForm.dataset.pane) return null;
+  const oldRow = oldForm.querySelector(":scope > .composer-row"), newRow = newForm.querySelector(":scope > .composer-row");
+  const oldBox = oldRow?.querySelector(":scope > textarea"), newBox = newRow?.querySelector(":scope > textarea");
+  if (!oldRow || !newRow || !oldBox || !newBox) return null;
   // Everything around a kept element is replaced; the kept element itself never leaves the page.
-  const around = (keep: Element, from: ParentNode, fresh: (Node | string)[], instead: Node): void => {
-    for (const c of [...from.childNodes]) if (c !== keep) c.remove();
-    const at = fresh.indexOf(instead);
-    keep.before(...fresh.slice(0, at));
-    keep.after(...fresh.slice(at + 1));
-  };
-  const oldRow = oldForm.querySelector(".composer-row"), newRow = newForm.querySelector(".composer-row");
-  const oldBox = oldRow?.querySelector("textarea"), newBox = newRow?.querySelector("textarea");
-  if (!oldRow || !newRow || !oldBox || !newBox) return false;
-  around(oldSection, app, nodes, newSection);
-  around(oldForm, oldSection, [...newSection.childNodes], newForm);
-  around(oldRow, oldForm, [...newForm.childNodes], newRow);
-  around(oldBox, oldRow, [...newRow.childNodes], newBox);
+  syncChildren(oldRow, [...newRow.childNodes].map((n) => (n === newBox ? oldBox : n)));
+  syncChildren(oldForm, [...newForm.childNodes].map((n) => (n === newRow ? oldRow : n)));
   for (const a of ["placeholder", "aria-label"]) oldBox.setAttribute(a, newBox.getAttribute(a) ?? "");
-  oldBox.disabled = newBox.disabled;
-  return true;
+  (oldBox as HTMLTextAreaElement).disabled = (newBox as HTMLTextAreaElement).disabled;
+  return { old: oldForm, fresh: newForm };
 }
 
 function pairScreen(): HTMLElement {
@@ -707,7 +760,14 @@ function conversationScreen(pane: string): HTMLElement {
   if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
-  return h("section", { class: "conversation" }, head, h("div", { class: "items" }, ...items), card, composer(pane, !!card, where?.p.agent?.name));
+  // Older rows on the way: a notice under the bar, over the rows (it moves none of them).
+  const notice = earlierOf(pane);
+  const pill = v.waiting || (notice && (notice.busy || (!notice.failed && performance.now() < notice.noticeUntil))) ? h("div", { class: "earlier-pill glass-float", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Loading earlier…") : null;
+  // The rows go in when the screen is put in the page (`keepScreen`, `fillItems`): putting the row nodes on hand in a
+  // new list here would take them out of the page.
+  const list = h("div", { class: "items" });
+  itemsOf.set(list, items);
+  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, composer(pane, !!card, where?.p.agent?.name));
 }
 
 function itemView(it: Item): HTMLElement {
