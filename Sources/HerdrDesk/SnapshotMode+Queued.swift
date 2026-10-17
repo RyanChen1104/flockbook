@@ -42,13 +42,14 @@ extension SnapshotRunner {
             } else {
                 step("\(name): the working pane's queue is read", model.queued[pane.id] == q)
             }
-            await shot(queue: model.queued[pane.id], draft: model.drafts[pane.id], agent: pane.agent?.name ?? "claude", dark: dark,
-                 path: "\(dir)/queued-\(name)-\(dark ? "dark" : "light").png")
+            step("\(name): the window stays off every screen", await shot(queue: model.queued[pane.id], draft: model.drafts[pane.id],
+                 agent: pane.agent?.name ?? "claude", dark: dark, path: "\(dir)/queued-\(name)-\(dark ? "dark" : "light").png"))
         }
         // A pull QueuePull refused before any key (too long to check exactly): the app's notice; the queue stays.
         for dark in [false, true] {
             let q = QueuedInput(agent: "claude", items: [String(repeating: "Also run the lint step before you commit, ", count: 3) + "and fix what fails."], pullable: true)
-            await shot(queue: q, draft: nil, agent: "claude", dark: dark, notice: tooLong, path: "\(dir)/queued-refused-\(dark ? "dark" : "light").png")
+            step("refused: the window stays off every screen",
+                 await shot(queue: q, draft: nil, agent: "claude", dark: dark, notice: tooLong, path: "\(dir)/queued-refused-\(dark ? "dark" : "light").png"))
         }
 
         let model = AppModel(store: store)
@@ -108,7 +109,7 @@ extension SnapshotRunner {
 
     /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not
     /// a nested run loop: the composer sizes itself in a main-queue block that a nested run loop would never run.
-    @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, notice: String? = nil, path: String) async {
+    @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, notice: String? = nil, path: String) async -> Bool {
         let size = NSSize(width: 900, height: 420)
         // The bottom of a pane: the last reply, the queue strip and the composer. (The conversation's scroll view does
         // not draw in an offscreen capture, so the reply is a plain bubble here.)
@@ -133,12 +134,16 @@ extension SnapshotRunner {
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
-        for _ in 0..<12 { try? await Task.sleep(for: .milliseconds(150)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
+        // After the show and each layout (SwiftUI can resize it), the frame must touch no screen.
+        var away = true
+        func check() { away = away && !NSScreen.screens.contains(where: { $0.frame.intersects(win.frame) }) }
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless(); check()
+        for _ in 0..<12 { try? await Task.sleep(for: .milliseconds(150)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded(); check() }
         if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
             host.cacheDisplay(in: host.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
         }
         win.orderOut(nil)
+        return away
     }
 }
