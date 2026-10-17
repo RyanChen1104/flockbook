@@ -37,19 +37,26 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     /// (rows that continue one keep their indentation past the two-column margin), and whether its input box holds
     /// only the placeholder. Claude Code 2.1 draws an empty row between two messages, and a blank line of a message as
     /// an empty row too; the rows above the queue (a tool's rows, the sent prompt) have the same shape. So a message
-    /// read here with an empty line may not be one message (`gapped`): `claude(screen:log:)` keeps it only when the
-    /// log has its text.
+    /// read here across an empty row, its own or the one under it, may not be one message, or no queued one at all
+    /// (`gapped`): `claude(screen:log:)` keeps it only when the log has its text with the same blank lines.
     public static func claudeScreen(_ screen: String) -> (items: [String], inputEmpty: Bool)? {
+        claudeRows(screen).map { (items: $0.rows.map(\.text), inputEmpty: $0.inputEmpty) }
+    }
+
+    struct Row: Equatable { var text: String; var gapped: Bool }
+
+    static func claudeRows(_ screen: String) -> (rows: [Row], inputEmpty: Bool)? {
         let lines = screen.components(separatedBy: "\n")
         guard let hint = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == claudeHint }) else { return nil }
-        var groups: [String] = [], cont: [String] = []
+        var groups: [Row] = [], cont: [String] = []
         var i = hint - 1
         while i >= 0 {
             let l = lines[i], blank = l.trimmingCharacters(in: .whitespaces).isEmpty
             if l.hasPrefix("❯ ") {
                 var rows = [trailing(String(l.dropFirst(2)))] + cont.reversed()
-                while rows.count > 1, rows.last == "" { rows.removeLast() }   // the empty row above the next message
-                groups.insert(rows.joined(separator: "\n"), at: 0)
+                let gapped = rows.contains("")
+                if !groups.isEmpty, rows.count > 1, rows.last == "" { rows.removeLast() }   // the empty row above the next message
+                groups.insert(Row(text: rows.joined(separator: "\n"), gapped: gapped), at: 0)
                 cont = []
             } else if blank, !groups.isEmpty || !cont.isEmpty {   // the newest message sits right on the hint
                 cont.append("")
@@ -70,20 +77,20 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     /// line up with the screen (not caught up, or other text): the screen's rows, only those newer than the newest row
     /// with an empty line (that row and the ones above it may be rows above the queue).
     static func claude(screen: String, log: ClaudeQueueLog) -> QueuedInput? {
-        guard let shown = claudeScreen(screen) else { return nil }
-        let rows = shown.items, entries = log.items
+        guard let shown = claudeRows(screen) else { return nil }
+        let rows = shown.rows, entries = log.items
         var m = 0
         while m < entries.count, m < rows.count {
             let e = entries[entries.count - 1 - m], r = rows[rows.count - 1 - m]
-            // A log entry without text matches any row but cannot vouch for one with an empty line.
-            guard same(e, r), e != nil || !gapped(r) else { break }
+            // A log entry without text matches any row but cannot vouch for one read across an empty row.
+            guard r.gapped ? e.map { sameLines($0, r.text) } ?? false : same(e, r.text) else { break }
             m += 1
         }
         guard m > 0 else {
-            let newer = Array(rows.suffix(from: (rows.lastIndex(where: gapped) ?? -1) + 1))
+            let newer = rows.suffix(from: (rows.lastIndex(where: \.gapped) ?? -1) + 1).map(\.text)
             return newer.isEmpty ? nil : QueuedInput(agent: "claude", items: newer, pullable: shown.inputEmpty)
         }
-        let matched: [String?] = (0..<m).reversed().map { (k: Int) -> String? in entries[entries.count - 1 - k] ?? rows[rows.count - 1 - k] }
+        let matched: [String?] = (0..<m).reversed().map { (k: Int) -> String? in entries[entries.count - 1 - k] ?? rows[rows.count - 1 - k].text }
         return QueuedInput(agent: "claude", items: Array(entries.dropLast(m)) + matched, pullable: shown.inputEmpty)
     }
 
@@ -95,8 +102,24 @@ public struct QueuedInput: Codable, Hashable, Sendable {
         return e == r || (r.hasSuffix("…") && e.hasPrefix(String(r.dropLast())))
     }
 
-    /// A screen row with an empty line: a blank line of the message, or more than one message.
-    static func gapped(_ row: String) -> Bool { row.components(separatedBy: "\n").contains("") }
+    /// `same`, and the same blank lines in the same places: each run of lines between two blank lines is compared
+    /// apart from spaces and line breaks (the screen wraps), the blank lines one for one.
+    static func sameLines(_ entry: String, _ row: String) -> Bool {
+        func runs(_ s: String) -> [String] {
+            var out: [String] = [], inRun = false
+            for l in s.components(separatedBy: "\n") {
+                let c = QueuePull.compact(l)
+                if c.isEmpty { out.append(""); inRun = false }
+                else if inRun { out[out.count - 1] += c }
+                else { out.append(c); inRun = true }
+            }
+            return out
+        }
+        let e = runs(entry), r = runs(row)
+        if e == r { return true }
+        guard let cut = r.last, cut.hasSuffix("…"), e.count >= r.count, Array(e.prefix(r.count - 1)) == Array(r.dropLast()) else { return false }
+        return e[r.count - 1].hasPrefix(String(cut.dropLast()))
+    }
 
     /// Without trailing spaces (the screen pads rows); leading ones are the text's own indentation.
     static func trailing(_ s: String) -> String {
