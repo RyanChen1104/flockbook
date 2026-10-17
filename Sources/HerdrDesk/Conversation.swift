@@ -41,11 +41,16 @@ struct ConversationView: View {
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
 
     var body: some View {
-        if let state = Self.emptyState(items: items, loadState: loadState, hasLog: hasLog) {
-            empty(state)
-        } else {
-            list
+        // One view over both branches: a session switch while the empty view shows still resets the read state (a watch
+        // on the list would start with the list, after the switch, and never see it).
+        ZStack {
+            if let state = Self.emptyState(items: items, loadState: loadState, hasLog: hasLog) {
+                empty(state)
+            } else {
+                list
+            }
         }
+        .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false }
     }
 
     /// Which empty view to show, or nil for the list.
@@ -207,7 +212,6 @@ struct ConversationView: View {
                 }
             }
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
-            .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
                 if window.takeLoaded(items.map(\.id), page: tracker.loadPage), let a = tracker.anchor { tracker.anchor?.until = max(a.until, Date().addingTimeInterval(1.5)) }

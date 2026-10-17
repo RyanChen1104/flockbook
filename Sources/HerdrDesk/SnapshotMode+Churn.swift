@@ -326,9 +326,12 @@ extension ContentTests {
             for _ in 0..<3 { await intoTop(); try? await Task.sleep(for: .milliseconds(900)) }
             step("autoload-end: after the log said nothing older, no more reads (\(holder.reads), want 1)", holder.reads == 1)
 
-            // 8d. Another session in the same pane (the view stays): its older rows read again. Fewer rows than a page, so
-            // "Show earlier" is a read of the log.
+            // 8d. Another session in the same pane (the view stays): its older rows read again. It starts with no rows (the
+            // empty view, not the list, sees the switch), then its rows come. Fewer rows than a page, so "Show earlier" is a
+            // read of the log.
+            holder.items = []
             holder.session = "churn-b"
+            try? await Task.sleep(for: .milliseconds(600))
             holder.items = ChurnData.even(30)
             holder.reads = 0
             holder.load = { @MainActor [holder] in holder.reads += 1; return true }
