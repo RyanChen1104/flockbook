@@ -44,7 +44,7 @@ extension ContentTests {
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         // CHURN_DARK=1: the whole run in dark mode (the loading notice's shot gets a -dark name).
         let dark = ProcessInfo.processInfo.environment["CHURN_DARK"] == "1"
-        if dark { win.appearance = NSAppearance(named: .darkAqua) }
+        win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)   // not the system's: a light run stays light
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         host.layoutSubtreeIfNeeded(); win.displayIfNeeded()
         print("churn-test: first view: laid out and drawn in \(Int(Date().timeIntervalSince(opened) * 1000)) ms (\(ConversationView.page) rows)")
@@ -339,6 +339,16 @@ extension ContentTests {
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
 
+            // 8b2. A send while a page of older rows is still going in: the view goes to the newest rows and stays there
+            // (the rest of the page does not go in and take the window off the newest end again).
+            ConversationProbe.pressEarlier?()
+            try? await Task.sleep(for: .milliseconds(60))
+            holder.sent += 1
+            try? await Task.sleep(for: .milliseconds(1500))
+            let sentRows = evens()
+            step("autoload-send: a send mid-load stays at the newest rows (Jump to latest \(ConversationProbe.latest.height > 0), at bottom \(atBottom()), last row \(sentRows.last ?? -1))",
+                 ConversationProbe.latest == .zero && atBottom() && sentRows.last == 2998)
+
             // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
             holder.items = ChurnData.even(120)
             holder.load = { @MainActor [holder] in holder.reads += 1; return false }
@@ -379,6 +389,8 @@ extension ContentTests {
     var load: (() async -> Bool)?
     var reads = 0
     var session: String? = "churn-a"
+    /// Counts the reader's sends (the view goes back to the newest rows on each).
+    var sent = 0
     init(items: [ConversationItem]) { self.items = items }
 }
 
@@ -386,7 +398,7 @@ extension ContentTests {
 private struct ChurnView: View {
     let holder: ChurnHolder
     var body: some View {
-        ConversationView(items: holder.items, agentName: "churn", loadState: .ready, session: holder.session, onLoadEarlier: holder.load)
+        ConversationView(items: holder.items, agentName: "churn", loadState: .ready, scrollToken: holder.sent, session: holder.session, onLoadEarlier: holder.load)
             .paneBar(.top) { Text("churn · label").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
             .paneBar(.bottom) {
                 // The real composer (a text view that grows with its text), plus room for a taller bar.

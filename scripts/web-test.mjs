@@ -895,7 +895,7 @@ async function fakeRun() {
   const retry0 = await p.eval(topOf(read0.text));
   await p.eval("window.__holdEarlier = 1; document.getElementById('load-earlier').click()");
   await new Promise((r) => setTimeout(r, 250));
-  const busy = await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Loading earlier…'`);
+  const busy = await p.eval(`!${failNotice} && !!document.querySelector('.earlier-pill') && document.getElementById('load-earlier')?.disabled === true`);
   const readBusy = await p.eval(topOf(read0.text));
   check(busy === true && Math.abs(readBusy - retry0) < 2, `earlier: while it tries again, the row being read stays in place (${Math.round(retry0)} -> ${Math.round(readBusy)})`);
   await p.until(`${rowCount} > ${f0} && !${failNotice}`, 4000);
@@ -944,6 +944,13 @@ async function fakeRun() {
   const pillAt = await p.eval(pill), richBusy = await p.eval(topOf(richTop.text));
   check(pillAt !== null && Math.abs(richBusy - richTop.top) < 2,
     `earlier: while older rows load, a notice shows at the top (at ${pillAt}) and the row being read stays (${Math.round(richTop.top)} -> ${Math.round(richBusy)})`);
+  // One notice: the Load earlier button keeps its words while the pill says it.
+  // An XPath query: a walk of every node here, on the slowed CPU, would be a stall of its own.
+  const loadingSeen = `(() => { const r = document.evaluate("//body//*[text()[contains(., 'Loading earlier')]]", document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    let n = 0; for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i); if (e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden') n++; } return n; })()`;
+  const seen = await p.eval(loadingSeen);
+  const buttonSeen = await p.eval("(() => { const b = document.getElementById('load-earlier'); return !!b && getComputedStyle(b).visibility !== 'hidden'; })()");
+  check(seen === 1 && !buttonSeen, `earlier: while older rows load, one notice shows: the pill, not the button under it (${seen}, button seen ${buttonSeen})`);
   await p.shot("earlier-loading");
   await p.shot("earlier-loading", true);
   // Each frame while the rows go in (a few per frame), before it is painted: the row being read never moves.
@@ -963,6 +970,17 @@ async function fakeRun() {
   check(await p.eval(pill) === null, "earlier: the notice goes when the rows are in");
   check(Math.abs(richAfter - richTop.top) < 2, `earlier: after the heavy load, the row being read stays in place (${Math.round(richTop.top)} -> ${Math.round(richAfter)})`);
   check(gap < STALL_BUDGET, `earlier: loading heavy older rows stalls the page at most ${Math.round(gap)} ms (CPU 4x slower; budget ${STALL_BUDGET})`);
+  // Back to the newest rows while older rows still go in: the page stays at the bottom (the rest goes in above).
+  const endGap = "Math.round(document.documentElement.scrollHeight - window.innerHeight - window.scrollY)";
+  const rich1 = await p.eval(rowCount);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0)");
+  await p.until(`${rowCount} > ${rich1}`, 4000);
+  const midway = await p.eval(`${rowCount} < ${rich1 + 100}`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await p.until(`${rowCount} >= ${rich1 + 100}`, 8000);
+  await new Promise((r) => setTimeout(r, 800));
+  check(midway === true && await p.eval(`${endGap} <= 4`) === true,
+    `earlier: back at the newest rows mid-load, the page stays at the bottom (midway ${midway}, gap ${await p.eval(endGap)})`);
   await p.eval("clearInterval(window.__meter)");
   await p.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
   hub.stdin.write("session w2:p2 s4\n");

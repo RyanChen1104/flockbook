@@ -750,8 +750,9 @@ function conversationScreen(pane: string): HTMLElement {
   if (v.hasEarlier && v.session) {
     const mine = earlierOf(pane);
     if (mine?.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
-    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: !!mine?.busy, onclick: () => loadEarlier(pane) },
-      mine?.busy ? "Loading earlier…" : mine?.failed ? "Try again" : "Load earlier"));
+    // While it loads the button keeps its words: the notice over the rows says it (one "Loading earlier", not two).
+    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: !!mine?.busy, "aria-busy": mine?.busy ? "true" : "false", onclick: () => loadEarlier(pane) },
+      mine?.failed && !mine.busy ? "Try again" : "Load earlier"));
   }
   items.push(...rowsFor(pane, v.items));
   if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));

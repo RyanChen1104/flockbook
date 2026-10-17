@@ -134,6 +134,8 @@ struct ConversationView: View {
         var loadPage = ConversationView.page
         /// Older rows are going into the window, a few per frame.
         var adding = false
+        /// Counts the pages of older rows put in. Jump to latest starts a new count: the rest of a page on its way stays out.
+        var batches = 0
         /// Loads counted (the notice's number) and when the notice showed.
         var loads = 0
         var noticeSince = Date.distantPast
@@ -284,13 +286,14 @@ struct ConversationView: View {
     /// The notice is drawn before the first rows go in.
     private func add(_ count: Int, notice shown: Int) {
         tracker.adding = true
-        let mine = earlierSession
+        tracker.batches += 1
+        let mine = earlierSession, batch = tracker.batches
         Task { @MainActor in
-            defer { if earlierSession == mine { tracker.adding = false; hideNotice(shown) } }
+            defer { if earlierSession == mine, tracker.batches == batch { tracker.adding = false; hideNotice(shown) } }
             try? await Task.sleep(for: .milliseconds(16))
             var left = count
             while left > 0 {
-                guard earlierSession == mine else { return }
+                guard earlierSession == mine, tracker.batches == batch else { return }
                 let ids = items.map(\.id)
                 guard window.range(ids).lowerBound > 0 else { return }
                 keepTop(ids)
@@ -349,6 +352,8 @@ struct ConversationView: View {
 
     /// The newest page, at the bottom, following again.
     private func jumpToLatest() {
+        tracker.batches += 1; tracker.adding = false
+        if let shown = notice { hideNotice(shown) }
         window.jumpToLatest(page: Self.page)
         tracker.atBottom = true
         tracker.anchor = nil
