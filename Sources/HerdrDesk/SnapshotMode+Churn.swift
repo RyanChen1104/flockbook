@@ -325,7 +325,19 @@ extension ContentTests {
             try? await Task.sleep(for: .milliseconds(600))
             for _ in 0..<3 { await intoTop(); try? await Task.sleep(for: .milliseconds(900)) }
             step("autoload-end: after the log said nothing older, no more reads (\(holder.reads), want 1)", holder.reads == 1)
+
+            // 8d. Another session in the same pane (the view stays): its older rows read again. Fewer rows than a page, so
+            // "Show earlier" is a read of the log.
+            holder.session = "churn-b"
+            holder.items = ChurnData.even(30)
+            holder.reads = 0
+            holder.load = { @MainActor [holder] in holder.reads += 1; return true }
+            try? await Task.sleep(for: .milliseconds(600))
+            ConversationProbe.pressEarlier?()
+            try? await Task.sleep(for: .milliseconds(600))
+            step("autoload-session: another session in the pane reads its older rows (\(holder.reads), want 1)", holder.reads == 1)
             holder.load = nil
+            holder.session = "churn-a"
         }
 
         step("no blank viewport at rest after a change (\(blanks.count): \(blanks.prefix(6)))", blanks.isEmpty)
@@ -343,6 +355,7 @@ extension ContentTests {
     /// The view's read of older log rows (nil: rows in memory only).
     var load: (() async -> Bool)?
     var reads = 0
+    var session: String? = "churn-a"
     init(items: [ConversationItem]) { self.items = items }
 }
 
@@ -350,7 +363,7 @@ extension ContentTests {
 private struct ChurnView: View {
     let holder: ChurnHolder
     var body: some View {
-        ConversationView(items: holder.items, agentName: "churn", loadState: .ready, onLoadEarlier: holder.load)
+        ConversationView(items: holder.items, agentName: "churn", loadState: .ready, session: holder.session, onLoadEarlier: holder.load)
             .safeAreaBar(edge: .top, spacing: 0) { Text("churn · label").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 // The real composer (a text view that grows with its text), plus room for a taller bar.

@@ -21,10 +21,14 @@ struct ConversationView: View {
     /// Changes when the user sends a message: back to the bottom whatever the position, following from there
     /// (the log shows the sent message a moment later).
     var scrollToken = 0
+    /// The session the rows come from. Another session in the pane starts over: it may have older rows to read.
+    var session: String? = nil
     /// Reads an older part of the log; true while older content remains. nil hides the button.
     var onLoadEarlier: (() async -> Bool)? = nil
     @State private var moreEarlier = true
     @State private var loadingEarlier = false
+    /// Counts the sessions the view showed: a read of an older session's log that ends later changes nothing.
+    @State private var earlierSession = 0
     @State private var spinnerDue = false
     /// Rows shown at first; "Show earlier" adds this many again. A check may raise it (a long session read far back).
     static var page = ConversationWindow.page
@@ -203,6 +207,7 @@ struct ConversationView: View {
                 }
             }
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
+            .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
                 if window.takeLoaded(items.map(\.id), page: tracker.loadPage), let a = tracker.anchor { tracker.anchor?.until = max(a.until, Date().addingTimeInterval(1.5)) }
@@ -217,9 +222,10 @@ struct ConversationView: View {
         loadingEarlier = true
         tracker.loadPage = page
         keepTop(ids, for: 4)
-        let token = window.beginLoad()
+        let token = window.beginLoad(), mine = earlierSession
         Task {
-            moreEarlier = await load(); loadingEarlier = false
+            let more = await load()
+            if earlierSession == mine { moreEarlier = more; loadingEarlier = false }
             try? await Task.sleep(for: .seconds(3)); window.loadEnded(token)   // nothing arrived (a newer read stays pending)
         }
     }

@@ -100,6 +100,7 @@ struct PaneView: View {
                                  onFresh: { if focused { focusRequest += 1 } },
                                  loadState: model.store.conversationState(for: agent.sessionId),
                                  scrollToken: model.sendTokens[pane.id] ?? 0,
+                                 session: agent.sessionId,
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
