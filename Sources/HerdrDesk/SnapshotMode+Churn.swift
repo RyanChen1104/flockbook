@@ -283,6 +283,49 @@ extension ContentTests {
             await settle("autoload")
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
+
+            /// Just outside the zone that loads, then into it in one move.
+            func intoTop() async {
+                let outside = NSPoint(x: 0, y: -sv.contentInsets.top + ConversationView.nearTop + 400)
+                for _ in 0..<2 { sv.contentView.scroll(to: outside); sv.reflectScrolledClipView(sv.contentView); try? await Task.sleep(for: .milliseconds(500)) }
+                sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top)); sv.reflectScrolledClipView(sv.contentView)
+            }
+            /// The numbers of the "Even reply" rows on hand, oldest first.
+            func evens() -> [Int] {
+                Self.all(MessageTextView.self, in: host).compactMap { Int($0.string.dropFirst("Even reply ".count).prefix { $0.isNumber }) }.sorted()
+            }
+
+            // 8b. A window at the cap, scrolled back (Show earlier past the cap), takes a page above and drops one below. Rows
+            // of one height: the content height stays the same. Groups of five rows, a tool row at each end: the row on top of
+            // the window is a tool row that merges with the older tool row above it. The top message stays in place all the same.
+            holder.items = ChurnData.even(3000)
+            try? await Task.sleep(for: .milliseconds(600))
+            await scroll(top: false)
+            ConversationProbe.pressEarlier?()
+            try? await Task.sleep(for: .milliseconds(600))
+            let latest = ConversationProbe.latest
+            await intoTop()
+            let capBefore = topMessage(), capOld = evens()
+            _ = stall.take()
+            try? await Task.sleep(for: .milliseconds(900))
+            let capNew = evens()
+            let capLoaded = !capOld.isEmpty && !capNew.isEmpty && capNew[0] < capOld[0] && capNew.last! < capOld.last!
+            let capAfter = capBefore.flatMap { y(of: $0.text) }
+            step("autoload-cap: at the cap, older rows come in and newer go (Jump to latest \(latest.height > 0), rows \(capOld.first ?? -1)…\(capOld.last ?? -1) -> \(capNew.first ?? -1)…\(capNew.last ?? -1))",
+                 latest.height > 0 && capLoaded)
+            step("autoload-cap: the top message stays in place (\(capBefore.map { Int($0.y) } ?? -1) -> \(capAfter.map { Int($0) } ?? -1) pt)",
+                 capLoaded && capBefore != nil && capAfter != nil && abs(capAfter! - capBefore!.y) < 3)
+            await settle("autoload-cap")
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+
+            // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
+            holder.items = ChurnData.even(120)
+            holder.load = { @MainActor [holder] in holder.reads += 1; return false }
+            try? await Task.sleep(for: .milliseconds(600))
+            for _ in 0..<3 { await intoTop(); try? await Task.sleep(for: .milliseconds(900)) }
+            step("autoload-end: after the log said nothing older, no more reads (\(holder.reads), want 1)", holder.reads == 1)
+            holder.load = nil
         }
 
         step("no blank viewport at rest after a change (\(blanks.count): \(blanks.prefix(6)))", blanks.isEmpty)
@@ -297,6 +340,9 @@ extension ContentTests {
     var items: [ConversationItem]
     var bottomBar: CGFloat = 64
     var topBar: CGFloat = 28
+    /// The view's read of older log rows (nil: rows in memory only).
+    var load: (() async -> Bool)?
+    var reads = 0
     init(items: [ConversationItem]) { self.items = items }
 }
 
@@ -304,7 +350,7 @@ extension ContentTests {
 private struct ChurnView: View {
     let holder: ChurnHolder
     var body: some View {
-        ConversationView(items: holder.items, agentName: "churn", loadState: .ready)
+        ConversationView(items: holder.items, agentName: "churn", loadState: .ready, onLoadEarlier: holder.load)
             .safeAreaBar(edge: .top, spacing: 0) { Text("churn · label").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 // The real composer (a text view that grows with its text), plus room for a taller bar.
@@ -354,6 +400,17 @@ private struct ProbeView: View {
 
 /// Synthetic conversation: user turns, replies of mixed length (paragraphs, lists, code), tool chips between.
 enum ChurnData {
+    /// Rows of one height, no times: groups of five (a tool row, three one-line replies, a tool row), so two tool rows
+    /// meet at each group's edge and merge into one.
+    static func even(_ n: Int) -> [ConversationItem] {
+        (0..<n).map { i in
+            i % 5 == 0 || i % 5 == 4
+                ? ConversationItem(id: "et\(i)", kind: .toolChips([ToolChip(symbol: "doc.text", text: "Read a file",
+                                                                       id: UUID(uuidString: String(format: "00000000-0000-0000-0001-%012d", i))!)]))
+                : ConversationItem(id: "ea\(i)", kind: .assistantText("Even reply \(i)."))
+        }
+    }
+
     static func items(_ n: Int) -> [ConversationItem] {
         var out: [ConversationItem] = []
         var t = Date(timeIntervalSince1970: 1_800_000_000)

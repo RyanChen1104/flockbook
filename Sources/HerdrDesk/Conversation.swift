@@ -116,6 +116,9 @@ struct ConversationView: View {
         var tops: [String: CGFloat] = [:]
         /// While older rows come in above: the row that was on top and where it was, so the view keeps it in place.
         var anchor: (key: String, top: CGFloat, offset: CGFloat, until: Date)?
+        /// The top inset as last seen (scrollTo(y:) takes a content point, under it), and a fix of the anchor due next turn.
+        var inset: CGFloat = 0
+        var fixDue = false
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
     }
@@ -150,7 +153,11 @@ struct ConversationView: View {
                     ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
                         entryView(e, foldable: e.item?.id != lastReply)
                             // The row's own top, without the gap above it (the first row has none; it gets one when older rows come in).
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.rowSpace)).minY } action: { tracker.tops[e.key] = $0 }
+                            // The anchor row moved: older rows came in above (also when as many newer rows left, same height).
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.rowSpace)).minY } action: {
+                                tracker.tops[e.key] = $0
+                                if tracker.anchor?.key == e.key { holdAnchor() }
+                            }
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
                     }
                     if window.detached {
@@ -179,18 +186,13 @@ struct ConversationView: View {
                 ScrollMetrics(offset: g.contentOffset.y, content: g.contentSize.height, container: g.containerSize.height,
                               insets: g.contentInsets.top + g.contentInsets.bottom, top: g.contentInsets.top)
             } action: { old, new in
+                tracker.inset = new.top
                 if abs(new.content - old.content) > 0.5 || abs(new.container - old.container) > 0.5 || abs(new.insets - old.insets) > 0.5 {
                     if tracker.atBottom {
                         // Next turn of the run loop: scrolling inside the update pass makes SwiftUI report "multiple times per frame".
                         Task { @MainActor in position.scrollTo(edge: .bottom) }
-                    } else if let a = tracker.anchor, a.until > Date() {
-                        // Older rows came in above: the row that was on top moves down by their height, and the view with it.
-                        // After the update pass, when every row reported its new top.
-                        // scrollTo(y:) takes a content point, which sits under the top inset: the offset plus the inset.
-                        let inset = new.top
-                        Task { @MainActor in
-                            if let top = tracker.tops[a.key], abs(top - a.top) > 0.5 { position.scrollTo(y: a.offset + inset + top - a.top) }
-                        }
+                    } else {
+                        holdAnchor()
                     }
                 } else {
                     tracker.atBottom = new.atBottom
@@ -211,7 +213,7 @@ struct ConversationView: View {
     private func showEarlier(page: Int = Self.page) {
         let ids = items.map(\.id)
         if window.range(ids).lowerBound > 0 { keepTop(ids); window.showEarlier(ids, page: page); return }
-        guard let load = onLoadEarlier, !loadingEarlier else { return }
+        guard let load = onLoadEarlier, moreEarlier, !loadingEarlier else { return }
         loadingEarlier = true
         tracker.loadPage = page
         keepTop(ids, for: 4)
@@ -224,8 +226,28 @@ struct ConversationView: View {
 
     /// The row now on top of the window stays where it is on screen while older rows come in above it (for `seconds`).
     private func keepTop(_ ids: [String], for seconds: Double = 1.5) {
-        guard let key = Self.entries(Self.displayRows(items[window.range(ids)])).first?.key, let top = tracker.tops[key] else { return }
+        guard let key = Self.anchorKey(Self.entries(Self.displayRows(items[window.range(ids)]))), let top = tracker.tops[key] else { return }
         tracker.anchor = (key, top, tracker.offset, Date().addingTimeInterval(seconds))
+    }
+
+    /// The row to keep in place: the first that is not a tool row. A tool row on top merges with an older tool row that
+    /// comes in above it and takes that row's id, so its key would be gone.
+    static func anchorKey(_ entries: [Entry]) -> String? {
+        (entries.first { if case .row(let i) = $0.kind, case .toolChips = i.kind { false } else if case .row = $0.kind { true } else { false } } ?? entries.first)?.key
+    }
+
+    /// Older rows came in above and moved the anchor row: the view moves by as much. Next turn of the run loop, after the
+    /// update pass, when every row reported its new top (scrolling inside the pass makes SwiftUI report "multiple times per frame").
+    private func holdAnchor() {
+        guard !tracker.fixDue else { return }
+        tracker.fixDue = true
+        Task { @MainActor in
+            tracker.fixDue = false
+            guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
+            let offset = a.offset + top - a.top
+            position.scrollTo(y: offset + tracker.inset)
+            tracker.anchor = (a.key, top, offset, a.until)
+        }
     }
 
     /// The newest page, at the bottom, following again.
