@@ -392,8 +392,7 @@ struct TopRowToolbar: ToolbarContent {
     let model: AppModel   // passed explicitly: toolbar items are hosted outside the content's environment
     var body: some ToolbarContent {
         // Centered in the toolbar. No system background: TopRow draws its own glass capsule, so no wider shape sits behind it.
-        ToolbarItem(placement: .principal) { TopRow().environment(model).environment(\.islandHost, .toolbar) }
-            .sharedBackgroundVisibility(.hidden)
+        PrincipalToolbarItem { TopRow().environment(model).environment(\.islandHost, .toolbar) }
         TopRowActions(model: model)
     }
 }
@@ -426,7 +425,7 @@ struct FullScreenTopRow: View {
     }
 
     private var buttons: some View {
-        GlassEffectContainer {
+        GlassGroup {
             HStack(spacing: 0) {
                 Button { model.newTab() } label: { Image(systemName: "plus").frame(width: 36, height: TopRow.height).contentShape(Rectangle()) }
                     .help("New tab (⌘T)")
@@ -444,7 +443,7 @@ struct FullScreenTopRow: View {
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 2)
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .glassSurface(Capsule(), interactive: true)
         }
         .probe { ChromeProbe.fullScreenActions = $0 }
     }
@@ -454,13 +453,14 @@ struct FullScreenTopRow: View {
 /// Flat (snapshot) mode and Reduce Transparency: plain fill.
 struct IslandGlass: ViewModifier {
     @Environment(\.flatGlass) private var flat
+    @Environment(\.legacyLook) private var legacy
     @Environment(\.accessibilityReduceTransparency) private var reduce
     func body(content: Content) -> some View {
-        if flat || reduce {
+        if flat && !legacy || reduce {
             content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
                 .overlay(Capsule().stroke(Color.primary.opacity(0.1)))
         } else {
-            content.glassEffect(.regular, in: Capsule())
+            content.glassSurface(Capsule())
         }
     }
 }

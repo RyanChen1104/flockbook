@@ -25,6 +25,7 @@ import SwiftUI
         if args.contains("--test-open-latest") { Task { await openLatest() }; return true }
         if args.contains("--test-conversation-churn") { Task { await conversationChurn(args) }; return true }
         if args.contains("--test-busy-tab") { Task { await busyTab() }; return true }
+        if args.contains("--test-legacy-look") { Task { await legacyLook() }; return true }
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }
@@ -38,7 +39,7 @@ import SwiftUI
         return false
     }
 
-    private static func offscreen(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
+    static func offscreen(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -155,17 +156,17 @@ import SwiftUI
     }
 
     /// Pixels of a saved capture, in the host view's points (top-left origin).
-    private static func pixels(_ path: String, _ host: NSView) -> ((CGFloat, CGFloat) -> NSColor?)? {
+    static func pixels(_ path: String, _ host: NSView) -> ((CGFloat, CGFloat) -> NSColor?)? {
         guard let rep = NSImage(contentsOfFile: path).flatMap({ $0.tiffRepresentation }).flatMap(NSBitmapImageRep.init(data:)) else { return nil }
         let k = CGFloat(rep.pixelsWide) / host.bounds.width
         let titleBar = CGFloat(rep.pixelsHigh) - host.bounds.height * k   // the capture includes the title bar
         return { x, y in rep.colorAt(x: Int(x * k), y: Int(titleBar + y * k))?.usingColorSpace(.sRGB) }
     }
-    private static func same(_ p: NSColor?, _ q: NSColor?) -> Bool {
+    static func same(_ p: NSColor?, _ q: NSColor?) -> Bool {
         guard let p, let q else { return false }
         return abs(p.redComponent - q.redComponent) < 0.01 && abs(p.greenComponent - q.greenComponent) < 0.01 && abs(p.blueComponent - q.blueComponent) < 0.01
     }
-    private static func hex(_ c: NSColor?) -> String { c.map { String(format: "%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "nil" }
+    static func hex(_ c: NSColor?) -> String { c.map { String(format: "%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "nil" }
 
     /// One surface tone: shell and agent panes on the same window surface, the real terminal view transparent with no
     /// scroller; read-only composer buttons look disabled.
@@ -364,7 +365,7 @@ import SwiftUI
         let short = HerdrStore.preview.conversation(for: nil)
         for (name, soft) in [("bare", false), ("bare-soft", true)] {
             let v = ConversationView(items: short, agentName: "orchard-main-orch", loadState: .ready, hasLog: true)
-            let (w, h) = offscreen(ZStack { WindowSurface(glass: .off); if soft { v.scrollEdgeEffectStyle(.soft, for: [.top, .bottom]) } else { v } }
+            let (w, h) = offscreen(ZStack { WindowSurface(glass: .off); if soft { v.softScrollEdges([.top, .bottom]) } else { v } }
                 .environment(\.flatGlass, true), NSSize(width: 760, height: 900))
             try? await Task.sleep(for: .milliseconds(800))
             let p = "\(dir)/textsize-short-\(name).png"

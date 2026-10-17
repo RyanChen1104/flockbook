@@ -158,7 +158,7 @@ struct FullScreenChrome: View {
             Button { model.toggleSidebar() } label: {
                 Image(systemName: "sidebar.left").font(.system(size: 15, weight: .regular)).foregroundStyle(.secondary)
                     .frame(width: f.width, height: f.height)
-                    .background { Circle().fill(.clear).glassEffect(.regular, in: Circle()).opacity(shown ? 0 : 1) }
+                    .background { Circle().fill(.clear).glassSurface(Circle()).opacity(shown ? 0 : 1) }
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
