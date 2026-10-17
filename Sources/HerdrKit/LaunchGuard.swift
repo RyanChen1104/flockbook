@@ -21,13 +21,14 @@ public enum LaunchGuard {
         "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn",
         "--test-question-live", "--bench-conversation", "--test-conversation-churn", "--test-busy-tab",
         "--test-open-latest", "--test-open-latest-live", "--test-open-latest-log",
+        "--test-legacy-look",
     ]
     /// The checks with a real window, run only with the owner's leave.
     public static let realWindow: Set<String> = ["--test-fullscreen-real", "--test-scroll-real"]
     /// Options that change a launch or a check: the session, the look, the preview stores, the fuzz seed, live-check modes.
     public static let options: Set<String> = [
         "--session", "--read-only", "--light", "--dark", "--save-window", "--preview", "--preview-dense", "--seed",
-        "--deny", "--image", "--warm", "--other",
+        "--deny", "--image", "--warm", "--other", "--legacy-look",
     ]
     public static let known: Set<String> = headless.union(content).union(realWindow).union(options)
 
@@ -57,6 +58,11 @@ public enum LaunchGuard {
         guard screens.contains(where: { $0.intersects(r) }) else { return r }
         let left = screens.map(\.minX).min() ?? 0
         return CGRect(x: left - r.width - 3000, y: -3000, width: r.width, height: r.height)
+    }
+
+    /// The pre-26 look forced on (macOS 15 support: `--legacy-look` or FLOCKBOOK_LEGACY_LOOK=1), to see it on 26.
+    public static func legacyLookForced(_ arguments: [String], environment: [String: String]) -> Bool {
+        arguments.contains("--legacy-look") || environment["FLOCKBOOK_LEGACY_LOOK"] == "1"
     }
 
     private static func usage(_ what: String) -> String {

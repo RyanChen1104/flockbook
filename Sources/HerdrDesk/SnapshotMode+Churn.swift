@@ -266,20 +266,20 @@ extension ContentTests {
     init(items: [ConversationItem]) { self.items = items }
 }
 
-/// The pane's shape: ConversationView with a composer-like bar under it (PaneView uses safeAreaBar the same way).
+/// The pane's shape: ConversationView with a composer-like bar under it (PaneView uses paneBar the same way).
 private struct ChurnView: View {
     let holder: ChurnHolder
     var body: some View {
         ConversationView(items: holder.items, agentName: "churn", loadState: .ready)
-            .safeAreaBar(edge: .top, spacing: 0) { Text("churn · label").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
+            .paneBar(.top) { Text("churn · label").font(.caption).frame(maxWidth: .infinity).frame(height: 28) }
+            .paneBar(.bottom) {
                 // The real composer (a text view that grows with its text), plus room for a taller bar.
                 VStack(spacing: 0) {
                     ComposerView(agentName: "churn", draft: ComposerDraft(text: "A draft reply"), onSend: { _ in })
                     Color.clear.frame(height: max(0, holder.bottomBar - 64))
                 }
             }
-            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .softScrollEdges([.top, .bottom])
     }
 }
 

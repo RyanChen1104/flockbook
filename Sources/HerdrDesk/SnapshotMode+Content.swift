@@ -25,6 +25,7 @@ import SwiftUI
         if args.contains("--test-open-latest") { Task { await openLatest() }; return true }
         if args.contains("--test-conversation-churn") { Task { await conversationChurn(args) }; return true }
         if args.contains("--test-busy-tab") { Task { await busyTab() }; return true }
+        if args.contains("--test-legacy-look") { Task { await legacyLook() }; return true }
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }
@@ -38,7 +39,7 @@ import SwiftUI
         return false
     }
 
-    private static func offscreen(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
+    static func offscreen(_ view: some View, _ size: NSSize) -> (NSWindow, NSView) {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -155,17 +156,17 @@ import SwiftUI
     }
 
     /// Pixels of a saved capture, in the host view's points (top-left origin).
-    private static func pixels(_ path: String, _ host: NSView) -> ((CGFloat, CGFloat) -> NSColor?)? {
+    static func pixels(_ path: String, _ host: NSView) -> ((CGFloat, CGFloat) -> NSColor?)? {
         guard let rep = NSImage(contentsOfFile: path).flatMap({ $0.tiffRepresentation }).flatMap(NSBitmapImageRep.init(data:)) else { return nil }
         let k = CGFloat(rep.pixelsWide) / host.bounds.width
         let titleBar = CGFloat(rep.pixelsHigh) - host.bounds.height * k   // the capture includes the title bar
         return { x, y in rep.colorAt(x: Int(x * k), y: Int(titleBar + y * k))?.usingColorSpace(.sRGB) }
     }
-    private static func same(_ p: NSColor?, _ q: NSColor?) -> Bool {
+    static func same(_ p: NSColor?, _ q: NSColor?) -> Bool {
         guard let p, let q else { return false }
         return abs(p.redComponent - q.redComponent) < 0.01 && abs(p.greenComponent - q.greenComponent) < 0.01 && abs(p.blueComponent - q.blueComponent) < 0.01
     }
-    private static func hex(_ c: NSColor?) -> String { c.map { String(format: "%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "nil" }
+    static func hex(_ c: NSColor?) -> String { c.map { String(format: "%02X%02X%02X", Int($0.redComponent * 255), Int($0.greenComponent * 255), Int($0.blueComponent * 255)) } ?? "nil" }
 
     /// One surface tone: shell and agent panes on the same window surface, the real terminal view transparent with no
     /// scroller; read-only composer buttons look disabled.
@@ -364,7 +365,7 @@ import SwiftUI
         let short = HerdrStore.preview.conversation(for: nil)
         for (name, soft) in [("bare", false), ("bare-soft", true)] {
             let v = ConversationView(items: short, agentName: "orchard-main-orch", loadState: .ready, hasLog: true)
-            let (w, h) = offscreen(ZStack { WindowSurface(glass: .off); if soft { v.scrollEdgeEffectStyle(.soft, for: [.top, .bottom]) } else { v } }
+            let (w, h) = offscreen(ZStack { WindowSurface(glass: .off); if soft { v.softScrollEdges([.top, .bottom]) } else { v } }
                 .environment(\.flatGlass, true), NSSize(width: 760, height: 900))
             try? await Task.sleep(for: .milliseconds(800))
             let p = "\(dir)/textsize-short-\(name).png"
@@ -518,10 +519,12 @@ import SwiftUI
     }
 
     /// Scrolling screens under the toolbar (dense preview, short window so each one scrolls): layout only. At the top the
-    /// content starts below the toolbar; it scrolls; the system soft scroll edge is set on its scroll area (pocket views:
-    /// soft mask shown, hard pocket hidden). Under the toolbar the content fades by the system soft edge alone, and a
-    /// window-server capture of this offscreen window does not render that edge (scrolled pictures show text under the
-    /// island; .hard does render), so the band's ink is printed for information, not checked. Real window: owner to check.
+    /// content starts below the toolbar (the window's own toolbar band: 52 pt on 26, 38 pt on 15); it scrolls.
+    /// 26: the system soft scroll edge is set on its scroll area (pocket views: soft mask shown, hard pocket hidden). The
+    /// content fades by that edge alone, and a window-server capture of this offscreen window does not render it
+    /// (scrolled pictures show text under the island; .hard does render), so the band's ink is printed for information,
+    /// not checked. Real window: owner to check. Before 26 (no soft edge): the window surface covers the band, so
+    /// scrolled content adds no ink there.
     static func scrollTop() async {
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("scrolltop-test: \(n) \(ok ? "ok" : "FAIL")") }
@@ -544,7 +547,9 @@ import SwiftUI
                 step("\(name): scroll area found", false); continue
             }
             let inset = s.contentInsets.top, r = top(s)
-            step("\(name): content starts below the toolbar (inset \(Int(inset)), origin \(Int(s.contentView.bounds.minY)))", inset >= 44 && s.contentView.bounds.minY <= -inset + 0.5)
+            let band = win.frame.height - win.contentLayoutRect.height   // title bar and toolbar, above the layout rect
+            step("\(name): content starts below the toolbar (inset \(Int(inset)), origin \(Int(s.contentView.bounds.minY)), toolbar \(Int(band)))",
+                 band >= 30 && inset >= band - 0.5 && s.contentView.bounds.minY <= -inset + 0.5)
             let a = "\(dir)/scrolltop-\(name)-top.png", b = "\(dir)/scrolltop-\(name)-scrolled.png"
             capture(win, to: a)
             let maxY = (s.documentView?.frame.height ?? 0) + s.contentInsets.bottom - s.contentView.bounds.height
@@ -566,14 +571,20 @@ import SwiftUI
                 }
                 return n
             }
-            let atTop = ink(a, 4, 40), scrolled = ink(b, 4, 40), below = ink(b, inset + 8, inset + 60)
-            print("scrolltop-test: \(name): toolbar band ink, scrolled vs top: \(scrolled) vs \(atTop) px (information: captures do not render the soft edge)")
+            let atTop = ink(a, 4, inset), scrolled = ink(b, 4, inset), below = ink(b, inset + 8, inset + 60)
+            if LegacyLook.on {
+                step("\(name): no text in the toolbar band when scrolled (ink scrolled vs top: \(scrolled) vs \(atTop) px)", scrolled <= atTop + atTop / 50 + 20)
+            } else {
+                print("scrolltop-test: \(name): toolbar band ink, scrolled vs top: \(scrolled) vs \(atTop) px (information: captures do not render the soft edge)")
+            }
             step("\(name): content below the toolbar is drawn (\(below) ink px)", below > 500)
             func views(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(views) }
             let pocket = views(s).filter { String(describing: type(of: $0)).contains("Pocket") }
             func shown(_ n: String) -> Bool? { pocket.first { String(describing: type(of: $0)) == n }.map { !$0.isHidden } }
-            step("\(name): system soft edge active (soft mask shown \(shown("PocketMask").map(String.init) ?? "none"), hard pocket shown \(shown("NSHardPocketView").map(String.init) ?? "none"))",
-                 shown("PocketMask") == true && shown("NSHardPocketView") != true)
+            if !LegacyLook.on {
+                step("\(name): system soft edge active (soft mask shown \(shown("PocketMask").map(String.init) ?? "none"), hard pocket shown \(shown("NSHardPocketView").map(String.init) ?? "none"))",
+                     shown("PocketMask") == true && shown("NSHardPocketView") != true)
+            }
         }
         print("scrolltop-test: pictures \(dir)/scrolltop-*.png")
         print("scrolltop-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")

@@ -84,7 +84,7 @@ extension ContentTests {
         ZStack {
             WindowSurface(glass: .off)
             ConversationView(items: items, agentName: agent)
-                .safeAreaBar(edge: .bottom, spacing: 0) {
+                .paneBar(.bottom) {
                     if let q = screen ?? PaneView.liveQuestion(items, status: status) {
                         QuestionCard(model: q, agentName: agent, canSend: canSend, onSend: onSend, onLoadAll: onLoadAll, onFlow: onFlow)
                             .id(q.toolUseId)
@@ -95,7 +95,7 @@ extension ContentTests {
                         Text("Reply to \(agent)").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 18)
                     }
                 }
-                .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+                .softScrollEdges([.top, .bottom])
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onConvo($0) }
         }
     }
