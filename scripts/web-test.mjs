@@ -856,7 +856,8 @@ async function fakeRun() {
   const r1 = await p.eval(rowCount);
   await p.click("#load-earlier");
   check(await p.until(`${rowCount} >= ${r1 + 100}`, 4000) === true, `earlier: Load earlier still loads (${r1} -> ${await p.eval(rowCount)})`);
-  // A very long session: auto-loading stops near 1000 rows (one more page at most); the button still loads more.
+  // A very long session: auto-loading stops near 1000 rows. A soft cap: the check is before a load, so the last page
+  // may take it past 1000 (to 1099 at most). The button still loads more.
   await p.type("#composer-text", "longer history");
   await p.click("#composer-send");
   await new Promise((r) => setTimeout(r, 500));
@@ -867,9 +868,60 @@ async function fakeRun() {
     await new Promise((r) => setTimeout(r, 300));
   }
   const capped = await p.eval(rowCount);
-  check(capped >= 1000 && capped < 1100, `earlier: auto-loading stops at the cap (${capped})`);
+  check(capped >= 1000 && capped < 1100, `earlier: auto-loading stops at the soft cap (1000 rows, plus at most the last page: ${capped})`);
   await p.click("#load-earlier");
   check(await p.until(`${rowCount} > ${capped}`, 4000) === true, `earlier: past the cap, Load earlier still loads (${await p.eval(rowCount)})`);
+  // A failed load says so; the notice and Try again leave the row being read where it is. Sends of loadEarlier fail
+  // while window.__failEarlier > 0 (they ask for a row the hub does not have); window.__holdEarlier holds the next one 600 ms.
+  const readRow = `(() => { const e = [...document.querySelectorAll('.items > .msg')].find((e) => e.getBoundingClientRect().bottom > 0);
+    return JSON.stringify(e ? { text: e.textContent, top: e.getBoundingClientRect().top } : { text: "", top: NaN }); })()`;
+  const topOf = (text) => `[...document.querySelectorAll('.items > .msg')].find((e) => e.textContent === ${JSON.stringify(text)})?.getBoundingClientRect().top ?? NaN`;
+  const failNotice = "document.body.innerText.includes('Could not load earlier messages.')";
+  await p.eval(`(() => { const send = WebSocket.prototype.send; window.__failEarlier = 0;
+    WebSocket.prototype.send = function (d) {
+      if (window.__failEarlier > 0 && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__failEarlier--; d = d.replace(/"before":"[^"]*"/, '"before":"no-such-row"'); }
+      if (window.__holdEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__holdEarlier = 0; setTimeout(() => send.call(this, d), 600); return; }
+      return send.call(this, d);
+    }; })()`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 3000)");
+  await new Promise((r) => setTimeout(r, 600));
+  const read0 = JSON.parse(await p.eval(readRow));
+  await p.eval("window.__failEarlier = 1; document.getElementById('load-earlier').click()");
+  check(await p.until(failNotice, 4000) === true, "earlier: a failed load says so");
+  await new Promise((r) => setTimeout(r, 300));
+  const read1 = await p.eval(topOf(read0.text));
+  check(Math.abs(read1 - read0.top) < 2, `earlier: the failure notice leaves the row being read in place (${Math.round(read0.top)} -> ${Math.round(read1)})`);
+  const f0 = await p.eval(rowCount);
+  const retry0 = await p.eval(topOf(read0.text));
+  await p.eval("window.__holdEarlier = 1; document.getElementById('load-earlier').click()");
+  await new Promise((r) => setTimeout(r, 250));
+  const busy = await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Loading earlier…'`);
+  const readBusy = await p.eval(topOf(read0.text));
+  check(busy === true && Math.abs(readBusy - retry0) < 2, `earlier: while it tries again, the row being read stays in place (${Math.round(retry0)} -> ${Math.round(readBusy)})`);
+  await p.until(`${rowCount} > ${f0} && !${failNotice}`, 4000);
+  await new Promise((r) => setTimeout(r, 300));
+  const read2 = await p.eval(topOf(read0.text));
+  check(await p.eval(rowCount) > f0 && Math.abs(read2 - retry0) < 2, `earlier: Try again leaves the row being read in place (${Math.round(retry0)} -> ${Math.round(read2)})`);
+  // Another session in the pane: a script's scroll to the top (opening, switching) loads nothing; the reader's does.
+  hub.stdin.write("session w2:p2 s8 300\n");
+  await p.until("document.body.innerText.includes('New session reply 299')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  const s0 = await p.eval(rowCount);
+  await p.eval("window.scrollTo(0, 0)");
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(rowCount) === s0, `earlier: a script's scroll to the top loads nothing (${s0} -> ${await p.eval(rowCount)})`);
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0)");
+  check(await p.until(`${rowCount} > ${s0}`, 4000) === true, `earlier: the reader's scroll to the top loads (${s0} -> ${await p.eval(rowCount)})`);
+  // A failure in one session is not another's: back to the first session, no notice, and the button loads.
+  await p.eval("window.__failEarlier = 1; document.getElementById('load-earlier').click()");
+  await p.until(failNotice, 4000);
+  hub.stdin.write("session w2:p2 s4\n");
+  await p.until("!document.body.innerText.includes('New session reply 299')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Load earlier'`) === true,
+    `earlier: another session in the pane starts without the other's failure (${await p.eval("document.getElementById('load-earlier')?.textContent")})`);
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");

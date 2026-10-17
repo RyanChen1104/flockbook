@@ -528,7 +528,10 @@ function render(): void {
 const NEAR_TOP = 600, AUTO_ITEMS = 1000;
 /** The next render follows a prepend: it keeps the top row in place. */
 let keepTopRow = false;
-const earlier = { pane: "", busy: false, failed: false };
+/** The last read of older rows: its pane, session and number. Another pane or session does not see it, and a reply to
+ *  an older read changes nothing. */
+let earlier = { pane: "", session: "", gen: 0, busy: false, failed: false };
+const earlierOf = (pane: string): typeof earlier | null => (earlier.pane === pane && earlier.session === view(pane).session ? earlier : null);
 /** The first row at least partly in view, and where it is. Read before the new rows are built (they move the old
  *  row nodes). */
 function topRow(): { id: string; top: number } | null {
@@ -539,20 +542,25 @@ function topRow(): { id: string; top: number } | null {
   return null;
 }
 async function loadEarlier(pane: string): Promise<void> {
-  const v = view(pane);
-  if (!v.session || !v.hasEarlier || !v.items.length || (earlier.pane === pane && earlier.busy)) return;
-  Object.assign(earlier, { pane, busy: true, failed: false });
+  const v = view(pane), session = v.session;
+  if (!session || !v.hasEarlier || !v.items.length || earlierOf(pane)?.busy) return;
+  const gen = earlier.gen + 1;
+  earlier = { pane, session, gen, busy: true, failed: false };
+  // The notice and the button above the rows change: the row on top stays in place (the page has no scroll anchoring).
+  keepTopRow = state.watching === pane;
   render();
-  const r = await request({ type: "loadEarlier", session: v.session, before: v.items[0].id });
-  if (earlier.pane !== pane) return;
+  const r = await request({ type: "loadEarlier", session, before: v.items[0].id });
+  if (earlier.gen !== gen) return;
   Object.assign(earlier, { busy: false, failed: !r.ok });
+  keepTopRow = state.watching === pane;
   render();
 }
+/** Only the reader scrolling up loads: a script's scroll (opening, switching, a page that got shorter) does not. */
 function nearTop(): void {
   const pane = state.watching;
-  if (!pane || !state.welcomed || window.scrollY > NEAR_TOP) return;
+  if (!pane || !state.welcomed || !reader.active || viewTop() >= reader.from || window.scrollY > NEAR_TOP) return;
   const v = view(pane);
-  if (v.items.length >= AUTO_ITEMS || (earlier.pane === pane && earlier.failed)) return;
+  if (v.items.length >= AUTO_ITEMS || earlierOf(pane)?.failed) return;
   loadEarlier(pane);
 }
 addEventListener("scroll", nearTop, { passive: true });
@@ -687,10 +695,10 @@ function conversationScreen(pane: string): HTMLElement {
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
   const items: Child[] = [];
   if (v.hasEarlier && v.session) {
-    const mine = earlier.pane === pane;
-    if (mine && earlier.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
-    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: mine && earlier.busy, onclick: () => loadEarlier(pane) },
-      mine && earlier.busy ? "Loading earlier…" : mine && earlier.failed ? "Try again" : "Load earlier"));
+    const mine = earlierOf(pane);
+    if (mine?.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
+    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: !!mine?.busy, onclick: () => loadEarlier(pane) },
+      mine?.busy ? "Loading earlier…" : mine?.failed ? "Try again" : "Load earlier"));
   }
   items.push(...rowsFor(pane, v.items));
   if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));

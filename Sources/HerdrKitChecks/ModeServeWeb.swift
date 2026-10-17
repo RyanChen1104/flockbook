@@ -6,7 +6,7 @@ import ImageIO
 /// TLS with a throwaway self-signed certificate, 127.0.0.1 only, never herdr. Prints one JSON line
 /// (port, cert path, tokens), then serves until stdin closes. Input changes the fake state the way an agent would.
 /// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open);
-/// `session <pane> <session>` puts another session in a pane.
+/// `session <pane> <session> [rows]` puts another session in a pane (40 rows unless given).
 @MainActor func modeServeWeb() async throws {
     guard CommandLine.arguments.contains("--serve-web") else { return }
     let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkweb-\(UUID().uuidString)")
@@ -224,10 +224,10 @@ import ImageIO
         try? await Task.sleep(for: .milliseconds(100))
         for line in stdinLines() {
             let w = line.split(separator: " ").map(String.init)
-            // `session <pane> <session>`: a new agent session in that pane (40 rows of its own).
-            if w.count == 3, w[0] == "session" {
+            // `session <pane> <session> [rows]`: a new agent session in that pane (40 rows of its own unless given).
+            if w.count == 3 || w.count == 4, w[0] == "session" {
                 if b.items[w[2]] == nil {
-                    b.items[w[2]] = (0..<40).map { ConversationItem(id: "\(w[2])-\($0)", kind: .assistantText("New session reply \($0). " + String(repeating: "Text to wrap. ", count: 6))) }
+                    b.items[w[2]] = (0..<(w.count == 4 ? Int(w[3]) ?? 40 : 40)).map { ConversationItem(id: "\(w[2])-\($0)", kind: .assistantText("New session reply \($0). " + String(repeating: "Text to wrap. ", count: 6))) }
                 }
                 for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {
                     ws[wi].tabs[ti].panes[pi].agent?.sessionId = w[2]
