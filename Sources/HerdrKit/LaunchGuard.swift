@@ -7,7 +7,7 @@ import CoreGraphics
 public enum LaunchGuard {
     /// Checks that never show a window, a Dock icon, or take focus (HerdrDeskApp).
     public static let headless: Set<String> = [
-        "--headless", "--snapshot", "--snapshot-reading", "--snapshot-log", "--snapshot-live", "--snapshot-demo", "--snapshot-settings",
+        "--headless", "--snapshot", "--snapshot-reading", "--snapshot-log", "--snapshot-queued", "--snapshot-live", "--snapshot-demo", "--snapshot-settings",
         "--snapshot-remote", "--stress", "--hittest", "--test-approve", "--test-notice", "--test-hub", "--test-remote",
         "--serve-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab",
         "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel",
@@ -20,6 +20,7 @@ public enum LaunchGuard {
         "--test-sendfail", "--test-loadstate", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search",
         "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn",
         "--test-question-live", "--bench-conversation", "--test-conversation-churn", "--test-busy-tab",
+        "--test-open-latest", "--test-open-latest-live", "--test-open-latest-log",
     ]
     /// The checks with a real window, run only with the owner's leave.
     public static let realWindow: Set<String> = ["--test-fullscreen-real", "--test-scroll-real"]

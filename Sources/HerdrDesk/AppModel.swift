@@ -93,9 +93,8 @@ final class AppModel {
 
     func send(_ text: String, to pane: Pane) {
         guard writesEnabled else { return }
-        noteSent(pane.id)
-        let client = store.client, id = pane.id, kind = pane.agent?.kind
-        Task { await MessageSender.send(text, to: id, client: client, kind: kind) }
+        let id = pane.id, kind = pane.agent?.kind
+        Task { await deliver(text, pane: id, kind: kind) }
     }
     /// Test hook: when set, replaces the call to herdr (tests must never create a real tab).
     var newTabHook: ((Workspace) -> Void)?
@@ -320,14 +319,55 @@ final class AppModel {
     /// Unsent composer text per pane id. Memory only. Not observed: the composer owns the live text.
     @ObservationIgnored var drafts: [String: ComposerDraft] = [:]
     func setDraft(_ d: ComposerDraft, for paneID: String) { drafts[paneID] = d.isEmpty ? nil : d }
+    /// Bumped when Flockbook puts text in a pane's composer (a pulled queue): the composer starts again from `drafts`.
+    var composerResets: [String: Int] = [:]
+    /// The agents' own queues by pane id (`checkQueue`), and the pulls in flight.
+    var queued: [String: QueuedInput] = [:]
+    /// Panes with a pull running, from the Mac or a phone: one at a time per pane, and no send meanwhile.
+    var pulling: Set<String> = []
+    /// Panes with a pull or a send running (Mac or phone): one at a time per pane, for the whole of it, so a send never
+    /// types into an input box a pull is filling or clearing.
+    @ObservationIgnored var busy: Set<String> = []
+    /// Takes the pane's lock; false: a pull or a send of it runs.
+    func claim(_ id: String) -> Bool { busy.insert(id).inserted }
+    func release(_ id: String) { busy.remove(id) }
+    /// Test hook: when set, replaces MessageSender (offscreen checks must never type into a real pane).
+    @ObservationIgnored var sendHook: ((String, String) async -> Bool)?
+    /// The composer's send: `text` into the pane, holding the pane's lock. Sent: the pulled texts in that composer
+    /// went with it (`composerSent`).
+    func deliver(_ text: String, pane id: String, kind: String?) async -> Bool {
+        guard writesEnabled else { return false }
+        guard claim(id) else {
+            notice = "A pull of this pane is running. Your message was not sent; it is still in the composer."
+            return false
+        }
+        defer { release(id) }
+        noteSent(id)
+        let ok = if let sendHook { await sendHook(id, text) } else { await MessageSender.send(text, to: id, client: store.client, kind: kind) }
+        if ok { composerSent(pane: id) }
+        return ok
+    }
+    /// Pulled texts kept until a composer sent them (`PulledText`): the Mac's own, and the phones' (the hub's).
+    /// The app keeps them in a file (`HerdrDeskApp`); offscreen runs in memory.
+    @ObservationIgnored var pulledTexts = MemoryPulledStore()
+    /// The Mac's kept texts this run put in a composer (the drafts are memory only: a quit puts them there again).
+    @ObservationIgnored var delivered: Set<String> = []
+
+    /// Kept pulled texts of panes that are gone: only from a snapshot herdr gave (an empty one too: the last tab
+    /// closed), never the empty start. Called on every snapshot (`HerdrStore.snapshots`), not only on a change.
+    func prunePulled() {
+        if let known = store.knownPanes { pulledTexts.prune(panes: known) }
+    }
 
     func prune() {
         defer { updateVisibleSessions() }
+        prunePulled()
         let tabs = store.workspaces.flatMap(\.tabs)
         guard !tabs.isEmpty else { return }
         let panes = Set(tabs.flatMap(\.panes).map(\.id))
         for (k, d) in drafts where !panes.contains(k) { d.images.forEach(PasteImages.remove) }
         drafts = drafts.filter { panes.contains($0.key) }
+        queued = queued.filter { panes.contains($0.key) }
         rightClickToPane = rightClickToPane.filter { panes.contains($0) }
         let live = Set(tabs.map(\.id))
         focusedPane = focusedPane.filter { live.contains($0.key) }

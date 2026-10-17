@@ -28,6 +28,7 @@ struct HerdrDeskApp: App {
         // Updates: only a real launch of an installed app checks (UpdaterGate). Never a check, preview or snapshot run.
         let quiet = headless || args.contains { $0.hasPrefix("--test") || $0.hasPrefix("--preview") || $0.hasPrefix("--snapshot") || $0 == "--fuzz" }
         AppUpdater.shared.start(quiet: quiet)
+        Notifier.shared.quiet = quiet
         if let i = args.firstIndex(of: "--test-update"), args.indices.contains(i + 1) {
             let feed = args[i + 1]
             DispatchQueue.main.async { HeadlessUpdateTest.run(feed: feed) }
@@ -70,6 +71,10 @@ struct HerdrDeskApp: App {
             let path = args[i + 1], dir = args[i + 2]
             DispatchQueue.main.async { SnapshotRunner.runLog(path: path, dir: dir) }
         }
+        if let i = args.firstIndex(of: "--snapshot-queued"), args.indices.contains(i + 1) {
+            let dir = args[i + 1]
+            DispatchQueue.main.async { SnapshotRunner.runQueued(dir: dir) }
+        }
         if let i = args.firstIndex(of: "--snapshot-reading"), args.indices.contains(i + 1) {
             let dir = args[i + 1]
             DispatchQueue.main.async { SnapshotRunner.runReading(dir: dir) }
@@ -104,6 +109,7 @@ struct HerdrDeskApp: App {
             Task { @MainActor in await SnapshotRunner.runSettings(dir: dir) }
         }
         let m = AppModel(store: store)
+        m.pulledTexts = FilePulledStore(url: AppModel.pulledTextsFile(session: store.session.name))
         if args.contains("--test-fullscreen-real") {
             let dir = ProcessInfo.processInfo.environment["FS_REAL_DIR"] ?? "build/fullscreen-real/latest"
             // The one check with a real window (owner's leave): an unbundled binary starts without one.
@@ -296,6 +302,7 @@ struct RootView: View {
                 Notifier.shared.onAnswer = { action, pane, prompt in await model.answerNotice(action: action, paneID: pane, prompt: prompt) }
                 if !flat { Notifier.shared.start() }
             }
+            .onChange(of: model.store.snapshots) { _, _ in model.prunePulled() }
             .onChange(of: model.store.workspaces) { _, ws in
                 model.prune()
                 if !flat { Notifier.shared.update(ws) }

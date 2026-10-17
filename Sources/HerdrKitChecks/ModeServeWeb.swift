@@ -5,6 +5,8 @@ import ImageIO
 /// `--serve-web`: a hub with the bundled PWA and a fake backend, for the headless browser test (scripts/web-test.mjs).
 /// TLS with a throwaway self-signed certificate, 127.0.0.1 only, never herdr. Prints one JSON line
 /// (port, cert path, tokens), then serves until stdin closes. Input changes the fake state the way an agent would.
+/// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open);
+/// `session <pane> <session>` puts another session in a pane.
 @MainActor func modeServeWeb() async throws {
     guard CommandLine.arguments.contains("--serve-web") else { return }
     let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkweb-\(UUID().uuidString)")
@@ -94,7 +96,14 @@ import ImageIO
     fflush(stdout)
 
     // Input moves the fake agents on, as herdr would: allow -> working; answer/send -> a new user line.
-    var seen = (0, 0, 0), seenImages = 0
+    var seen = (0, 0, 0), seenImages = 0, seenPulls = 0
+    // A working Claude with two queued messages (its own queue, read from the screen): "queue me", "queue busy", "queue stop".
+    let rule = String(repeating: "─", count: 40)
+    func queueScreen(input: String = "❯ Press up to edit queued messages") -> String {
+        ["⏺ Working on the notes", "❯ Also run the lint step before you commit.", "❯ Then open a draft PR with a short summary.",
+         "  ctrl+enter to send now", "· Baking… (12s)", rule, input, rule].joined(separator: "\n")
+    }
+    let pulledText = "Also run the lint step before you commit.\nThen open a draft PR with a short summary."
     // "compact me": the Claude agent on w2:p2 compacts its context; its screen changes on every pass, as the timer does.
     var compacting = 0
     func setStatus(_ pane: String, _ s: AgentStatus) {
@@ -104,6 +113,12 @@ import ImageIO
         b.workspaces = ws
     }
     while true {
+        // A pull that took the text takes the queue off the agent's screen (before new input, which may set another
+        // screen); a refused one leaves it.
+        if b.pulls.count > seenPulls {
+            seenPulls = b.pulls.count
+            if b.pullOutcome.text != nil { b.screens["w2:p2"] = "⏺ Working on the notes\n" + rule + "\n❯ \n" + rule }
+        }
         let now = (b.approved.count, b.answered.count, b.sent.count)
         if now.0 > seen.0, let last = b.approved.last {
             let pane = String(last.split(separator: " ")[0]), allow = last.hasSuffix("true")
@@ -153,6 +168,49 @@ import ImageIO
                     ConversationItem(id: "\(sid)-older\(i)", kind: .assistantText("Much older reply \(i)."))
                 } + (b.items[sid] ?? [])
             }
+            if text == "queue me" || text == "queue stop" {
+                b.screens["w2:p2"] = queueScreen()
+                b.pullOutcome = text == "queue me" ? .pulled(pulledText) : .interrupted(pulledText)
+                setStatus("w2:p2", .working)
+            }
+            // "queue slow": a pull that takes 1.5 s; "queue partial": one that stopped before the box was empty.
+            if text == "queue slow" || text == "queue partial" {
+                b.screens["w2:p2"] = queueScreen()
+                b.pullDelay = text == "queue slow" ? .milliseconds(1500) : .zero
+                b.pullOutcome = text == "queue slow" ? .pulled("Slow one.")
+                    : .partial(pulledText, "The agent's input box changed while Flockbook cleared it, so it stopped. Check the agent's terminal before you send it.")
+                setStatus("w2:p2", .working)
+            }
+            // "queue long": a pull QueuePull refuses before any key (a line wider than the agent's input box).
+            if text == "queue long" {
+                b.screens["w2:p2"] = ["⏺ Working on the notes",
+                                      "❯ Also run the lint step before you commit, then fix every warning it reports, run the tests again and open a draft PR",
+                                      "  ctrl+enter to send now", "· Baking… (12s)", rule, "❯ Press up to edit queued messages", rule].joined(separator: "\n")
+                b.pullDelay = .zero
+                b.pullOutcome = .refused("This queued text is too long or has spaces or blank lines that the agent's input box does not show, so Flockbook cannot check it exactly. Edit it in the agent's terminal. Nothing was sent.")
+                setStatus("w2:p2", .working)
+            }
+            // "codex queue": the working Codex (w2:p1) has a queued message on its screen.
+            if text == "codex queue" {
+                b.screens["w2:p1"] = ["› Run the test suite", "• Working (30s • esc to interrupt)", "• Queued follow-up inputs",
+                                      "  ↳ Check the retry count too.", "    ⇧← edit last queued message", "› Ask Codex to do anything",
+                                      "  GPT-5 · Context 96% left", "  ? for shortcuts"].joined(separator: "\n")
+                setStatus("w2:p1", .working)
+            }
+            // "keep three": texts the hub kept for this phone and never got a pulledAck for (sent again after hello).
+            if text == "keep three" {
+                for (pane, t) in [("w2:p2", "Kept one."), ("w1:p2", "Kept for the other agent."), ("w2:p2", "Kept two.")] {
+                    _ = b.pulledTexts.keep(PulledText(pane: pane, device: "d-input", text: t))
+                }
+            }
+            // "keep warned": a partial pull's text kept for the other agent (sent again after hello, with its reason).
+            if text == "keep warned" {
+                _ = b.pulledTexts.keep(PulledText(pane: "w1:p2", device: "d-input", text: "Warned one.",
+                                                  note: "Some of it may still be in the agent's input box. Check the agent's terminal before you send it."))
+            }
+            // "slow send": the next send takes 1.5 s.
+            if text == "slow send" { b.sendDelay = .milliseconds(1500) }
+            if text == "queue busy" { b.screens["w2:p2"] = queueScreen(input: "❯ half typed"); setStatus("w2:p2", .working) }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
             if text == "compact me" { compacting = 1; setStatus("w2:p2", .working) }
@@ -164,6 +222,26 @@ import ImageIO
         }
         seen = now
         try? await Task.sleep(for: .milliseconds(100))
+        for line in stdinLines() {
+            let w = line.split(separator: " ").map(String.init)
+            // `session <pane> <session>`: a new agent session in that pane (40 rows of its own).
+            if w.count == 3, w[0] == "session" {
+                if b.items[w[2]] == nil {
+                    b.items[w[2]] = (0..<40).map { ConversationItem(id: "\(w[2])-\($0)", kind: .assistantText("New session reply \($0). " + String(repeating: "Text to wrap. ", count: 6))) }
+                }
+                for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {
+                    ws[wi].tabs[ti].panes[pi].agent?.sessionId = w[2]
+                } } }
+                b.workspaces = ws
+            }
+            if w.count == 3, w[0] == "grow", let n = Int(w[2]) {
+                let start = b.items[w[1]]?.count ?? 0
+                b.items[w[1], default: []] += (start..<(start + n)).map { i in
+                    ConversationItem(id: "\(w[1])-g\(i)", kind: i % 3 == 0 ? .userText("Step \(i): check the parser.")
+                        : .assistantText("Reply \(i). " + String(repeating: "The reader wraps this text to the column width, long enough to take several lines. ", count: 3 + i % 4)))
+                }
+            }
+        }
         if stdinDone() { break }
     }
     server.stop()
@@ -172,11 +250,20 @@ import ImageIO
 
 /// True once stdin is at end (the test script closed it).
 nonisolated(unsafe) private var stdinEOF = false
-private func stdinDone() -> Bool {
-    if stdinEOF { return true }
+nonisolated(unsafe) private var stdinBuffer: [UInt8] = []
+private func stdinDone() -> Bool { stdinEOF }
+/// Whole lines that arrived on stdin since the last call (reads what is there, never waits).
+private func stdinLines() -> [String] {
     var fds = pollfd(fd: 0, events: Int16(POLLIN), revents: 0)
-    guard poll(&fds, 1, 0) > 0 else { return false }
-    var byte: UInt8 = 0
-    if read(0, &byte, 1) <= 0 { stdinEOF = true }
-    return stdinEOF
+    while !stdinEOF, poll(&fds, 1, 0) > 0 {
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        let n = read(0, &chunk, chunk.count)
+        if n <= 0 { stdinEOF = true } else { stdinBuffer += chunk[..<n] }
+    }
+    var lines: [String] = []
+    while let nl = stdinBuffer.firstIndex(of: 0x0A) {
+        lines.append(String(decoding: stdinBuffer[..<nl], as: UTF8.self))
+        stdinBuffer.removeFirst(nl + 1)
+    }
+    return lines
 }

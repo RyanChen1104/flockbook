@@ -7,8 +7,8 @@ public enum Hub {
     public static let version = 1
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
-    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe"]
-    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong"]
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
 
@@ -159,6 +159,11 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         /// Web Push for this device (the browser's subscription; keys base64url). One per device.
         case pushSubscribe(endpoint: String, p256dh: String, auth: String)
         case pushUnsubscribe(endpoint: String)
+        /// Take the agent's own queue back into this device's composer (`QueuePull`). Answered with `pulled`.
+        case pullQueued(pane: String)
+        /// The composer has the `pulled` text with this id: the hub forgets it. Until then the hub sends it again
+        /// after each hello.
+        case pulledAck(pulled: String)
 
         public var type: String {
             switch self {
@@ -174,6 +179,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             case .ping: "ping"
             case .pushSubscribe: "pushSubscribe"
             case .pushUnsubscribe: "pushUnsubscribe"
+            case .pullQueued: "pullQueued"
+            case .pulledAck: "pulledAck"
             }
         }
     }
@@ -181,7 +188,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth, pulled }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -200,6 +207,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case "ping": body = .ping
         case "pushSubscribe": body = .pushSubscribe(endpoint: try s(.endpoint), p256dh: try s(.p256dh), auth: try s(.auth))
         case "pushUnsubscribe": body = .pushUnsubscribe(endpoint: try s(.endpoint))
+        case "pullQueued": body = .pullQueued(pane: try s(.pane))
+        case "pulledAck": body = .pulledAck(pulled: try s(.pulled))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -214,7 +223,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(secret, forKey: .secret); try c.encode(name, forKey: .name)
         case .hello(let token, let client, let version):
             try c.encode(token, forKey: .token); try c.encode(client, forKey: .client); try c.encode(version, forKey: .clientVersion)
-        case .watch(let pane), .unwatch(let pane):
+        case .watch(let pane), .unwatch(let pane), .pullQueued(let pane):
             try c.encode(pane, forKey: .pane)
         case .loadEarlier(let session, let before):
             try c.encode(session, forKey: .session); try c.encode(before, forKey: .before)
@@ -233,6 +242,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(endpoint, forKey: .endpoint); try c.encode(p256dh, forKey: .p256dh); try c.encode(auth, forKey: .auth)
         case .pushUnsubscribe(let endpoint):
             try c.encode(endpoint, forKey: .endpoint)
+        case .pulledAck(let pulled):
+            try c.encode(pulled, forKey: .pulled)
         }
     }
 }
@@ -297,6 +308,37 @@ public struct HubPrompt: Codable, Hashable, Sendable {
     public init(pane: String, approval: HubApproval? = nil, question: HubQuestion? = nil) { self.pane = pane; self.approval = approval; self.question = question }
 }
 
+/// Messages the owner typed while the agent works that it has not taken yet (`QueuedInput`), oldest first. A nil item:
+/// queued, text not known. `pullable`: `pullQueued` may run now. `pullsAll`: pulling takes every item as one text
+/// (Claude Code), else only the newest (Codex).
+public struct HubQueued: Codable, Hashable, Sendable {
+    public var pane: String
+    public var agent: String
+    public var items: [String?]
+    public var pullable: Bool
+    public var pullsAll: Bool
+    public init(pane: String, agent: String, items: [String?], pullable: Bool, pullsAll: Bool) {
+        self.pane = pane; self.agent = agent; self.items = items; self.pullable = pullable; self.pullsAll = pullsAll
+    }
+    public init(pane: String, _ q: QueuedInput?) {
+        self.init(pane: pane, agent: q?.agent ?? "", items: q?.items ?? [], pullable: q?.pullable ?? false, pullsAll: q?.pullsAll ?? false)
+    }
+}
+
+/// The queue's text, out of the agent and into the composer. `interrupted`: the agent's turn stopped meanwhile.
+/// `id`: the hub keeps the text until `pulledAck` with it (sent again after each hello); nil: not kept, no ack.
+/// `note`: the pull stopped early and some of the text may still be in the agent's input box (why).
+public struct HubPulled: Codable, Hashable, Sendable {
+    public var id: String?
+    public var pane: String
+    public var text: String
+    public var interrupted: Bool
+    public var note: String?
+    public init(id: String? = nil, pane: String, text: String, interrupted: Bool, note: String? = nil) {
+        self.id = id; self.pane = pane; self.text = text; self.interrupted = interrupted; self.note = note
+    }
+}
+
 /// The last `attach` part was taken: the re-encoded image's size.
 public struct HubAttached: Codable, Hashable, Sendable {
     public var upload: String
@@ -317,6 +359,10 @@ public enum HubMessage: Codable, Hashable, Sendable {
     case prompt(HubPrompt)
     case attached(HubAttached)
     case pong
+    /// The agent's own queue in a watched pane (`QueuedInput`). Empty items: none queued now.
+    case queued(HubQueued)
+    /// The answer to `pullQueued`: the text for the composer.
+    case pulled(HubPulled)
 
     public var type: String {
         switch self {
@@ -330,6 +376,8 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .prompt: "prompt"
         case .attached: "attached"
         case .pong: "pong"
+        case .queued: "queued"
+        case .pulled: "pulled"
         }
     }
 
@@ -348,6 +396,8 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case "prompt": self = .prompt(try HubPrompt(from: decoder))
         case "attached": self = .attached(try HubAttached(from: decoder))
         case "pong": self = .pong
+        case "queued": self = .queued(try HubQueued(from: decoder))
+        case "pulled": self = .pulled(try HubPulled(from: decoder))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -360,6 +410,8 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .conversation(let m): try m.encode(to: encoder)
         case .prompt(let p): try p.encode(to: encoder)
         case .attached(let a): try a.encode(to: encoder)
+        case .queued(let q): try q.encode(to: encoder)
+        case .pulled(let p): try p.encode(to: encoder)
         case .snapshot, .status, .screen, .pong: break
         }
         var c = encoder.container(keyedBy: K.self)

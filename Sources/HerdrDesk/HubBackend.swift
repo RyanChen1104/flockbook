@@ -37,6 +37,10 @@ import Foundation
         let model = model
         let may: @MainActor @Sendable () -> Bool = { model.writesEnabled && allowed() }
         guard may() else { return .failed }
+        // The pane's lock for the whole send: a pull (Mac or phone) never runs in between.
+        guard model.claim(id) else { return .changed }
+        defer { model.release(id) }
+        if let hook = model.sendHook { return await hook(id, text) ? .sent : .failed }
         // herdr has no compare-and-send: this read and the keys are two calls, so a small window stays.
         guard await store.client.readyForText(paneId: id, agent: agent) else { return .changed }
         guard may() else { return .failed }
@@ -61,6 +65,27 @@ import Foundation
         await store.refresh()
         if let p = pane(id) { await model.checkPrompt(for: p) }
         return true
+    }
+
+    func queuedLog(session: String) -> ClaudeQueueLog { store.queuedInLog(for: session) }
+    var pulledTexts: MemoryPulledStore { model.pulledTexts }
+
+    /// The agent's own queue back into the phone's composer (`QueuePull`): Up or Shift-Left, then Ctrl-U; never Escape.
+    /// Holds the pane's lock for the whole pull: no other pull or send of it (Mac or phone) meanwhile.
+    func pullQueued(pane id: String, agent: Agent, log: ClaudeQueueLog, keep: @escaping @MainActor @Sendable (String) -> Bool,
+                    allowed: @escaping @MainActor @Sendable () -> Bool) async -> QueuePull.Outcome {
+        let model = model
+        guard model.claim(id) else { return .refused("A pull or a send of this pane is running. Nothing was sent.") }
+        model.pulling.insert(id)
+        defer { model.pulling.remove(id); model.release(id) }
+        let io = HerdrQueuePullIO(client: store.client, paneId: id, allowed: { model.writesEnabled && allowed() })
+        let r = await QueuePull.run(expect: agent, log: log, io: io, keep: keep)
+        switch r {
+        case .interrupted: remoteLog.error("pullQueued \(id, privacy: .public): the agent's turn stopped")
+        case .failed(let why), .partial(_, let why): remoteLog.error("pullQueued \(id, privacy: .public): \(why, privacy: .public)")
+        case .pulled, .refused: break
+        }
+        return r
     }
 
     /// The hook's newest AskUserQuestion call for this session (the files the hook wrote, read-only).

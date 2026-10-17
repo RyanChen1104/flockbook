@@ -1,6 +1,6 @@
 // Flockbook PWA: pair, agent list (Needs you first), conversation, approval and question cards, composer (input only).
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
-import type { Answer, Approval, HubMessage, Item, Level, Pane, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
+import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token";
@@ -33,7 +33,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 /** An image picked for the next message. `uploaded`: the hub holds it under `name` on this connection. */
 interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
 const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
-interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest }
+interface PaneView { session?: string; items: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
 const state = {
   token: load(TOKEN_KEY),
   pairSecret: null as string | null,
@@ -57,6 +57,17 @@ const state = {
   pushKey: null as string | null,
   /** This device gets notifications; `busy` while turning them on or off. */
   notify: "off" as "off" | "on" | "busy",
+  /** Texts the hub pulled back from agents' queues, per pane, oldest first, for that pane's composer. */
+  fills: {} as Record<string, { id?: string; text: string; note?: string; interrupted?: boolean }[]>,
+  /** Unsent composer text per pane, and the pane whose composer is on the page: switching agents never carries one
+   *  agent's text into another's composer. */
+  drafts: {} as Record<string, string>,
+  composerPane: null as string | null,
+  /** Bumped on every change of a pane's composer text (typed, or a pulled text placed): a send clears the draft only
+   *  when it is still the one it sent. */
+  revs: {} as Record<string, number>,
+  /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
+  placed: new Set<string>(),
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -96,6 +107,7 @@ function connect(): void {
     ws = null;
     state.connected = false;
     state.welcomed = false;
+    cancelRound();
     // The hub drops a connection's uploads when it closes: send them again next time.
     for (const list of state.attachments.values()) for (const a of list) a.uploaded = false;
     for (const done of waiting.values()) done(false, "failed", "Not connected.");
@@ -109,6 +121,12 @@ function connect(): void {
 /** Resolves when the socket is open, or after 5 s. */
 async function opened(): Promise<void> {
   for (let i = 0; i < 100 && ws?.readyState === WebSocket.CONNECTING; i++) await new Promise((r) => setTimeout(r, 50));
+}
+
+/** The composer has the pulled text `id`: the hub forgets it. Lost (no connection): the hub sends it again after
+ *  hello, and `placed` answers with another ack. */
+function ack(id: string): void {
+  void request({ type: "pulledAck", pulled: id });
 }
 
 function request(msg: Record<string, unknown>): Promise<{ ok: boolean; code?: string; message?: string }> {
@@ -175,6 +193,8 @@ function receive(m: HubMessage): void {
       break;
     case "conversation": {
       const v = view(m.pane);
+      // The pane shows another session (a new agent there): it opens at its newest message, like a switch.
+      if (m.pane === state.watching && v.session !== undefined && v.session !== m.session) { cancelRound(); following = true; }
       v.session = m.session;
       v.hasEarlier = m.hasEarlier;
       if (m.mode === "prepend" && m.pane === state.watching) keepTopRow = true;
@@ -190,6 +210,17 @@ function receive(m: HubMessage): void {
     case "screen":
       view(m.pane).screen = m.text;
       break;
+    case "queued":
+      view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
+      break;
+    case "pulled": {
+      if (m.id && state.placed.has(m.id)) { ack(m.id); break; }
+      const f = state.fills[m.pane] ??= [];
+      if (m.id && f.some((x) => x.id === m.id)) break;
+      // Its warning goes with it, shown when it goes into its own composer (maybe later, on that agent).
+      f.push({ id: m.id, text: m.text, note: m.note, interrupted: m.interrupted });
+      break;
+    }
     case "prompt": {
       const v = view(m.pane);
       v.approval = m.approval;
@@ -276,11 +307,116 @@ async function follow(): Promise<void> {
   if (want === state.watching) { render(); return; }
   if (state.watching) request({ type: "unwatch", pane: state.watching });
   state.watching = want;
+  cancelRound();
+  following = true;   // an agent opens at its newest message
   if (state.banner && state.banner.pane === want) state.banner = null;
   render();
-  if (want) { await request({ type: "watch", pane: want }); window.scrollTo(0, document.body.scrollHeight); }
+  if (want) await request({ type: "watch", pane: want });
 }
 addEventListener("hashchange", follow);
+
+// --- The newest message. An open conversation stays at the bottom while rows arrive and lay out (markdown, images),
+// until the reader scrolls up; scrolling back down follows again. Opening, switching or reloading starts at the bottom.
+let following = true;
+/** What the reader sees is the visual viewport: smaller with the keyboard open or zoomed in. */
+function nearBottom(): boolean {
+  const v = window.visualViewport;
+  const seen = v ? v.pageTop + v.height : window.scrollY + window.innerHeight;
+  return document.documentElement.scrollHeight - seen <= 40;
+}
+function toBottom(): void {
+  if (state.watching && following && !reader.active) window.scrollTo(0, document.documentElement.scrollHeight);
+}
+/** Where the reader sees the page from (the visual viewport: it moves alone when zoomed in). */
+const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
+/** Only the reader changes `following`. A reader action (wheel, touch, a scroll key, the scroll bar from press to
+ * release) on a shown conversation starts a round; the round ends when the page has stopped scrolling for `settleMs`.
+ * At its end: the reader reached the bottom during the round (scrolled down to it, pushed down at it, or pressed End)
+ * and did not scroll up after (new rows may have come in meanwhile) -> following. Otherwise moved since the round
+ * started -> not following; not moved -> as before. A page that got shorter and moved the view is not the reader. Every scroll outside a round (the page's own, a page that got shorter, a reconnect, the
+ * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
+ * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
+ * page catches up. */
+const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
+const settleMs = 150;
+/** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
+ * a move. */
+const stillMs = 10000;
+const shown = (): boolean => !!state.watching && state.welcomed && document.visibilityState === "visible";
+function cancelRound(): void {
+  clearTimeout(reader.settle);
+  clearTimeout(reader.still);
+  reader.active = reader.holding = reader.reachedEnd = false;
+}
+/** The bottom reached in this round: the view moved down to it. Kept until the view is more than 1 px above the
+ *  lowest place it reached since (a page that got shorter moves it up too). */
+function track(): void {
+  const top = viewTop();
+  if (top > reader.last && nearBottom()) reachEnd();
+  else if (reader.reachedEnd) {
+    if (top > reader.endTop) reader.endTop = top;
+    else if (top < reader.endTop - 1) reader.reachedEnd = false;
+  }
+  reader.last = top;
+}
+function reachEnd(): void {
+  reader.endTop = reader.reachedEnd ? Math.max(reader.endTop, viewTop()) : viewTop();
+  reader.reachedEnd = true;
+}
+function readerActs(): void {
+  if (!shown()) return;
+  if (!reader.active) { reader.active = true; reader.from = reader.last = viewTop(); reader.reachedEnd = false; }
+  track();
+  clearTimeout(reader.settle);
+  if (!reader.holding) reader.settle = setTimeout(settled, settleMs);
+}
+function settled(): void {
+  if (reader.holding) return;
+  reader.active = false;
+  if (reader.reachedEnd) following = true;
+  else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
+  toBottom();
+}
+function holdBar(): void {
+  readerActs();
+  if (!reader.active) return;
+  reader.holding = true;
+  clearTimeout(reader.still);
+  reader.still = setTimeout(letGoBar, stillMs);
+}
+function letGoBar(): void {
+  if (!reader.holding) return;
+  reader.holding = false;
+  clearTimeout(reader.still);
+  readerActs();
+}
+const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
+/** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
+const downKeys = new Set(["PageDown", "ArrowDown", " "]);
+addEventListener("keydown", (e) => {
+  if (!scrollKeys.has(e.key) || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+  readerActs();
+  if (!reader.active) return;
+  if (e.key === "End" || (e.key === "ArrowDown" && e.metaKey) || (downKeys.has(e.key) && nearBottom())) reachEnd();
+});
+addEventListener("wheel", (e) => { if (reader.active && e.deltaY > 0 && nearBottom()) reachEnd(); }, { passive: true });
+addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) holdBar(); });
+addEventListener("pointermove", () => { if (reader.holding) holdBar(); }, { passive: true });
+for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur"]) addEventListener(type, letGoBar);
+addEventListener("pagehide", cancelRound);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") cancelRound(); });
+/** A scroll during a round keeps the round going (until the page stops); any other scroll changes nothing. */
+function scrolled(): void {
+  if (!reader.active) return;
+  if (reader.holding) holdBar(); else readerActs();
+}
+addEventListener("scroll", scrolled, { passive: true });
+window.visualViewport?.addEventListener("scroll", scrolled);
+window.visualViewport?.addEventListener("resize", toBottom);
+new ResizeObserver(toBottom).observe(document.body);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") toBottom(); });
+addEventListener("pageshow", toBottom);
 function open(pane: string): void { location.hash = `pane=${encodeURIComponent(pane)}`; }
 
 // --- Helpers.
@@ -348,23 +484,43 @@ function render(): void {
     const b = state.banner;
     body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
-  if (state.toast) body.push(h("div", { class: "toast glass-float", role: "status" }, state.toast));
+  if (state.toast) body.push(h("div", { class: "toast", role: "status" }, state.toast));
   const nodes = body.filter((c): c is Node | string => !!c);
   const focused = document.activeElement?.id;
+  // Keep each agent's composer text (its own) across renders.
+  const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+  if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
   if (!keepComposer(nodes)) {
-    // Another screen or pane: the composer's text carries over.
-    const draft = (document.getElementById("composer-text") as HTMLTextAreaElement | null)?.value;
+    // Another screen or pane: that pane's own draft comes back (not the text of the composer before).
     app.replaceChildren(...nodes);
-    const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
-    if (box && draft !== undefined) { box.value = draft; box.dispatchEvent(new Event("input")); }
+    const fresh = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+    if (fresh && state.watching) { fresh.value = state.drafts[state.watching] ?? ""; fitText(fresh); }
   }
-  if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus();
+  const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+  state.composerPane = box ? state.watching : null;
+  // Pulled texts of this agent go after what the composer holds, each on its own line; then the hub may forget them.
+  const fills = state.watching ? state.fills[state.watching] : undefined;
+  if (box && fills?.length) {
+    const warnings: string[] = [];
+    for (const f of fills) {
+      box.value = box.value ? `${box.value}\n${f.text}` : f.text;
+      if (f.id) { state.placed.add(f.id); ack(f.id); }
+      if (f.note) warnings.push(f.note);
+      else if (f.interrupted) warnings.push("The agent's turn stopped after the pull.");
+    }
+    if (warnings.length) queueMicrotask(() => toast(`Your text is in the composer. ${[...new Set(warnings)].join(" ")}`));
+    delete state.fills[state.watching!];
+    box.dispatchEvent(new Event("input"));
+    box.focus({ preventScroll: true });
+  }
+  if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
   if (anchor) {
     // Older rows came in above: the row that was on top stays where it was on screen.
     const row = [...document.querySelectorAll<HTMLElement>(".items > [data-id]")].find((e) => e.dataset.id === anchor.id);
     const moved = row ? row.getBoundingClientRect().top - anchor.top : 0;
     if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
   }
+  toBottom();
 }
 
 // --- Older rows. The reader scrolling near the top loads them; "Load earlier" stays for a keyboard or screen reader,
@@ -540,6 +696,7 @@ function conversationScreen(pane: string): HTMLElement {
   if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
   if (v.screen && (!v.items.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
   else if (v.screen) items.push(screenView(v.screen, false));
+  if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
   return h("section", { class: "conversation" }, head, h("div", { class: "items" }, ...items), card, composer(pane, !!card, where?.p.agent?.name));
@@ -565,6 +722,33 @@ function itemView(it: Item): HTMLElement {
       return h("div", { class: `logged ${q.state}` }, h("span", { class: "muted" }, "Question: "), q.questions.map((x) => x.text).join(" / "), said);
     }
   }
+}
+
+/** The agent's queued messages: faded user bubbles, when they go in, and Pull back (the hub sends Up or Shift-Left,
+ *  never Escape, and checks the agent's screen before and after). */
+function queueView(pane: string, q: Queue): HTMLElement {
+  const when = q.agent === "claude" ? "Goes in after the current step or when the turn ends." : "Goes in when this turn ends.";
+  const note = q.pullsAll ? (q.items.length > 1 ? `All ${q.items.length} come back as one message.` : "It comes back to the composer.")
+    : "Sending it again adds it to the turn now running.";
+  // Only Claude Code's queue can be taken back exactly (its log); Codex's is edited in its terminal.
+  const blocked = !q.pullsAll ? `${when} To change it, press Shift+Left in Codex's terminal.`
+    : !q.pullable ? "The agent's input box has text. Clear it in the terminal to pull back."
+    : q.items.includes(null) ? "The queued text cannot be read yet." : null;
+  const pull = async (): Promise<void> => {
+    if (state.busy) return;
+    state.busy = true;
+    render();
+    const r = await request({ type: "pullQueued", pane });
+    state.busy = false;
+    if (!r.ok) toast(explain(r.code, r.message));
+    render();
+  };
+  return h("div", { class: "queue", role: "group", "aria-label": "Queued messages" },
+    ...q.items.map((t) => h("div", { class: "msg user queued" }, h("span", { class: "queued-label" }, "Queued"),
+      t === null ? h("p", { class: "unknown" }, "1 queued message") : h("p", {}, t))),
+    h("div", { class: "queue-foot" }, h("span", { class: "fine" }, blocked ?? `${when} ${note}`),
+      canInput() && q.pullsAll ? h("button", { id: "pull-queued", class: "secondary small", type: "button", disabled: state.busy || blocked !== null, onclick: pull },
+        "Pull back to edit") : null));
 }
 
 function screenView(text: string, open: boolean): HTMLElement {
@@ -703,11 +887,21 @@ async function upload(list: Attachment[]): Promise<{ code?: string; message?: st
   return null;
 }
 
+/** `pane`'s composer sent the draft it had at `rev`: the draft goes, wherever the page is now, unless it changed
+ *  since (typed, or a pulled text placed): then it stays as it is. */
+function sent(pane: string, rev: number): void {
+  if ((state.revs[pane] ?? 0) !== rev) return;
+  const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+  if (field && state.composerPane === pane) { field.value = ""; fitText(field); }
+  delete state.drafts[pane];
+}
+
 function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElement | null {
   if (!canInput() || !find(pane)?.p.agent) return null;
   const box = h("textarea", { id: "composer-text", rows: 1, placeholder: promptOpen ? "Answer the prompt first" : agent ? `Reply to ${agent}` : "Message", disabled: promptOpen, "aria-label": "Message to the agent" });
   const images = state.attachments.get(pane) ?? [];
   const send = async (): Promise<void> => {
+    const rev = state.revs[pane] ?? 0;
     const text = box.value.trim();
     const list = state.attachments.get(pane) ?? [];
     if ((!text && !list.length) || state.busy) return;
@@ -718,9 +912,8 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     const r = failed ? { ok: false, ...failed } : await request({ type: "send", pane, text, ...(list.length ? { attachments: list.map((a) => a.name) } : {}) });
     state.busy = false;
     state.progress = null;
-    const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
     if (r.ok) {
-      if (field) { field.value = ""; field.dispatchEvent(new Event("input")); }
+      sent(pane, rev);
       state.attachments.delete(pane);
     } else {
       // The hub no longer knows an image (reconnected, or it dropped one): upload them all again next time.
@@ -729,6 +922,7 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     }
     render();
   };
+  box.addEventListener("input", () => { state.revs[pane] = (state.revs[pane] ?? 0) + 1; });
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
   box.addEventListener("input", () => fitText(box));
   // Turning the phone re-wraps the text: fit it again when the field's width changes (its height changes are ours).

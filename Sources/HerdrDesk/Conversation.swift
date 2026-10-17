@@ -193,7 +193,7 @@ struct ConversationView: View {
                         }
                     }
                 } else {
-                    tracker.atBottom = new.offset + new.container >= new.content - 40
+                    tracker.atBottom = new.atBottom
                     tracker.offset = new.offset
                     if let a = tracker.anchor, let top = tracker.tops[a.key] { tracker.anchor = (a.key, top, new.offset, a.until) }
                     // The reader came near the top: older rows load by themselves.
@@ -236,7 +236,13 @@ struct ConversationView: View {
         Task { @MainActor in position.scrollTo(edge: .bottom) }
     }
 
-    struct ScrollMetrics: Equatable { var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat; var top: CGFloat }
+    struct ScrollMetrics: Equatable {
+        var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat; var top: CGFloat
+        /// The newest row is in view (within 40 pt). The container is the area between the bars, and the offset starts
+        /// above the top bar: at the end, offset + top + container = content. Leaving out `top` read a reader at the end
+        /// as scrolled up whenever the top bar was over 40 pt (the toolbar and a pane label), and following stopped.
+        var atBottom: Bool { offset + top + container >= content - 40 }
+    }
     static let rowSpace = "conversation-rows"
 
     struct Entry {

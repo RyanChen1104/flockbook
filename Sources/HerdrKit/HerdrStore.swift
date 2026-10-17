@@ -7,6 +7,12 @@ public final class HerdrStore {
     public let client: HerdrClient
     public private(set) var workspaces: [Workspace] = []
     public private(set) var connected = false
+    /// The panes there are now, from the last snapshot herdr gave (none: the last tab closed). Nil: no snapshot yet.
+    public var knownPanes: Set<String>? {
+        snapshotted ? Set(workspaces.flatMap(\.tabs).flatMap(\.panes).map(\.id)) : nil
+    }
+    /// A snapshot was applied (`workspaces` is herdr's, not the empty start).
+    @ObservationIgnored private var snapshotted = false
     /// Why the last snapshot failed, with the next step (`ConnectionCheck`). Nil while connected, or when the socket
     /// accepts but the request fails.
     public private(set) var problem: ConnectionProblem?
@@ -130,12 +136,21 @@ public final class HerdrStore {
         connected = false
     }
 
+    /// Successful snapshots taken so far.
+    public private(set) var snapshots = 0
+    /// A snapshot herdr gave.
+    func took(_ raw: [Workspace]) {
+        connected = true
+        snapshotted = true
+        snapshots += 1
+        if problem != nil { problem = nil }
+        applySnapshot(raw)
+    }
+
     public func refresh() async {
         do {
             let raw = try await client.snapshot()
-            connected = true
-            if problem != nil { problem = nil }
-            applySnapshot(raw)
+            took(raw)
             resolveMissing(raw)
         } catch {
             connected = false
@@ -165,6 +180,12 @@ public final class HerdrStore {
         return logItems[sessionId]?.load ?? .loading
     }
 
+    /// Claude Code's queue as that session's log has it (`ClaudeQueueLog`). Read with the screen (`QueuedInput.read`).
+    public func queuedInLog(for sessionId: String?) -> ClaudeQueueLog {
+        guard !isPreview, let sessionId else { return [] }
+        return logItems[sessionId]?.queued ?? []
+    }
+
     /// Loads an older segment of that session's log. True while older content remains. `conversation(for:)` grows within one poll.
     @discardableResult
     public func loadEarlier(for sessionId: String?, bytes: Int = 2_000_000) async -> Bool {
@@ -184,6 +205,7 @@ public final class HerdrStore {
 
     func setPreview(workspaces: [Workspace], connected: Bool) {
         self.workspaces = workspaces
+        snapshotted = true
         self.connected = connected
         self.isPreview = true
     }

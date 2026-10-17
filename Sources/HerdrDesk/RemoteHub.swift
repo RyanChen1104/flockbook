@@ -366,6 +366,7 @@ final class RemoteHub {
     /// Removes the device and closes its open connections at once.
     func revoke(device id: String) {
         devices.revoke(device: id); pushes.remove(device: id); refreshPushes(); server?.dropRevoked(); deviceList = devices.all
+        model?.pulledTexts.drop(device: id)   // texts pulled for it: no composer of it will confirm them now
     }
 
     // MARK: Snapshots
