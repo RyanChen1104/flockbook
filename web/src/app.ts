@@ -508,7 +508,7 @@ function render(): void {
     if (warnings.length) queueMicrotask(() => toast(`Your text is in the composer. ${[...new Set(warnings)].join(" ")}`));
     delete state.fills[state.watching!];
     box.dispatchEvent(new Event("input"));
-    box.focus();
+    box.focus({ preventScroll: true });
   }
   if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
   toBottom();

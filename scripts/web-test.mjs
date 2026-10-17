@@ -724,6 +724,30 @@ async function fakeRun() {
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   check(await p.until("document.querySelector('#composer-text')?.value === 'Slow one.'") === true,
     `queue: back on its agent, its composer has it (${JSON.stringify(await p.eval("[location.hash, document.querySelector('#composer-text')?.value, document.querySelector('#composer-text')?.disabled]"))})`);
+  // A slow pull answered after the reader scrolled up: the text goes into the composer, the page stays where they read.
+  // The sticky composer is always in view here, so the headless page would not move anyway; a phone may scroll to a
+  // focused field, so every focus of the composer must also pass preventScroll.
+  await p.eval(`(() => { window.__focus = []; const f = HTMLElement.prototype.focus; window.__realFocus = f;
+    HTMLElement.prototype.focus = function (o) { if (this.id === 'composer-text') window.__focus.push(o?.preventScroll === true); return f.call(this, o); }; })()`);
+  await p.type("#composer-text", "");
+  await p.type("#composer-text", "queue slow");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.until("[...document.querySelectorAll('.msg.user')].filter(e => e.textContent === 'queue slow').length === 2");
+  await p.until("document.querySelector('#pull-queued')?.disabled === false");
+  await p.type("#composer-text", "");
+  await p.click("#pull-queued");
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 0)");
+  const tall = await p.eval("document.documentElement.scrollHeight > window.innerHeight + 200");
+  await p.until("document.querySelector('#composer-text')?.value === 'Slow one.'");
+  await p.until("false", 300);
+  check(tall === true && await p.eval("document.querySelector('#composer-text')?.value") === "Slow one." && await p.eval("Math.round(window.scrollY)") === 0,
+    `queue: a slow pull's text arrives while scrolled up -> the page does not move (tall ${tall}, y ${await p.eval("Math.round(window.scrollY)")})`);
+  const focuses = await p.eval("JSON.stringify(window.__focus)");
+  check(await p.eval("window.__focus.length > 0 && window.__focus.every(Boolean)") === true, `queue: the pulled text focuses the composer without scrolling (preventScroll per focus: ${focuses})`);
+  await p.eval("HTMLElement.prototype.focus = window.__realFocus");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
+  await p.type("#composer-text", "");
   // Texts the hub kept (the phone was gone before they arrived) come after hello, each into its own agent's composer,
   // added up; once there, the hub forgets them (a reload brings nothing back).
   await p.type("#composer-text", "keep three");
