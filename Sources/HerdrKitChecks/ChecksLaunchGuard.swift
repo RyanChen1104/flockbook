@@ -14,6 +14,16 @@ func checksLaunchGuard() async throws {
           "launch guard: known check flags")
     check(ok(["--test-screencolumn", "--light"]), "launch guard: a content check (ContentTests)")
     check(ok(["--test-fullscreen-real"]) && ok(["--test-scroll-real"]), "launch guard: the real-window checks are known")
+    // macOS 15 support: the pre-26 look only with its flag or variable; a normal launch on 26 draws the 26 look.
+    check(ok(["--snapshot", "build/x", "--legacy-look"]) && ok(["--test-legacy-look"]), "launch guard: the legacy look flag and its check are known")
+    check(!LaunchGuard.legacyLookForced([app], environment: [:])
+          && !LaunchGuard.legacyLookForced([app, "--snapshot", "build/x"], environment: ["FLOCKBOOK_LEGACY_LOOK": "0"]),
+          "legacy look: off by default")
+    check(LaunchGuard.legacyLookForced([app, "--snapshot", "build/x", "--legacy-look"], environment: [:])
+          && LaunchGuard.legacyLookForced([app], environment: ["FLOCKBOOK_LEGACY_LOOK": "1"]),
+          "legacy look: forced by --legacy-look or FLOCKBOOK_LEGACY_LOOK=1")
+    check(!LaunchGuard.legacyLookForced([app, "--session", "legacy-look"], environment: ["LEGACY_LOOK": "1"]),
+          "legacy look: not by a value or another variable")
     // No check window on the owner's screen: the real-window checks need the owner's leave; frames stay off every screen.
     check(LaunchGuard.realWindowRefused([app, "--test-fullscreen-real"], environment: [:]) != nil
           && LaunchGuard.realWindowRefused([app, "--test-scroll-real"], environment: ["FLOCKBOOK_VISIBLE_OK": "0"]) != nil,
