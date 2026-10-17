@@ -251,6 +251,40 @@ extension ContentTests {
             step("window: viewport drawn after Jump to latest (\(n) ink)", n >= 40)
         }
 
+        // 8. The reader scrolls up to the top: older rows load by themselves (no button press), and the message that was at
+        // the top of the view stays where it was (the rows come in above it, out of view). At the app's page size: a page as
+        // big as the window would replace every row on screen, the one on top too.
+        if ConversationView.page < ConversationWindow.maxRows {
+            /// The topmost message in view: its text and its distance from the top of the view.
+            func topMessage() -> (text: String, y: CGFloat)? {
+                let b = sv.contentView.bounds, top = b.minY + sv.contentInsets.top
+                return Self.all(MessageTextView.self, in: host)
+                    .map { (String($0.string.prefix(80)), $0.convert($0.bounds, to: sv.contentView)) }
+                    .filter { $0.1.maxY > top + 10 && $0.1.minY < b.maxY }
+                    .min { $0.1.minY < $1.1.minY }.map { ($0.0, $0.1.minY - top) }
+            }
+            func y(of text: String) -> CGFloat? {
+                let top = sv.contentView.bounds.minY + sv.contentInsets.top
+                return Self.all(MessageTextView.self, in: host).first { String($0.string.prefix(80)) == text }.map { $0.convert($0.bounds, to: sv.contentView).minY - top }
+            }
+            // Just outside the zone that loads, then into it in one move: the top message is read before the load runs.
+            let outside = NSPoint(x: 0, y: -sv.contentInsets.top + ConversationView.nearTop + 400)
+            for _ in 0..<2 { sv.contentView.scroll(to: outside); sv.reflectScrolledClipView(sv.contentView); try? await Task.sleep(for: .milliseconds(500)) }
+            _ = stall.take()
+            sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top)); sv.reflectScrolledClipView(sv.contentView)
+            let before = topMessage(), count = Self.all(MessageTextView.self, in: host).count
+            try? await Task.sleep(for: .milliseconds(900))
+            let now = Self.all(MessageTextView.self, in: host).count, loaded = now > count
+            let after = before.flatMap { y(of: $0.text) }
+            step("autoload: at the top, older rows load without a press (\(count) -> \(now) messages)", loaded)
+            step("autoload: after the load, the top message stays in place (\(before.map { Int($0.y) } ?? -1) -> \(after.map { Int($0) } ?? -1) pt)",
+                 loaded && before != nil && after != nil && abs(after! - before!.y) < 3)
+            stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload.png"); stall.resume()
+            await settle("autoload")
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+        }
+
         step("no blank viewport at rest after a change (\(blanks.count): \(blanks.prefix(6)))", blanks.isEmpty)
         stall.stop()
         win.orderOut(nil)

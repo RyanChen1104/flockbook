@@ -109,7 +109,20 @@ struct ConversationView: View {
 
     /// Whether the reader sits at the bottom. A plain object, not @State: written from the scroll callback,
     /// so it never triggers a render (writing @State there caused layout feedback loops before).
-    @MainActor final class BottomTracker { var atBottom = true }
+    @MainActor final class BottomTracker {
+        var atBottom = true
+        /// The scroll offset, and each row's top in the rows' own space (both as last seen).
+        var offset: CGFloat = 0
+        var tops: [String: CGFloat] = [:]
+        /// While older rows come in above: the row that was on top and where it was, so the view keeps it in place.
+        var anchor: (key: String, top: CGFloat, offset: CGFloat, until: Date)?
+        /// The page the read of the log in flight asked for: half a page when it loads by itself.
+        var loadPage = ConversationView.page
+    }
+    /// Closer than this to the top, the reader's scrolling loads older rows by itself (Show earlier stays as the button).
+    /// Half a page at a time: the stack lays out every new row in one pass, and 100 at once came near the 250 ms stall limit.
+    static let nearTop: CGFloat = 400
+    static var autoPage: Int { max(1, page / 2) }
     @State private var tracker = BottomTracker()
     @State private var position = ScrollPosition(edge: .bottom)
 
@@ -136,6 +149,8 @@ struct ConversationView: View {
                     let entries = Self.entries(rows)
                     ForEach(Array(entries.enumerated()), id: \.element.key) { i, e in
                         entryView(e, foldable: e.item?.id != lastReply)
+                            // The row's own top, without the gap above it (the first row has none; it gets one when older rows come in).
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.rowSpace)).minY } action: { tracker.tops[e.key] = $0 }
                             .padding(.top, i == 0 ? 0 : e.gap(after: entries[i - 1]))
                     }
                     if window.detached {
@@ -149,6 +164,7 @@ struct ConversationView: View {
                         .onDisappear { ConversationProbe.latest = .zero; ConversationProbe.clear(.latest, probeId) }
                     }
                 }
+                .coordinateSpace(.named(Self.rowSpace))
                 .frame(maxWidth: size.column, alignment: .leading)
                 .padding(.horizontal, (ReadingWidth(rawValue: widthRaw) ?? .medium).sidePadding).padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
@@ -161,30 +177,44 @@ struct ConversationView: View {
             // One rule for every growth, so no per-event scroll calls and no retry timers.
             .onScrollGeometryChange(for: ScrollMetrics.self) { g in
                 ScrollMetrics(offset: g.contentOffset.y, content: g.contentSize.height, container: g.containerSize.height,
-                              insets: g.contentInsets.top + g.contentInsets.bottom)
+                              insets: g.contentInsets.top + g.contentInsets.bottom, top: g.contentInsets.top)
             } action: { old, new in
                 if abs(new.content - old.content) > 0.5 || abs(new.container - old.container) > 0.5 || abs(new.insets - old.insets) > 0.5 {
                     if tracker.atBottom {
                         // Next turn of the run loop: scrolling inside the update pass makes SwiftUI report "multiple times per frame".
                         Task { @MainActor in position.scrollTo(edge: .bottom) }
+                    } else if let a = tracker.anchor, a.until > Date() {
+                        // Older rows came in above: the row that was on top moves down by their height, and the view with it.
+                        // After the update pass, when every row reported its new top.
+                        // scrollTo(y:) takes a content point, which sits under the top inset: the offset plus the inset.
+                        let inset = new.top
+                        Task { @MainActor in
+                            if let top = tracker.tops[a.key], abs(top - a.top) > 0.5 { position.scrollTo(y: a.offset + inset + top - a.top) }
+                        }
                     }
                 } else {
                     tracker.atBottom = new.offset + new.container >= new.content - 40
+                    tracker.offset = new.offset
+                    if let a = tracker.anchor, let top = tracker.tops[a.key] { tracker.anchor = (a.key, top, new.offset, a.until) }
+                    // The reader came near the top: older rows load by themselves.
+                    if new.offset + new.top < Self.nearTop, old.offset + old.top >= Self.nearTop { Task { @MainActor in showEarlier(page: Self.autoPage) } }
                 }
             }
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
-                window.takeLoaded(items.map(\.id), page: Self.page)
+                if window.takeLoaded(items.map(\.id), page: tracker.loadPage), let a = tracker.anchor { tracker.anchor?.until = max(a.until, Date().addingTimeInterval(1.5)) }
             }
     }
 
     /// A page of older rows: from the rows at hand, else read from the log (the window takes them when they arrive).
-    private func showEarlier() {
+    private func showEarlier(page: Int = Self.page) {
         let ids = items.map(\.id)
-        if window.range(ids).lowerBound > 0 { window.showEarlier(ids, page: Self.page); return }
+        if window.range(ids).lowerBound > 0 { keepTop(ids); window.showEarlier(ids, page: page); return }
         guard let load = onLoadEarlier, !loadingEarlier else { return }
         loadingEarlier = true
+        tracker.loadPage = page
+        keepTop(ids, for: 4)
         let token = window.beginLoad()
         Task {
             moreEarlier = await load(); loadingEarlier = false
@@ -192,14 +222,22 @@ struct ConversationView: View {
         }
     }
 
+    /// The row now on top of the window stays where it is on screen while older rows come in above it (for `seconds`).
+    private func keepTop(_ ids: [String], for seconds: Double = 1.5) {
+        guard let key = Self.entries(Self.displayRows(items[window.range(ids)])).first?.key, let top = tracker.tops[key] else { return }
+        tracker.anchor = (key, top, tracker.offset, Date().addingTimeInterval(seconds))
+    }
+
     /// The newest page, at the bottom, following again.
     private func jumpToLatest() {
         window.jumpToLatest(page: Self.page)
         tracker.atBottom = true
+        tracker.anchor = nil
         Task { @MainActor in position.scrollTo(edge: .bottom) }
     }
 
-    struct ScrollMetrics: Equatable { var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat }
+    struct ScrollMetrics: Equatable { var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat; var top: CGFloat }
+    static let rowSpace = "conversation-rows"
 
     struct Entry {
         enum Kind { case row(ConversationItem), separator(String), footer(String) }
