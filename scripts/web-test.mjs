@@ -138,7 +138,7 @@ async function page(context) {
       await send("DOM.setFileInputFiles", { files: paths, nodeId }, sessionId);
     },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
-    async scale(dpr) { await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: dpr, mobile: true }, sessionId); },
+    async scale(dpr, width = 390, height = 844) { await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: true }, sessionId); },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -488,6 +488,65 @@ async function fakeRun() {
   check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
   check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
 
+  // Compacting: the screen changes on every hub tick. The text field stays the same element (a phone keyboard closes
+  // when its field leaves the page), with its text, caret and focus; a message sent meanwhile goes to the agent.
+  await p.type("#composer-text", "compact me");
+  await p.click("#composer-send");
+  check(await p.until("(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting conversation')") === true, "compacting: the agent compacts");
+  await p.eval("(() => { const e = document.querySelector('#composer-text'); window.__box = e; e.focus(); e.value = 'half a thought'; e.setSelectionRange(4, 4); return true; })()");
+  const compactScreen = await p.eval("document.querySelector('.screen pre').textContent");
+  check(await p.until(`document.querySelector('.screen pre')?.textContent !== ${JSON.stringify(compactScreen)}`) === true, "compacting: the screen moves on");
+  await new Promise((r) => setTimeout(r, 700));
+  check(await p.eval("document.querySelector('#composer-text') === window.__box") === true, "compacting: screen updates keep the same text field");
+  check(await p.eval("(() => { const e = window.__box; return document.activeElement === e && e.value === 'half a thought' && e.selectionStart === 4 && !e.disabled; })()") === true,
+    "compacting: the text, caret and focus stay; the field stays on");
+  await p.type("#composer-text", "sent while compacting");
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'sent while compacting')") === true, "compacting: a message sent meanwhile goes to the agent");
+  await p.type("#composer-text", "Typing while it compacts");
+  await p.shot("composer-compacting");
+  await p.shot("composer-compacting", true);
+  await p.type("#composer-text", "compact done");
+  await p.click("#composer-send");
+  check(await p.until("!(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting')") === true, "compacting: done");
+
+  // The composer's shape: one line is a pill (radius = half the height); more lines open it into a rounded rectangle
+  // with the same radius, the text field's height easing between the two.
+  const form = "document.querySelector('form.composer')", field = "document.querySelector('#composer-text')";
+  const shape = `(() => { const f = ${form}, r = f.getBoundingClientRect(); return { h: r.height, radius: parseFloat(getComputedStyle(f).borderTopLeftRadius), box: ${field}.getBoundingClientRect().height }; })()`;
+  const setText = (t) => p.eval(`(() => { const e = ${field}; e.value = ${JSON.stringify(t)}; e.dispatchEvent(new Event('input')); return e.getAnimations().length; })()`);
+  await setText("One line");
+  await new Promise((r) => setTimeout(r, 400));
+  const one = await p.eval(shape);
+  check(Math.abs(one.radius - one.h / 2) < 1, `pill: one line, radius ${one.radius} = half of ${one.h}`);
+  await p.shot("composer-pill");
+  await p.shot("composer-pill", true);
+  const easing = await setText("A longer note for the agent.\nSecond line.\nThird line.\nFourth line.");
+  check(easing > 0, "pill: the height eases (a running transition), no jump");
+  await new Promise((r) => setTimeout(r, 400));
+  const four = await p.eval(shape);
+  check(four.box > one.box + 60 && Math.abs(four.radius - one.radius) < 0.5 && four.h > four.radius * 2 + 40,
+    `pill: four lines, a rounded rectangle (height ${four.h}, radius ${four.radius})`);
+  await p.shot("composer-multiline");
+  await p.shot("composer-multiline", true);
+  await setText("");
+  await new Promise((r) => setTimeout(r, 400));
+  const back = await p.eval(shape);
+  check(Math.abs(back.h - one.h) < 1, `pill: emptied, back to one line (${back.h})`);
+  // Landscape to portrait: a long draft wraps into more lines; the field grows with no typing, nothing is cut off.
+  const metrics = (width, height) => p.scale(3, width, height);
+  const draft = "A long draft typed with the phone turned sideways, words enough to fill one wide line and wrap once the phone stands up again.";
+  await metrics(844, 390);
+  await setText(draft);
+  await new Promise((r) => setTimeout(r, 400));
+  const wide = await p.eval(shape);
+  await metrics(390, 844);
+  await new Promise((r) => setTimeout(r, 500));
+  const fits = `(() => { const e = ${field}; return { fit: e.scrollHeight <= e.clientHeight + 1 || getComputedStyle(e).overflowY === 'auto', box: e.getBoundingClientRect().height }; })()`;
+  const narrow = await p.eval(fits);
+  check(narrow.fit && narrow.box > wide.box, `turn: portrait re-wraps the draft and the field grows (${wide.box} -> ${narrow.box}), nothing cut off`);
+  await setText("");
+
   // Images from the phone: pick, preview, remove, send in parts with progress; the hub re-encodes them.
   const imgDir = mkdtempSync(join(tmpdir(), "fb-web-img-"));
   const big = join(imgDir, "big.png"); writeFileSync(big, Buffer.alloc(11 * 1024 * 1024, 1));
@@ -563,6 +622,18 @@ async function fakeRun() {
   // A Claude question read from the screen only: shown, answered on the Mac (no answer controls).
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   await p.until("document.querySelector('#composer-text')?.disabled === false");
+  // Messages Claude took mid-turn (queued_command in its log) show as the owner's, in log order.
+  await p.type("#composer-text", "queued log");
+  await p.click("#composer-send");
+  const users = "[...document.querySelectorAll('.msg.user')].map(e => e.textContent)";
+  check(await p.until(`${users}.includes('Thanks.')`) === true, "queued: the log's messages arrive");
+  const queuedOrder = await p.eval(`(() => { const u = ${users}; return [u.indexOf('Run the tests, then summarize.'), u.indexOf('Also check the lint step.'), u.indexOf('Here is the failing screen.'), u.indexOf('Thanks.')]; })()`);
+  check(queuedOrder[0] >= 0 && queuedOrder[0] < queuedOrder[1] && queuedOrder[1] < queuedOrder[2] && queuedOrder[2] < queuedOrder[3], `queued: mid-turn messages shown as user text, in log order (${queuedOrder})`);
+  check(await p.eval(`!${users}.some(t => t.includes('task-notification') || t.includes('Subagent') || t.includes('Sidechain'))`) === true,
+    "queued: task notices, subagent hand-backs and sidechains stay hidden");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queued");
+  await p.shot("queued", true);
   await p.type("#composer-text", "ask me");
   await p.click("#composer-send");
   check(await p.until("(document.querySelector('.card.question')?.textContent ?? '').includes('Answer this question on the Mac.')") === true,

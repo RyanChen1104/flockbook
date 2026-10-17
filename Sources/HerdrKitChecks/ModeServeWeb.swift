@@ -97,6 +97,8 @@ import ImageIO
 
     // Input moves the fake agents on, as herdr would: allow -> working; answer/send -> a new user line.
     var seen = (0, 0, 0), seenImages = 0
+    // "compact me": the Claude agent on w2:p2 compacts its context; its screen changes on every pass, as the timer does.
+    var compacting = 0
     func setStatus(_ pane: String, _ s: AgentStatus) {
         for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == pane {
             ws[wi].tabs[ti].panes[pi].agent?.status = s; ws[wi].tabs[ti].status = s
@@ -135,8 +137,19 @@ import ImageIO
             b.items[sid, default: []].append(ConversationItem(id: "u\(now.2)", kind: .userText(text)))
             // "block me": another agent starts to wait (the PWA's in-app alert).
             if text == "block me" { b.screens["w2:p1"] = "Waiting for you"; setStatus("w2:p1", .blocked) }
+            // "queued log": the conversation of a Claude log with messages it took mid-turn (Fixtures/queued.jsonl).
+            if text == "queued log" {
+                let lines = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
+                b.items[sid, default: []] += SessionLog.parse(lines: lines)
+            }
             // "ask me": Claude opens a question picker (read from the screen only).
             if text == "ask me" { b.screens["w2:p2"] = claudePicker; setStatus("w2:p2", .blocked) }
+            if text == "compact me" { compacting = 1; setStatus("w2:p2", .working) }
+            if text == "compact done" { compacting = 0; b.screens["w2:p2"] = "> "; setStatus("w2:p2", .idle) }
+        }
+        if compacting > 0 {
+            compacting += 1
+            b.screens["w2:p2"] = "✻ Compacting conversation… (\(compacting / 10)s · ↓ \(compacting * 37) tokens · esc to interrupt)\n\n> "
         }
         seen = now
         try? await Task.sleep(for: .milliseconds(100))

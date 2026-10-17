@@ -51,14 +51,57 @@ struct MessageText: NSViewRepresentable {
     private static var next = 0
     private enum Kind: Hashable { case markdown, bubble, plain(mono: CGFloat, error: Bool) }
     private struct Key: Hashable { let kind: Kind; let size: ReadingSize; let text: String }
-    private static var store: [Key: MessageContent] = [:]
+    private static var store: [Key: (content: MessageContent, used: Int, chars: Int)] = [:]
+    private static var uses = 0
+    /// Texts kept, and their characters (the source text and the built text, UTF-16). The store used to drop every text
+    /// once it held 400: a tab of four panes with 100 rows each passed that on one update, so a new row rebuilt more
+    /// than a hundred texts and measured them several hundred times (a 281 ms stall in --test-busy-tab).
+    static let keep = 3000
+    static let keepChars = 8_000_000
+    /// A text larger than this never goes in the store: it lives only while a view holds it.
+    static let largeChars = 1_000_000
+    private(set) static var chars = 0
+    /// Every text still held somewhere (a view on screen holds its own): a text the store dropped, or a large text, is
+    /// found here again with the same id, so the view keeps it and does not reload or measure it.
+    /// By the key's hash: an entry whose text is gone keeps no text alive. The text holds its own key to compare.
+    private final class Held { weak var content: MessageContent?; init(_ c: MessageContent) { content = c } }
+    private static var held: [Int: [Held]] = [:]
+    private var key: Key?
+    private static var heldPrune = 1024
+    /// Texts built and sizes measured so far (checks: a change must not rebuild what is on screen).
+    static var builds = 0
+    static var measures = 0
 
     private static func cached(_ key: Key, _ build: () -> NSAttributedString) -> MessageContent {
-        if let c = store[key] { return c }
-        if store.count > 400 { store.removeAll(keepingCapacity: true) }
+        uses += 1
+        if let c = store[key] { store[key]!.used = uses; return c.content }
+        let h = key.hashValue
+        if let c = held[h]?.lazy.compactMap(\.content).first(where: { $0.key == key }) { insert(c, key); return c }
+        builds += 1
         let c = MessageContent(build())
-        store[key] = c
+        c.key = key
+        if held.count >= heldPrune {
+            held = held.compactMapValues { e in let live = e.filter { $0.content != nil }; return live.isEmpty ? nil : live }
+            heldPrune = max(1024, held.count * 2)
+        }
+        held[h, default: []].removeAll { $0.content == nil }
+        held[h, default: []].append(Held(c))
+        insert(c, key)
         return c
+    }
+
+    /// Puts a text in the store, dropping the least recently used down to three quarters of each limit.
+    private static func insert(_ c: MessageContent, _ key: Key) {
+        let n = key.text.utf16.count + c.text.length
+        guard n <= largeChars else { return }
+        if store.count >= keep || chars + n > keepChars {
+            for (k, e) in store.sorted(by: { $0.value.used < $1.value.used }) {
+                guard store.count > keep * 3 / 4 || chars + n > keepChars * 3 / 4 else { break }
+                store[k] = nil; chars -= e.chars
+            }
+        }
+        store[key] = (c, uses, n)
+        chars += n
     }
 
     /// Assistant markdown (reading.md): headings, lists, quotes, code blocks, tables.
@@ -83,6 +126,7 @@ struct MessageText: NSViewRepresentable {
     func size(width: CGFloat, fit: Bool) -> CGSize {
         let key = Int((width * 2).rounded()) * 2 + (fit ? 1 : 0)
         if let s = sizes[key] { return s }
+        Self.measures += 1
         let s = TextMeasure.size(self, width: width, fit: fit)
         if sizes.count > 16 { sizes.removeAll() }
         sizes[key] = s
@@ -152,6 +196,8 @@ extension NSAttributedString.Key {
 /// Not editable, selectable, no own scrolling: SwiftUI sizes it from `MessageContent`.
 final class MessageTextView: NSTextView {
     private(set) var contentID = -1
+    /// The text shown: held here, so the text store finds it again while this view is on screen.
+    private var content: MessageContent?
     /// Folded height (the rest is cut, the bottom fades), or nil.
     var fold: CGFloat? { didSet { needsLayout = true } }
     private let fade = CAGradientLayer()
@@ -182,6 +228,7 @@ final class MessageTextView: NSTextView {
     func load(_ content: MessageContent) {
         textStorage?.setAttributedString(content.text)
         contentID = content.id
+        self.content = content
     }
 
     // Never scroll the conversation from here. On a resize NSTextView shows a rect of itself through the enclosing scroll

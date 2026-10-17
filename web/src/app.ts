@@ -454,14 +454,47 @@ function render(): void {
     body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
   if (state.toast) body.push(h("div", { class: "toast glass-float", role: "status" }, state.toast));
-  // Keep the composer's text and focus across renders.
-  const draft = (document.getElementById("composer-text") as HTMLTextAreaElement | null)?.value;
+  const nodes = body.filter((c): c is Node | string => !!c);
   const focused = document.activeElement?.id;
-  app.replaceChildren(...body.filter((c): c is Node | string => !!c));
-  const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
-  if (box && draft !== undefined) box.value = draft;
-  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+  if (!keepComposer(nodes)) {
+    // Another screen or pane: the composer's text carries over.
+    const draft = (document.getElementById("composer-text") as HTMLTextAreaElement | null)?.value;
+    app.replaceChildren(...nodes);
+    const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+    if (box && draft !== undefined) { box.value = draft; box.dispatchEvent(new Event("input")); }
+  }
+  if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
   toBottom();
+}
+
+/** The hub sends news every tick (a compacting or working agent's screen changes each time). The same pane's composer
+ *  stays in the page and only its controls are swapped: a phone keyboard closes when its text field leaves the page,
+ *  and focusing a new one from script does not bring it back. Its text, caret, focus and IME input stay. False: no
+ *  composer for the same pane before and after, nothing done. */
+function keepComposer(nodes: (Node | string)[]): boolean {
+  const oldForm = app.querySelector<HTMLFormElement>("form.composer");
+  const newSection = nodes.find((n): n is HTMLElement => n instanceof HTMLElement && !!n.querySelector("form.composer"));
+  const newForm = newSection?.querySelector<HTMLFormElement>("form.composer");
+  const oldSection = oldForm?.parentElement;
+  if (!oldForm || !newForm || !newSection || !oldSection || oldSection.parentElement !== app || newForm.parentElement !== newSection
+    || oldForm.dataset.pane !== newForm.dataset.pane) return false;
+  // Everything around a kept element is replaced; the kept element itself never leaves the page.
+  const around = (keep: Element, from: ParentNode, fresh: (Node | string)[], instead: Node): void => {
+    for (const c of [...from.childNodes]) if (c !== keep) c.remove();
+    const at = fresh.indexOf(instead);
+    keep.before(...fresh.slice(0, at));
+    keep.after(...fresh.slice(at + 1));
+  };
+  const oldRow = oldForm.querySelector(".composer-row"), newRow = newForm.querySelector(".composer-row");
+  const oldBox = oldRow?.querySelector("textarea"), newBox = newRow?.querySelector("textarea");
+  if (!oldRow || !newRow || !oldBox || !newBox) return false;
+  around(oldSection, app, nodes, newSection);
+  around(oldForm, oldSection, [...newSection.childNodes], newForm);
+  around(oldRow, oldForm, [...newForm.childNodes], newRow);
+  around(oldBox, oldRow, [...newRow.childNodes], newBox);
+  for (const a of ["placeholder", "aria-label"]) oldBox.setAttribute(a, newBox.getAttribute(a) ?? "");
+  oldBox.disabled = newBox.disabled;
+  return true;
 }
 
 function pairScreen(): HTMLElement {
@@ -736,7 +769,7 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     state.progress = null;
     const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
     if (r.ok) {
-      if (field) field.value = "";
+      if (field) { field.value = ""; field.dispatchEvent(new Event("input")); }
       state.attachments.delete(pane);
     } else {
       // The hub no longer knows an image (reconnected, or it dropped one): upload them all again next time.
@@ -746,6 +779,14 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
     render();
   };
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+  box.addEventListener("input", () => fitText(box));
+  // Turning the phone re-wraps the text: fit it again when the field's width changes (its height changes are ours).
+  let width = -1;
+  new ResizeObserver(([e]) => {
+    const w = e.contentRect.width;
+    if (width >= 0 && w !== width) fitText(box);
+    width = w;
+  }).observe(box);
   // A file field with `image/*`: the phone offers the camera and the photo library.
   const file = h("input", { id: "composer-file", type: "file", accept: "image/*", multiple: true, hidden: true, tabindex: "-1",
     onchange: () => { const fs = [...(file.files ?? [])]; file.value = ""; pick(pane, fs); } });
@@ -757,10 +798,24 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
       h("button", { class: "thumb-remove", type: "button", disabled: state.busy, "aria-label": `Remove ${a.file.name || `image ${i + 1}`}`, title: "Remove",
         onclick: () => { state.attachments.set(pane, images.filter((x) => x !== a)); render(); } }, "×")))) : null;
   const progress = state.progress !== null ? h("progress", { id: "composer-progress", max: 1, value: state.progress, "aria-label": "Sending images" }) : null;
-  return h("form", { class: "composer glass-float", onsubmit: (e: Event) => { e.preventDefault(); send(); } },
+  return h("form", { class: "composer glass-float", "data-pane": pane, onsubmit: (e: Event) => { e.preventDefault(); send(); } },
     thumbs, progress,
     h("div", { class: "composer-row" }, file, attach, box,
       h("button", { id: "composer-send", class: "primary send", type: "submit", disabled: promptOpen || state.busy, "aria-label": "Send", title: "Send" }, "↑")));
+}
+
+/** The text field grows with its text up to its max-height, and back. From its current height to the new one, so the
+ *  CSS transition runs: one line keeps the composer a pill, more lines open it into a rounded rectangle. */
+function fitText(box: HTMLTextAreaElement): void {
+  if (!box.isConnected) return;
+  const from = box.getBoundingClientRect().height;
+  box.style.height = "auto";
+  const max = parseFloat(getComputedStyle(box).maxHeight) || Infinity;
+  const to = Math.min(box.scrollHeight, max);
+  box.style.overflowY = box.scrollHeight > max ? "auto" : "hidden";
+  box.style.height = `${from}px`;
+  void box.offsetHeight;   // the start height takes effect before the end one
+  box.style.height = `${to}px`;
 }
 
 // --- Start.

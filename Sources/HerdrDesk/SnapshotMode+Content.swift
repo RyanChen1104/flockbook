@@ -24,6 +24,7 @@ import SwiftUI
         if args.contains("--test-open-latest-live") { Task { await openLatestLive(args) }; return true }   // before --test-open-latest
         if args.contains("--test-open-latest") { Task { await openLatest() }; return true }
         if args.contains("--test-conversation-churn") { Task { await conversationChurn(args) }; return true }
+        if args.contains("--test-busy-tab") { Task { await busyTab() }; return true }
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }
