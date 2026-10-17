@@ -57,6 +57,7 @@ OFFLINE=(
     "question|question-test: PASS|--test-question"
     "screencolumn|screencolumn-test: PASS|--test-screencolumn"
     "conversation-churn|churn-test: PASS|--test-conversation-churn"
+    "busy-tab|busy-tab: PASS|--test-busy-tab"
 )
 REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"

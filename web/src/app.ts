@@ -107,6 +107,7 @@ function connect(): void {
     ws = null;
     state.connected = false;
     state.welcomed = false;
+    cancelRound();
     // The hub drops a connection's uploads when it closes: send them again next time.
     for (const list of state.attachments.values()) for (const a of list) a.uploaded = false;
     for (const done of waiting.values()) done(false, "failed", "Not connected.");
@@ -192,6 +193,8 @@ function receive(m: HubMessage): void {
       break;
     case "conversation": {
       const v = view(m.pane);
+      // The pane shows another session (a new agent there): it opens at its newest message, like a switch.
+      if (m.pane === state.watching && v.session !== undefined && v.session !== m.session) { cancelRound(); following = true; }
       v.session = m.session;
       v.hasEarlier = m.hasEarlier;
       if (m.mode === "replace") v.items = m.items;
@@ -303,11 +306,116 @@ async function follow(): Promise<void> {
   if (want === state.watching) { render(); return; }
   if (state.watching) request({ type: "unwatch", pane: state.watching });
   state.watching = want;
+  cancelRound();
+  following = true;   // an agent opens at its newest message
   if (state.banner && state.banner.pane === want) state.banner = null;
   render();
-  if (want) { await request({ type: "watch", pane: want }); window.scrollTo(0, document.body.scrollHeight); }
+  if (want) await request({ type: "watch", pane: want });
 }
 addEventListener("hashchange", follow);
+
+// --- The newest message. An open conversation stays at the bottom while rows arrive and lay out (markdown, images),
+// until the reader scrolls up; scrolling back down follows again. Opening, switching or reloading starts at the bottom.
+let following = true;
+/** What the reader sees is the visual viewport: smaller with the keyboard open or zoomed in. */
+function nearBottom(): boolean {
+  const v = window.visualViewport;
+  const seen = v ? v.pageTop + v.height : window.scrollY + window.innerHeight;
+  return document.documentElement.scrollHeight - seen <= 40;
+}
+function toBottom(): void {
+  if (state.watching && following && !reader.active) window.scrollTo(0, document.documentElement.scrollHeight);
+}
+/** Where the reader sees the page from (the visual viewport: it moves alone when zoomed in). */
+const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
+/** Only the reader changes `following`. A reader action (wheel, touch, a scroll key, the scroll bar from press to
+ * release) on a shown conversation starts a round; the round ends when the page has stopped scrolling for `settleMs`.
+ * At its end: the reader reached the bottom during the round (scrolled down to it, pushed down at it, or pressed End)
+ * and did not scroll up after (new rows may have come in meanwhile) -> following. Otherwise moved since the round
+ * started -> not following; not moved -> as before. A page that got shorter and moved the view is not the reader. Every scroll outside a round (the page's own, a page that got shorter, a reconnect, the
+ * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
+ * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
+ * page catches up. */
+const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
+const settleMs = 150;
+/** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
+ * a move. */
+const stillMs = 10000;
+const shown = (): boolean => !!state.watching && state.welcomed && document.visibilityState === "visible";
+function cancelRound(): void {
+  clearTimeout(reader.settle);
+  clearTimeout(reader.still);
+  reader.active = reader.holding = reader.reachedEnd = false;
+}
+/** The bottom reached in this round: the view moved down to it. Kept until the view is more than 1 px above the
+ *  lowest place it reached since (a page that got shorter moves it up too). */
+function track(): void {
+  const top = viewTop();
+  if (top > reader.last && nearBottom()) reachEnd();
+  else if (reader.reachedEnd) {
+    if (top > reader.endTop) reader.endTop = top;
+    else if (top < reader.endTop - 1) reader.reachedEnd = false;
+  }
+  reader.last = top;
+}
+function reachEnd(): void {
+  reader.endTop = reader.reachedEnd ? Math.max(reader.endTop, viewTop()) : viewTop();
+  reader.reachedEnd = true;
+}
+function readerActs(): void {
+  if (!shown()) return;
+  if (!reader.active) { reader.active = true; reader.from = reader.last = viewTop(); reader.reachedEnd = false; }
+  track();
+  clearTimeout(reader.settle);
+  if (!reader.holding) reader.settle = setTimeout(settled, settleMs);
+}
+function settled(): void {
+  if (reader.holding) return;
+  reader.active = false;
+  if (reader.reachedEnd) following = true;
+  else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
+  toBottom();
+}
+function holdBar(): void {
+  readerActs();
+  if (!reader.active) return;
+  reader.holding = true;
+  clearTimeout(reader.still);
+  reader.still = setTimeout(letGoBar, stillMs);
+}
+function letGoBar(): void {
+  if (!reader.holding) return;
+  reader.holding = false;
+  clearTimeout(reader.still);
+  readerActs();
+}
+const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
+/** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
+const downKeys = new Set(["PageDown", "ArrowDown", " "]);
+addEventListener("keydown", (e) => {
+  if (!scrollKeys.has(e.key) || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+  readerActs();
+  if (!reader.active) return;
+  if (e.key === "End" || (e.key === "ArrowDown" && e.metaKey) || (downKeys.has(e.key) && nearBottom())) reachEnd();
+});
+addEventListener("wheel", (e) => { if (reader.active && e.deltaY > 0 && nearBottom()) reachEnd(); }, { passive: true });
+addEventListener("pointerdown", (e) => { if (e.target === document.documentElement) holdBar(); });
+addEventListener("pointermove", () => { if (reader.holding) holdBar(); }, { passive: true });
+for (const type of ["pointerup", "pointercancel", "lostpointercapture", "blur"]) addEventListener(type, letGoBar);
+addEventListener("pagehide", cancelRound);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") cancelRound(); });
+/** A scroll during a round keeps the round going (until the page stops); any other scroll changes nothing. */
+function scrolled(): void {
+  if (!reader.active) return;
+  if (reader.holding) holdBar(); else readerActs();
+}
+addEventListener("scroll", scrolled, { passive: true });
+window.visualViewport?.addEventListener("scroll", scrolled);
+window.visualViewport?.addEventListener("resize", toBottom);
+new ResizeObserver(toBottom).observe(document.body);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") toBottom(); });
+addEventListener("pageshow", toBottom);
 function open(pane: string): void { location.hash = `pane=${encodeURIComponent(pane)}`; }
 
 // --- Helpers.
@@ -374,14 +482,19 @@ function render(): void {
     body.push(h("button", { class: "banner glass-float", onclick: () => { state.banner = null; open(b.pane); } }, dot("blocked"), b.text));
   }
   if (state.toast) body.push(h("div", { class: "toast", role: "status" }, state.toast));
-  // Keep each agent's composer text (its own) and the focus across renders.
+  const nodes = body.filter((c): c is Node | string => !!c);
+  const focused = document.activeElement?.id;
+  // Keep each agent's composer text (its own) across renders.
   const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
-  const focused = document.activeElement?.id;
-  app.replaceChildren(...body.filter((c): c is Node | string => !!c));
+  if (!keepComposer(nodes)) {
+    // Another screen or pane: that pane's own draft comes back (not the text of the composer before).
+    app.replaceChildren(...nodes);
+    const fresh = document.getElementById("composer-text") as HTMLTextAreaElement | null;
+    if (fresh && state.watching) { fresh.value = state.drafts[state.watching] ?? ""; fitText(fresh); }
+  }
   const box = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   state.composerPane = box ? state.watching : null;
-  if (box && state.watching) box.value = state.drafts[state.watching] ?? "";
   // Pulled texts of this agent go after what the composer holds, each on its own line; then the hub may forget them.
   const fills = state.watching ? state.fills[state.watching] : undefined;
   if (box && fills?.length) {
@@ -397,7 +510,38 @@ function render(): void {
     box.dispatchEvent(new Event("input"));
     box.focus();
   }
-  if (focused) document.getElementById(focused)?.focus();
+  if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
+  toBottom();
+}
+
+/** The hub sends news every tick (a compacting or working agent's screen changes each time). The same pane's composer
+ *  stays in the page and only its controls are swapped: a phone keyboard closes when its text field leaves the page,
+ *  and focusing a new one from script does not bring it back. Its text, caret, focus and IME input stay. False: no
+ *  composer for the same pane before and after, nothing done. */
+function keepComposer(nodes: (Node | string)[]): boolean {
+  const oldForm = app.querySelector<HTMLFormElement>("form.composer");
+  const newSection = nodes.find((n): n is HTMLElement => n instanceof HTMLElement && !!n.querySelector("form.composer"));
+  const newForm = newSection?.querySelector<HTMLFormElement>("form.composer");
+  const oldSection = oldForm?.parentElement;
+  if (!oldForm || !newForm || !newSection || !oldSection || oldSection.parentElement !== app || newForm.parentElement !== newSection
+    || oldForm.dataset.pane !== newForm.dataset.pane) return false;
+  // Everything around a kept element is replaced; the kept element itself never leaves the page.
+  const around = (keep: Element, from: ParentNode, fresh: (Node | string)[], instead: Node): void => {
+    for (const c of [...from.childNodes]) if (c !== keep) c.remove();
+    const at = fresh.indexOf(instead);
+    keep.before(...fresh.slice(0, at));
+    keep.after(...fresh.slice(at + 1));
+  };
+  const oldRow = oldForm.querySelector(".composer-row"), newRow = newForm.querySelector(".composer-row");
+  const oldBox = oldRow?.querySelector("textarea"), newBox = newRow?.querySelector("textarea");
+  if (!oldRow || !newRow || !oldBox || !newBox) return false;
+  around(oldSection, app, nodes, newSection);
+  around(oldForm, oldSection, [...newSection.childNodes], newForm);
+  around(oldRow, oldForm, [...newForm.childNodes], newRow);
+  around(oldBox, oldRow, [...newRow.childNodes], newBox);
+  for (const a of ["placeholder", "aria-label"]) oldBox.setAttribute(a, newBox.getAttribute(a) ?? "");
+  oldBox.disabled = newBox.disabled;
+  return true;
 }
 
 function pairScreen(): HTMLElement {
@@ -688,7 +832,7 @@ async function upload(list: Attachment[]): Promise<{ code?: string; message?: st
 function sent(pane: string, rev: number): void {
   if ((state.revs[pane] ?? 0) !== rev) return;
   const field = document.getElementById("composer-text") as HTMLTextAreaElement | null;
-  if (field && state.composerPane === pane) field.value = "";
+  if (field && state.composerPane === pane) { field.value = ""; fitText(field); }
   delete state.drafts[pane];
 }
 
@@ -720,6 +864,14 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
   };
   box.addEventListener("input", () => { state.revs[pane] = (state.revs[pane] ?? 0) + 1; });
   box.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+  box.addEventListener("input", () => fitText(box));
+  // Turning the phone re-wraps the text: fit it again when the field's width changes (its height changes are ours).
+  let width = -1;
+  new ResizeObserver(([e]) => {
+    const w = e.contentRect.width;
+    if (width >= 0 && w !== width) fitText(box);
+    width = w;
+  }).observe(box);
   // A file field with `image/*`: the phone offers the camera and the photo library.
   const file = h("input", { id: "composer-file", type: "file", accept: "image/*", multiple: true, hidden: true, tabindex: "-1",
     onchange: () => { const fs = [...(file.files ?? [])]; file.value = ""; pick(pane, fs); } });
@@ -731,10 +883,24 @@ function composer(pane: string, promptOpen: boolean, agent?: string): HTMLElemen
       h("button", { class: "thumb-remove", type: "button", disabled: state.busy, "aria-label": `Remove ${a.file.name || `image ${i + 1}`}`, title: "Remove",
         onclick: () => { state.attachments.set(pane, images.filter((x) => x !== a)); render(); } }, "×")))) : null;
   const progress = state.progress !== null ? h("progress", { id: "composer-progress", max: 1, value: state.progress, "aria-label": "Sending images" }) : null;
-  return h("form", { class: "composer glass-float", onsubmit: (e: Event) => { e.preventDefault(); send(); } },
+  return h("form", { class: "composer glass-float", "data-pane": pane, onsubmit: (e: Event) => { e.preventDefault(); send(); } },
     thumbs, progress,
     h("div", { class: "composer-row" }, file, attach, box,
       h("button", { id: "composer-send", class: "primary send", type: "submit", disabled: promptOpen || state.busy, "aria-label": "Send", title: "Send" }, "↑")));
+}
+
+/** The text field grows with its text up to its max-height, and back. From its current height to the new one, so the
+ *  CSS transition runs: one line keeps the composer a pill, more lines open it into a rounded rectangle. */
+function fitText(box: HTMLTextAreaElement): void {
+  if (!box.isConnected) return;
+  const from = box.getBoundingClientRect().height;
+  box.style.height = "auto";
+  const max = parseFloat(getComputedStyle(box).maxHeight) || Infinity;
+  const to = Math.min(box.scrollHeight, max);
+  box.style.overflowY = box.scrollHeight > max ? "auto" : "hidden";
+  box.style.height = `${from}px`;
+  void box.offsetHeight;   // the start height takes effect before the end one
+  box.style.height = `${to}px`;
 }
 
 // --- Start.

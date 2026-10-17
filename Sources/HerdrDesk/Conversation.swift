@@ -161,7 +161,7 @@ struct ConversationView: View {
             // One rule for every growth, so no per-event scroll calls and no retry timers.
             .onScrollGeometryChange(for: ScrollMetrics.self) { g in
                 ScrollMetrics(offset: g.contentOffset.y, content: g.contentSize.height, container: g.containerSize.height,
-                              insets: g.contentInsets.top + g.contentInsets.bottom)
+                              insets: g.contentInsets.top + g.contentInsets.bottom, top: g.contentInsets.top)
             } action: { old, new in
                 if abs(new.content - old.content) > 0.5 || abs(new.container - old.container) > 0.5 || abs(new.insets - old.insets) > 0.5 {
                     if tracker.atBottom {
@@ -169,7 +169,7 @@ struct ConversationView: View {
                         Task { @MainActor in position.scrollTo(edge: .bottom) }
                     }
                 } else {
-                    tracker.atBottom = new.offset + new.container >= new.content - 40
+                    tracker.atBottom = new.atBottom
                 }
             }
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
@@ -199,7 +199,13 @@ struct ConversationView: View {
         Task { @MainActor in position.scrollTo(edge: .bottom) }
     }
 
-    struct ScrollMetrics: Equatable { var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat }
+    struct ScrollMetrics: Equatable {
+        var offset: CGFloat; var content: CGFloat; var container: CGFloat; var insets: CGFloat; var top: CGFloat
+        /// The newest row is in view (within 40 pt). The container is the area between the bars, and the offset starts
+        /// above the top bar: at the end, offset + top + container = content. Leaving out `top` read a reader at the end
+        /// as scrolled up whenever the top bar was over 40 pt (the toolbar and a pane label), and following stopped.
+        var atBottom: Bool { offset + top + container >= content - 40 }
+    }
 
     struct Entry {
         enum Kind { case row(ConversationItem), separator(String), footer(String) }

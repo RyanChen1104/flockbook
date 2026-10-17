@@ -110,6 +110,10 @@ async function page(context) {
       return r.result.value;
     },
     async goto(url) { await send("Page.navigate", { url }, sessionId); },
+    /** A real reload (`goto` to the same address with another hash stays in the document). */
+    async reload() { await send("Page.reload", {}, sessionId); },
+    /** A DevTools call on this page. */
+    async cdp(method, params = {}) { return send(method, params, sessionId); },
     /** Runs `source` in every page this target loads, before the page's own scripts. */
     async onEveryLoad(source) { await send("Page.addScriptToEvaluateOnNewDocument", { source }, sessionId); },
     /** Waits until `expr` is truthy; returns its value, or undefined after `ms`. */
@@ -134,7 +138,7 @@ async function page(context) {
       await send("DOM.setFileInputFiles", { files: paths, nodeId }, sessionId);
     },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
-    async scale(dpr) { await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: dpr, mobile: true }, sessionId); },
+    async scale(dpr, width = 390, height = 844) { await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: true }, sessionId); },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -484,6 +488,65 @@ async function fakeRun() {
   check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
   check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
 
+  // Compacting: the screen changes on every hub tick. The text field stays the same element (a phone keyboard closes
+  // when its field leaves the page), with its text, caret and focus; a message sent meanwhile goes to the agent.
+  await p.type("#composer-text", "compact me");
+  await p.click("#composer-send");
+  check(await p.until("(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting conversation')") === true, "compacting: the agent compacts");
+  await p.eval("(() => { const e = document.querySelector('#composer-text'); window.__box = e; e.focus(); e.value = 'half a thought'; e.setSelectionRange(4, 4); return true; })()");
+  const compactScreen = await p.eval("document.querySelector('.screen pre').textContent");
+  check(await p.until(`document.querySelector('.screen pre')?.textContent !== ${JSON.stringify(compactScreen)}`) === true, "compacting: the screen moves on");
+  await new Promise((r) => setTimeout(r, 700));
+  check(await p.eval("document.querySelector('#composer-text') === window.__box") === true, "compacting: screen updates keep the same text field");
+  check(await p.eval("(() => { const e = window.__box; return document.activeElement === e && e.value === 'half a thought' && e.selectionStart === 4 && !e.disabled; })()") === true,
+    "compacting: the text, caret and focus stay; the field stays on");
+  await p.type("#composer-text", "sent while compacting");
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'sent while compacting')") === true, "compacting: a message sent meanwhile goes to the agent");
+  await p.type("#composer-text", "Typing while it compacts");
+  await p.shot("composer-compacting");
+  await p.shot("composer-compacting", true);
+  await p.type("#composer-text", "compact done");
+  await p.click("#composer-send");
+  check(await p.until("!(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting')") === true, "compacting: done");
+
+  // The composer's shape: one line is a pill (radius = half the height); more lines open it into a rounded rectangle
+  // with the same radius, the text field's height easing between the two.
+  const form = "document.querySelector('form.composer')", field = "document.querySelector('#composer-text')";
+  const shape = `(() => { const f = ${form}, r = f.getBoundingClientRect(); return { h: r.height, radius: parseFloat(getComputedStyle(f).borderTopLeftRadius), box: ${field}.getBoundingClientRect().height }; })()`;
+  const setText = (t) => p.eval(`(() => { const e = ${field}; e.value = ${JSON.stringify(t)}; e.dispatchEvent(new Event('input')); return e.getAnimations().length; })()`);
+  await setText("One line");
+  await new Promise((r) => setTimeout(r, 400));
+  const one = await p.eval(shape);
+  check(Math.abs(one.radius - one.h / 2) < 1, `pill: one line, radius ${one.radius} = half of ${one.h}`);
+  await p.shot("composer-pill");
+  await p.shot("composer-pill", true);
+  const easing = await setText("A longer note for the agent.\nSecond line.\nThird line.\nFourth line.");
+  check(easing > 0, "pill: the height eases (a running transition), no jump");
+  await new Promise((r) => setTimeout(r, 400));
+  const four = await p.eval(shape);
+  check(four.box > one.box + 60 && Math.abs(four.radius - one.radius) < 0.5 && four.h > four.radius * 2 + 40,
+    `pill: four lines, a rounded rectangle (height ${four.h}, radius ${four.radius})`);
+  await p.shot("composer-multiline");
+  await p.shot("composer-multiline", true);
+  await setText("");
+  await new Promise((r) => setTimeout(r, 400));
+  const back = await p.eval(shape);
+  check(Math.abs(back.h - one.h) < 1, `pill: emptied, back to one line (${back.h})`);
+  // Landscape to portrait: a long draft wraps into more lines; the field grows with no typing, nothing is cut off.
+  const metrics = (width, height) => p.scale(3, width, height);
+  const draft = "A long draft typed with the phone turned sideways, words enough to fill one wide line and wrap once the phone stands up again.";
+  await metrics(844, 390);
+  await setText(draft);
+  await new Promise((r) => setTimeout(r, 400));
+  const wide = await p.eval(shape);
+  await metrics(390, 844);
+  await new Promise((r) => setTimeout(r, 500));
+  const fits = `(() => { const e = ${field}; return { fit: e.scrollHeight <= e.clientHeight + 1 || getComputedStyle(e).overflowY === 'auto', box: e.getBoundingClientRect().height }; })()`;
+  const narrow = await p.eval(fits);
+  check(narrow.fit && narrow.box > wide.box, `turn: portrait re-wraps the draft and the field grows (${wide.box} -> ${narrow.box}), nothing cut off`);
+  await setText("");
+
   // Images from the phone: pick, preview, remove, send in parts with progress; the hub re-encodes them.
   const imgDir = mkdtempSync(join(tmpdir(), "fb-web-img-"));
   const big = join(imgDir, "big.png"); writeFileSync(big, Buffer.alloc(11 * 1024 * 1024, 1));
@@ -743,6 +806,275 @@ async function fakeRun() {
     "question: a screen-read question says answer on the Mac");
   check(await p.eval("!document.querySelector('#submit-answer') && !document.querySelector('.option')") === true, "question: no answer controls for it");
   await p.shot("question-mac");
+
+  // The newest message: a conversation opens at the bottom and stays there while rows arrive, after a switch, a reload
+  // and a return from the background. A reader who scrolled up stays where they are.
+  const bottomGap = "Math.round(document.documentElement.scrollHeight - window.innerHeight - window.scrollY)";
+  const atEnd = `${bottomGap} <= 4`;
+  const grow = (session, n) => hub.stdin.write(`grow ${session} ${n}\n`);
+  const rows = "document.querySelectorAll('.msg').length";
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  await p.until(`${rows} > 0`);
+  const before = await p.eval(rows);
+  grow("s3", 30);   // the agent writes after the page opened
+  await p.until(`${rows} >= ${before + 30}`);
+  check(await p.until(atEnd, 2000) === true, `newest: rows that arrive after opening -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  grow("s3", 3);
+  await p.until(`${rows} >= ${before + 33}`);
+  check(await p.until(atEnd, 2000) === true, `newest: more rows while at the bottom -> still there (gap ${await p.eval(bottomGap)})`);
+  await p.until("!document.querySelector('.toast')", 8000);   // an earlier check's message would cover the end
+  await p.shot("newest");
+  await p.shot("newest", true);
+  // Scrolled up: rows arrive, the reader is not pulled back.
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 200)");
+  await new Promise((r) => setTimeout(r, 300));
+  grow("s3", 3);
+  await p.until(`${rows} >= ${before + 36}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval("Math.round(window.scrollY)") === 200, `newest: scrolled up -> stays (y ${await p.eval("Math.round(window.scrollY)")})`);
+  // Another agent, then back: each opens at its newest message.
+  grow("s4", 30);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until(`${rows} >= 30`);
+  check(await p.until(atEnd, 2000) === true, `newest: switch to another agent -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  await p.until(`${rows} >= ${before + 36}`);
+  check(await p.until(atEnd, 2000) === true, `newest: back to the first agent -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  // Reload. From here on the page keeps its sockets where the check can close one (a dropped connection).
+  await p.onEveryLoad("{ const W = WebSocket; window.__sockets = []; window.WebSocket = class extends W { constructor(...a) { super(...a); window.__sockets.push(this); } }; }");
+  await p.eval("window.__loaded = true");
+  await p.reload();
+  await p.until("!window.__loaded && window.__sockets", 8000);
+  await p.until(`${rows} >= ${before + 36}`, 8000);
+  check(await p.until(atEnd, 2000) === true, `newest: reload -> at the bottom (gap ${await p.eval(bottomGap)})`);
+  // The connection drops while the reader is scrolled up: the short "Not connected" screen puts the page at the top. That
+  // is not the reader scrolling: back online, rows arrive and the reader is not pulled to the bottom.
+  const y = "Math.round(window.scrollY)";
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 200)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("window.__sockets.at(-1).close()");
+  await p.until("document.body.innerText.includes('Not connected')");
+  await p.until(`${rows} >= ${before + 36}`, 8000);
+  grow("s3", 2);
+  await p.until(`${rows} >= ${before + 38}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 200, `newest: connection dropped while scrolled up -> not pulled to the bottom after it returns (gap ${await p.eval(bottomGap)}, y ${await p.eval(y)})`);
+  // Pinch zoom: what the reader sees is the visual viewport. At the bottom of the page but zoomed in on its top half,
+  // the newest rows are out of view: rows that arrive do not move the page.
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+  await p.until("window.visualViewport.scale > 1.5");
+  // The reader moves only the zoomed view (the page itself stays at its bottom: no window scroll event).
+  const zoomedY = await p.eval(y);
+  await p.cdp("Input.dispatchMouseEvent", { type: "mouseWheel", x: 195, y: 400, deltaX: 0, deltaY: 120 });
+  await p.until("window.visualViewport.offsetTop > 50");
+  const moved = await p.eval("Math.round(window.visualViewport.offsetTop)");
+  await new Promise((r) => setTimeout(r, 300));
+  grow("s3", 2);
+  await p.until(`${rows} >= ${before + 40}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(moved > 50 && await p.eval(y) === zoomedY, `newest: zoomed in above the newest rows -> stays (view moved ${moved}, y ${zoomedY} -> ${await p.eval(y)})`);
+  await p.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+  await p.until("window.visualViewport.scale < 1.1");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
+  await new Promise((r) => setTimeout(r, 300));
+  // The reader scrolls up in the same frame as the page grew (before the resize observer saw the new height): their
+  // scroll counts, the page is not pulled back.
+  await p.eval(`(() => { const d = document.createElement('div'); d.style.height = '600px'; document.getElementById('app').append(d);
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300); })()`);
+  await new Promise((r) => setTimeout(r, 900));   // past the moment after the reader's input
+  check(await p.eval(bottomGap) > 300, `newest: scrolled up while the page grew -> stays (gap ${await p.eval(bottomGap)})`);
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");   // following again
+  await new Promise((r) => setTimeout(r, 300));
+  // The scroll bar held longer than that moment, then dragged up in the frame the page grew: still the reader.
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`(() => { const d = document.createElement('div'); d.style.height = '600px'; document.getElementById('app').append(d);
+    window.scrollBy(0, -300); })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 300, `newest: scroll bar held, dragged up while the page grew -> stays (gap ${await p.eval(bottomGap)})`);
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 300));
+  // The scroll bar let go outside the window (no pointerup reaches the page): the window losing focus ends the hold, and
+  // a hold with no movement for 10 s ends by itself. Following again either way.
+  const grows = "(() => { const d = document.createElement('div'); d.style.height = '400px'; document.getElementById('app').append(d); })()";
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); window.dispatchEvent(new Event('blur'))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar let go outside the window -> follows again (gap ${await p.eval(bottomGap)})`);
+  // The page's own scroll to the bottom is delivered late: the page grows, the page scrolls to its end, and in the same
+  // frame the scroll bar is pressed and the page grows again, so that scroll event arrives inside the hold, above the new
+  // end. It is the page's, not the reader's; the hold is never let go and nothing else happens. After the 10 s limit the
+  // page is at the newest rows. (A second resize observer runs after the page's, which is the one that scrolls.)
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${grows}; });
+    ro.observe(document.body); ${grows}; })()`);
+  await new Promise((r) => setTimeout(r, 10500));
+  check(await p.until(atEnd, 2000) === true, `newest: own scroll delivered inside a still hold, never let go -> at the bottom after 10 s (gap ${await p.eval(bottomGap)})`);
+  // The same late scroll, then the hand moves a little on the held bar without scrolling, and lets go: the hold had a move,
+  // so only knowing the page's own scroll keeps it following.
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${grows}; });
+    ro.observe(document.body); ${grows}; })()`);
+  await new Promise((r) => setTimeout(r, 200));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  check(await p.until(atEnd, 2000) === true, `newest: own scroll delivered inside a hold, a move without scrolling, let go -> follows (gap ${await p.eval(bottomGap)})`);
+  // Pressed and let go, the page did not move: following as before the press.
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 400));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: pressed and let go, the page did not move -> follows as before (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls up in steps while rows keep arriving between the steps (an agent writing fast): nothing pulls the
+  // page down during the scrolling, so the reader gets away from the bottom.
+  for (let i = 0; i < 6; i++) {
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -150 })); window.scrollBy(0, -150)");
+    await new Promise((r) => setTimeout(r, 40));
+    await p.eval(grows);
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 600, `newest: scrolled up in steps while rows arrive -> gets away from the bottom (gap ${await p.eval(bottomGap)})`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  // The scroll bar held still while a scroll key moves the page (or a click on the bar's track): that is the reader.
+  // PageUp: not following after the hold ends.
+  const key = (k) => `document.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true }))`;
+  await p.eval(`document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${key("PageUp")}; window.scrollBy(0, -400)`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 300, `newest: scroll bar held, PageUp, let go -> stays (gap ${await p.eval(bottomGap)})`);
+  // End from above the newest rows (scrolled up with the wheel first): following after the hold ends.
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollBy(0, -400)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`document.documentElement.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight)`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("document.documentElement.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scroll bar held, End, let go -> follows (gap ${await p.eval(bottomGap)})`);
+  // The page scrolls to its end, and in that frame the reader scrolls up: the page's scroll event never arrives on its
+  // own. Later the reader scrolls back to that same end: that is the reader, following again.
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 400 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`(() => { const ro = new ResizeObserver(() => { ro.disconnect();
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300); });
+    ro.observe(document.body); ${grows}; })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.eval(bottomGap) > 200, `newest: scrolled up in the frame the page scrolled itself -> stays (gap ${await p.eval(bottomGap)})`);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 300 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: then scrolled back to that end -> follows again (gap ${await p.eval(bottomGap)})`);
+  const up = async () => {   // the reader scrolls up: not following
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300 })); window.scrollBy(0, -300)");
+    await new Promise((r) => setTimeout(r, 900));
+  };
+  const down = async () => {   // the reader scrolls to the end: following
+    await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 300 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+    await new Promise((r) => setTimeout(r, 900));
+  };
+  // Not following, then the page gets shorter and sits at its end by itself. The reader presses End (nothing moves):
+  // following again.
+  await p.eval("(() => { const d = document.createElement('div'); d.id = 'shrinks'; d.style.height = '600px'; document.body.append(d); })()");
+  await down();
+  await up();
+  await p.eval("document.getElementById('shrinks').remove()");
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval(key("End"));
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: at the end after the page got shorter, End -> follows (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls to the end and new rows come in before the scrolling settles: following.
+  await up();
+  await p.eval(`${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight)`);
+  await new Promise((r) => setTimeout(r, 50));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: scrolled to the end, rows came in right after -> follows (gap ${await p.eval(bottomGap)})`);
+  // The reader scrolls and opens another agent in the same moment: the other agent opens at its newest message.
+  const here = await p.eval("location.hash");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until(atEnd, 3000);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollTo(0, 300)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); window.scrollBy(0, -100); location.hash = ${JSON.stringify(here)}`);
+  await new Promise((r) => setTimeout(r, 900));
+  check(await p.until(atEnd, 2000) === true, `newest: scrolling, then another agent at once -> it opens at the bottom (gap ${await p.eval(bottomGap)})`);
+  // Scrolling while the connection drops: the short "Not connected" screen moving the page is not the reader. Back
+  // online, the reader who was scrolled up is not pulled to the bottom.
+  await down();
+  await up();
+  const had = await p.eval(rows);
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })); window.__wheels = setInterval(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })), 50); window.__sockets.at(-1).close()");
+  await p.until("document.body.innerText.includes('Not connected')");
+  await new Promise((r) => setTimeout(r, 100));
+  await p.eval("clearInterval(window.__wheels)");
+  await p.until(`${rows} >= ${had}`, 8000);
+  grow("s3", 1);
+  await p.until(`${rows} >= ${had + 1}`);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 200, `newest: scrolling when the connection dropped -> not pulled to the bottom after it returns (gap ${await p.eval(bottomGap)})`);
+  await down();
+  // End is the reader asking for the bottom: new rows that render before the scroll is seen still leave it following.
+  await up();
+  await p.eval(`${key("End")}; window.scrollTo(0, document.documentElement.scrollHeight); ${grows}`);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  check(await p.until(atEnd, 2000) === true, `newest: End, rows rendered before the scroll -> follows (gap ${await p.eval(bottomGap)})`);
+  // From the bottom up in 1 px steps within one round: more than 1 px above the bottom it reached, not following.
+  await down();
+  await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 })); window.scrollTo(0, document.documentElement.scrollHeight);
+    let n = 0; window.__steps = setInterval(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -1 })); window.scrollBy(0, -1);
+      if (++n === 70) clearInterval(window.__steps); }, 20); })()`);
+  await new Promise((r) => setTimeout(r, 2000));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval(bottomGap) > 100, `newest: up from the bottom in 1 px steps -> stays (gap ${await p.eval(bottomGap)})`);
+  // The page gets shorter during a round and that puts the view at the bottom: not the reader, not following.
+  await p.eval("(() => { const d = document.createElement('div'); d.id = 'shrinks2'; d.style.height = '600px'; document.body.append(d); })()");
+  await down();
+  await up();
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })); window.__wheels = setInterval(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 })), 50);
+    document.getElementById('shrinks2').remove()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval("clearInterval(window.__wheels)");
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval(grows);
+  await new Promise((r) => setTimeout(r, 500));
+  // (Not pulled to the bottom. The browser's own scroll anchoring may move the view down by part of the new height.)
+  check(await p.eval(bottomGap) > 50, `newest: put at the bottom by a shorter page during a round -> not following (gap ${await p.eval(bottomGap)})`);
+  // Another session in the same pane (a new agent there): it opens at its newest message, and follows.
+  await up();
+  const s9 = "document.body.innerText.includes('New session reply 39')";
+  hub.stdin.write("session w2:p1 s9\n");
+  await p.until(s9, 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  grow("s9", 2);   // and it keeps following
+  await p.until("document.body.innerText.includes('Reply 41.')", 4000);
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.until(atEnd, 2000) === true, `newest: another session in the pane -> at its newest message, following (gap ${await p.eval(bottomGap)})`);
+  hub.stdin.write("session w2:p1 s3\n");
+  await p.until(`!${s9}`, 4000);
+  await p.until(atEnd, 3000);
+  // The page goes to the background and the browser moves it meanwhile (a restored page, a closed keyboard). That is not
+  // the reader either: back in front, the page is at the newest message.
+  await p.eval(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange')); window.scrollTo(0, 0)`);
+  await new Promise((r) => setTimeout(r, 300));
+  await p.eval(`delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))`);
+  check(await p.until(atEnd, 2000) === true, `newest: back from the background -> at the bottom (gap ${await p.eval(bottomGap)})`);
 
   for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
 }

@@ -209,10 +209,14 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
 .rec { font: var(--caption); font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 1px 6px; border-radius: 99px; margin-left: 8px; }
 .other { margin-top: 8px; }
 
-/* Composer: floating glass, radius `bubble`, round send button (Composer.swift). */
+/* Composer: floating glass, round send button (Composer.swift). One line: a pill (radius = half its 45 px height, the
+   buttons concentric with its ends). More lines or images: the same radius on a taller box, a rounded rectangle. The
+   text field's height eases between the two (fitText). */
 .composer { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 2; display: flex; flex-direction: column; gap: 8px;
-  margin-top: 8px; padding: 10px 10px 10px 8px; border-radius: var(--r-bubble); box-shadow: var(--shadow-float); border: .5px solid rgba(var(--primary), .1); }
-.composer textarea { flex: 1; font: var(--body); resize: none; min-height: 32px; max-height: 40vh; padding: 5px 0; border: none; background: none; color: var(--label); field-sizing: content; }
+  margin-top: 8px; padding: 6px; border-radius: 22.5px; box-shadow: var(--shadow-float); border: .5px solid rgba(var(--primary), .1); }
+.composer textarea { flex: 1; box-sizing: border-box; font: var(--body); line-height: 22px; resize: none; height: 32px; min-height: 32px; max-height: 40vh;
+  padding: 5px 2px; border: none; background: none; color: var(--label); overflow-y: hidden; transition: height .18s ease-out; }
+@media (prefers-reduced-motion: reduce) { .composer textarea { transition: none; } }
 .composer textarea:focus { outline: none; }
 .composer .send { flex: none; width: 32px; height: 32px; min-height: 0; padding: 0; border-radius: 50%; display: grid; place-items: center; font: 700 17px/1 var(--font); }
 .composer .send:disabled { background: rgba(var(--primary), .08); color: var(--label-3); opacity: 1; }
