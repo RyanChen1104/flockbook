@@ -146,9 +146,12 @@ enum ChromeProbe {
 /// once, so one toggle shows (the system's sits at the panel's trailing edge, or beside its lights).
 struct FullScreenChrome: View {
     @Environment(AppModel.self) private var model
-    /// A 36 pt circle (the island buttons' height) centred on the sidebar's icon column (row inset 24 + half the 22 pt
-    /// icon box = 35, so the glyph stands over the icons when the panel is in) and on the band, like the island.
-    static func spot(band: CGFloat) -> CGRect { CGRect(x: 35 - TopRow.height / 2, y: (band - TopRow.height) / 2, width: TopRow.height, height: TopRow.height) }
+    /// A 36 pt circle (the island buttons' height) centred on the sidebar's icon column (the panel's inset + row inset 16
+    /// + half the 22 pt icon box: 35 on 26, 27 before, so the glyph stands over the icons when the panel is in) and on the
+    /// band, like the island.
+    static func spot(band: CGFloat) -> CGRect {
+        CGRect(x: SystemSidebar.inset + 27 - TopRow.height / 2, y: (band - TopRow.height) / 2, width: TopRow.height, height: TopRow.height)
+    }
 
     var body: some View {
         let shown = model.sidebarVisibility != .detailOnly
@@ -158,7 +161,7 @@ struct FullScreenChrome: View {
             Button { model.toggleSidebar() } label: {
                 Image(systemName: "sidebar.left").font(.system(size: 15, weight: .regular)).foregroundStyle(.secondary)
                     .frame(width: f.width, height: f.height)
-                    .background { Circle().fill(.clear).glassEffect(.regular, in: Circle()).opacity(shown ? 0 : 1) }
+                    .background { Circle().fill(.clear).glassSurface(Circle()).opacity(shown ? 0 : 1) }
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)

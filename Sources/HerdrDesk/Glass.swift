@@ -9,16 +9,15 @@ extension EnvironmentValues {
 
 struct GlassCard: ViewModifier {
     @Environment(\.flatGlass) private var flat
+    @Environment(\.legacyLook) private var legacy
     let radius: CGFloat
     var tint: Color?
     func body(content: Content) -> some View {
-        if flat {
+        if flat, !legacy {
             content.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: radius))
                 .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color.primary.opacity(0.1)))
-        } else if let tint {
-            content.glassEffect(.regular.tint(tint), in: .rect(cornerRadius: radius))
         } else {
-            content.glassEffect(.regular, in: .rect(cornerRadius: radius))
+            content.glassSurface(RoundedRectangle(cornerRadius: radius), tint: tint)
         }
     }
 }

@@ -135,6 +135,55 @@ private func wrap(_ text: String, width: Int) -> [String] {
     let gd: ClaudeQueueLog = ["QC reply GAMMA", "QD reply DELTA"]
     let u = ["ctrl+u"]
 
+    // Blank lines (hg-queued-blank-line). Claude Code 2.1.302 as seen live: an empty row between two queued messages,
+    // none between the newest and the hint, a blank line of a message is an empty row, and an empty row above the
+    // oldest, over the tool's rows and the sent prompt (same shape as queue rows). A message with an empty row counts
+    // only when the log has its text; otherwise the reading stops there (nothing older is shown).
+    func live(_ rows: [String], indented: Bool = false) -> String {
+        (["❯ Run the tests in the foreground", "  and reply DONE.", "", (indented ? "  " : "⏺ ") + "Running the tests · 4s", "  ⎿  $ run-tests (4s)",
+          "     (ctrl+b to run in background)", ""] + rows + ["  ctrl+enter to send now", "", "✶ Stewing… (6s · ↓ 88 tokens)", "", rule,
+          "❯\u{a0}Press up to edit queued messages", rule]).joined(separator: "\n")
+    }
+    let newestBlank = live(["❯ QF single", "", "❯ QG first", "", "  QG third"])
+    let fg = QueuedInput.read(agent: working("claude"), screen: newestBlank, log: ["QF single", "QG first\n\nQG third"])
+    check(fg?.items == ["QF single", "QG first\n\nQG third"] && fg?.pullable == true, "queue: blank line: the newest has a blank line, the log has it: both shown (\(String(describing: fg)))")
+    check(QueuedInput.read(agent: working("claude"), screen: newestBlank, log: []) == nil, "queue: blank line: no log for the blank-line row: nothing shown")
+    check(QueuedInput.read(agent: working("claude"), screen: newestBlank, log: ["QF single", nil]) == nil, "queue: blank line: a log entry without text does not vouch for it")
+    let oldestBlank = live(["❯ QB first", "", "  QB third", "", "❯ QC single", "", "❯ QD a", "  QD b", "", "❯ QE single"], indented: true)
+    let all = QueuedInput.read(agent: working("claude"), screen: oldestBlank, log: ["QB first\n\nQB third", "QC single", "QD a\nQD b", "QE single"])
+    check(all?.items == ["QB first\n\nQB third", "QC single", "QD a\nQD b", "QE single"], "queue: blank line: the oldest has one, the log has it: all four (\(String(describing: all?.items)))")
+    let screenOnly = QueuedInput.read(agent: working("claude"), screen: oldestBlank, log: [])
+    check(screenOnly?.items == ["QE single"], "queue: blank line: no log: only the newest; an empty row above a row may hide a sent prompt (\(String(describing: screenOnly?.items)))")
+    check(QueuedInput.claudeScreen(live(["❯ QC single", "", "❯ QE single"]))?.items == ["QC single", "QE single"], "queue: blank line: the empty row between two messages is no end")
+    let above = QueuedInput.read(agent: working("claude"), screen: live(["❯ QC single"], indented: true), log: [])
+    check(above?.items == ["QC single"], "queue: blank line: the rows above the oldest are no message (\(String(describing: above?.items)))")
+    // Codex review of 8610532. A log entry vouches for a row with an empty line only with the same empty lines.
+    let fgOnly = live(["❯ QG first", "", "  QG third"])
+    for text in ["QG first QG third", "QG first\n\n\nQG third", "\nQG first\n\nQG third", "QG first\n\nQG third\n", "QG first\nQG third"] {
+        check(QueuedInput.read(agent: working("claude"), screen: fgOnly, log: [text]) == nil, "queue: blank line: the log's \(text.debugDescription) does not vouch for the empty row")
+        let (rx, kx) = await pull("claude", [fgOnly, fgOnly], log: [text])
+        check(!kx.contains(["Up"]), "pull: blank line: the log's \(text.debugDescription) is not what the screen shows: no Up (\(rx), \(kx))")
+    }
+    // The sent prompt right above the queue (no tool rows yet) has the shape of an older queued message.
+    func bare(_ rows: [String]) -> String {
+        (rows + ["  ctrl+enter to send now", "", "✶ Stewing… (2s)", "", rule, "❯\u{a0}Press up to edit queued messages", rule]).joined(separator: "\n")
+    }
+    let sent = bare(["❯ already sent", "", "❯ QQ queued"])
+    for (log, why) in [([], "no log"), (["QQ other"], "a log that does not line up"), (["QQ queued"], "the log has only the queued one")] as [(ClaudeQueueLog, String)] {
+        let q = QueuedInput.read(agent: working("claude"), screen: sent, log: log)
+        check(q?.items == ["QQ queued"], "queue: blank line: the sent prompt above, \(why): not a message (\(String(describing: q?.items)))")
+    }
+    // An older message that ends in a blank line: two empty rows above the next one, one of them the message's.
+    let tail = bare(["❯ QR a", "", "", "❯ QS b"])
+    check(QueuedInput.read(agent: working("claude"), screen: tail, log: [])?.items == ["QS b"], "queue: blank line: a trailing blank line, no log: only the newest")
+    let rs = QueuedInput.read(agent: working("claude"), screen: tail, log: ["QR a\n", "QS b"])
+    check(rs?.items == ["QR a\n", "QS b"], "queue: blank line: a trailing blank line the log has: both (\(String(describing: rs?.items)))")
+
+    let qg = live(["❯ QG first", "", "  QG third"])
+    let (rg, kg) = await pull("claude", [qg, claudeBox(["QG first", "", "QG third"]), claudeBox(["QG first", "", "QG third"]), claudeBox(["QG first", "", ""]),
+                                         claudeBox(["QG first", ""]), claudeBox(["QG first"]), empty], log: ["QG first\n\nQG third"])
+    check(rg == .pulled("QG first\n\nQG third") && kg.first == ["Up"] && kg.dropFirst().allSatisfy { $0 == ["ctrl+u"] }, "pull: blank line: a message with a blank line comes back whole (\(rg), \(kg))")
+
     // Claude Code: Up, then one Ctrl-U at a time; the box is read again before each and must be exactly what the keys
     // so far left (Ctrl-U empties the last row; on an emptied row it takes the line break).
     var (r, k) = await pull("claude", [two, pulledIn, pulledIn, qcBlank, oneRow, "· Pouncing… (13s)\n" + empty], log: gd)

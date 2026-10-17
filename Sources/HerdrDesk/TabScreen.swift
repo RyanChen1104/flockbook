@@ -104,8 +104,8 @@ struct PaneView: View {
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
-                    .safeAreaBar(edge: .top, spacing: 0) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }
-                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                    .paneBar(.top) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }
+                    .paneBar(.bottom) {
                         VStack(spacing: 0) {
                             if agent.status == .working, let q = model.queued[pane.id] {
                                 QueuedStrip(queue: q, canPull: model.writesEnabled, pulling: model.pulling.contains(pane.id),
@@ -114,7 +114,7 @@ struct PaneView: View {
                             composer(agent)
                         }
                     }
-                    .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+                    .softScrollEdges([.top, .bottom])
             } else {
                 if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) }
                 if flat { ShellCard(pane: pane) } else {

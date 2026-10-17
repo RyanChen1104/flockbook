@@ -121,14 +121,14 @@ struct OpenLatestView: View {
                          onLoadEarlier: { false })
             .id(holder.pane)
             // 60 pt, like the toolbar and a pane label in the app: a top bar over 40 pt once hid the end from the follow rule.
-            .safeAreaBar(edge: .top, spacing: 0) { Text("open · \(holder.pane)").font(.caption).frame(maxWidth: .infinity).frame(height: 60) }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
+            .paneBar(.top) { Text("open · \(holder.pane)").font(.caption).frame(maxWidth: .infinity).frame(height: 60) }
+            .paneBar(.bottom) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: holder.bar)
                     ComposerView(agentName: "open", draft: ComposerDraft(text: ""), onSend: { _ in })
                 }
             }
-            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .softScrollEdges([.top, .bottom])
     }
 }
 

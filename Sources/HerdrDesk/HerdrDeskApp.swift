@@ -519,7 +519,7 @@ struct DetailView: View {
         .toolbar { TopRowToolbar(model: model) }
         .toolbar(removing: .title)
         // Content fades out under the toolbar instead of showing through the tab island.
-        .scrollEdgeEffectStyle(.soft, for: .top)
+        .toolbarFade()
         .modifier(ToolbarGlass())
     }
 }
