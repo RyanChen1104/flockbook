@@ -353,7 +353,6 @@ const shown = (): boolean => !!state.watching && state.welcomed && document.visi
 function cancelRound(): void {
   clearTimeout(reader.settle);
   clearTimeout(reader.still);
-  clearTimeout(touchStill);
   reader.active = reader.holding = reader.touching = reader.reachedEnd = false;
   // Older rows that waited for the round go in, after the change that ended it (another session drops them).
   setTimeout(() => { if (state.watching) addWaiting(state.watching); });
@@ -404,31 +403,30 @@ function letGoBar(): void {
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
 /** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. A render
- *  may put a new node in place of the one under the finger (a reply comes in): the lift then goes to the old node, out
- *  of the page, and never reaches the window, so the old node hears it too. A lift heard nowhere ends the touch after
- *  `stillMs` without a touch event. */
-let touched: EventTarget | null = null, touchStill = 0;
-function lift(e: Event): void {
-  if (e.currentTarget !== window && (e.currentTarget as Node).isConnected) return;   // the window hears it
-  fingerUp((e as TouchEvent).touches.length > 0);
+ *  may put a new node in place of the one under the finger (a reply comes in). Every touch event of the gesture still
+ *  goes to the node first touched, out of the page now, and never reaches the window: that node hears the moves and
+ *  the lift too. The next touchstart, or the page hidden (`cancelRound`), sets the finger again from what is down. */
+let touched: EventTarget | null = null;
+const fingerTypes = ["touchmove", "touchend", "touchcancel"];
+function onTouched(e: Event): void {
+  if ((e.currentTarget as Node).isConnected) return;   // the window hears it
+  if (e.type === "touchmove") readerActs(); else lift(e);
 }
-function fingerUp(down: boolean): void {
-  reader.touching = down;
-  clearTimeout(touchStill);
-  if (down) { touchStill = setTimeout(() => fingerUp(false), stillMs); return; }
-  for (const type of ["touchend", "touchcancel"]) touched?.removeEventListener(type, lift);
+function lift(e: Event): void {
+  reader.touching = (e as TouchEvent).touches.length > 0;
+  if (reader.touching) return;
+  for (const type of fingerTypes) touched?.removeEventListener(type, onTouched);
   touched = null;
   readerActs();
 }
 addEventListener("touchstart", (e) => {
   const at = e.target;
-  if (at && at !== touched && at instanceof Node) {
-    for (const type of ["touchend", "touchcancel"]) { touched?.removeEventListener(type, lift); at.addEventListener(type, lift, { passive: true }); }
+  if (at !== touched && at instanceof Node) {
+    for (const type of fingerTypes) { touched?.removeEventListener(type, onTouched); at.addEventListener(type, onTouched, { passive: true }); }
     touched = at;
   }
-  fingerUp(true);
+  reader.touching = (e as TouchEvent).touches.length > 0;
 }, { passive: true });
-addEventListener("touchmove", () => { if (reader.touching) fingerUp(true); }, { passive: true });
 for (const type of ["touchend", "touchcancel"]) addEventListener(type, lift, { passive: true });
 /** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
 const downKeys = new Set(["PageDown", "ArrowDown", " "]);

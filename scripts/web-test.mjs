@@ -928,7 +928,7 @@ async function fakeRun() {
   // phone a finger on the glass (or the bounce at the top), on a Mac a trackpad's momentum, takes the page back to its
   // own top whatever the page does meanwhile: rows put in then push the message being read out of view. Rows of a long
   // session that come from the hub; the reply to the read waits until window.__parked().
-  hub.stdin.write("session w2:p2 s12 60\nrich s12 400\n");
+  hub.stdin.write("session w2:p2 s12 60\nrich s12 500\n");
   await p.until("document.body.innerText.includes('New session reply 59')", 4000);
   await new Promise((r) => setTimeout(r, 900));
   // While the pill shows, it is the one "Loading earlier": the Load earlier button keeps its room but is not seen.
@@ -976,6 +976,23 @@ async function fakeRun() {
   const swapAfter = await p.eval(topOf(swap.text)), swapAfterN = await p.eval(rowCount), swapPill = await p.eval("!!document.querySelector('.earlier-pill')");
   check(swapped && swapMidN === swapN && swapAfterN > swapN && Math.abs(swapAfter - swap.top) <= 2 && !swapPill,
     `earlier: the node under the finger leaves the page while it waits; at the lift the rows go in and the notice goes (node swapped ${swapped}, ${swapN} -> ${swapMidN} -> ${swapAfterN} rows, ${Math.round(swap.top)} -> ${Math.round(swapAfter)}, notice ${swapPill})`);
+  // The same swap, then the finger keeps moving for more than 10 s: the moves go to the old node too, so no time limit
+  // takes the finger for lifted. The rows wait until the lift.
+  const drag = await heldAtTop(), dragN = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
+  const dragSwapped = await p.eval("(() => { const e = document.elementFromPoint(195, 420); if (!e || !e.closest('.items')) return false; e.replaceWith(e.cloneNode(true)); return true; })()");
+  await p.eval("window.__parked()");
+  for (let t = 0; t < 11000; t += 200) {
+    await p.cdp("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 195, y: (t / 200) % 2 ? 424 : 420 }] });
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const dragMidN = await p.eval(rowCount), dragMid = await p.eval(topOf(drag.text));
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await p.until(`${rowCount} > ${dragN}`, 3000);
+  await new Promise((r) => setTimeout(r, 800));
+  const dragAfterN = await p.eval(rowCount), dragAfter = await p.eval(topOf(drag.text));
+  check(dragSwapped && dragMidN === dragN && dragAfterN > dragN && Math.abs(dragAfter - drag.top) <= 2,
+    `earlier: the node under the finger leaves the page and the finger moves on for 11 s: the rows wait for the lift (node swapped ${dragSwapped}, ${dragN} -> ${dragMidN} -> ${dragAfterN} rows, ${Math.round(drag.top)} -> ${Math.round(dragMid)} -> ${Math.round(dragAfter)})`);
   // A hand that keeps pushing at the top (a trackpad's rubber band): wheel ticks every 40 ms while the rows come (a
   // trackpad sends 60 or more a second). From a timer in the page: a tick sent from here waits for the page's reply,
   // and on a busy machine two of them can be more than the round's 150 ms apart.
