@@ -349,6 +349,67 @@ extension ContentTests {
             step("autoload-send: a send mid-load stays at the newest rows (Jump to latest \(ConversationProbe.latest.height > 0), at bottom \(atBottom()), last row \(sentRows.last ?? -1))",
                  ConversationProbe.latest == .zero && atBottom() && sentRows.last == 2998)
 
+            // 8e. The reader's case: the rows at hand run out, so the top reads the log, and the older rows come a moment
+            // later in one go. While the reader still scrolls (a trackpad's momentum, the bounce at the top) they wait: put
+            // in mid-bounce, the bounce ends at the new top and the message being read is gone. A check cannot drive a
+            // trackpad here (an offscreen window gets no gesture events): it holds the view's "reader scrolls" state, which
+            // the scroll phase sets in the app. Then page after page, to the cap and past it: the message on top when the
+            // rows come stays where it was (2 pt at most), all through the batches and after.
+            do {
+                let pool = ChurnData.items(3000)
+                var first = 2900
+                holder.items = Array(pool[first...])
+                holder.load = { @MainActor [holder] in
+                    holder.reads += 1
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(300))
+                        let from = max(0, first - 60)
+                        holder.items.insert(contentsOf: pool[from..<first], at: 0); first = from
+                    }
+                    return first > 60
+                }
+                try? await Task.sleep(for: .milliseconds(600))
+                await scroll(top: false)
+                func messages() -> Int { Self.all(MessageTextView.self, in: host).count }
+
+                ConversationProbe.scrolling = true
+                print("churn-trace: scrolling check starts")
+                await intoTop()
+                let held = topMessage(), held0 = messages()
+                try? await Task.sleep(for: .milliseconds(900))
+                let heldMid = held.flatMap { y(of: $0.text) }, heldN = messages(), heldPill = ConversationProbe.loading
+                stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-held.png"); stall.resume()
+                step("autoload-scrolling: while the reader scrolls, older rows wait and the top message stays (\(held0) -> \(heldN) messages, \(held.map { Int($0.y) } ?? -1) -> \(heldMid.map { Int($0) } ?? -1) pt, notice \(heldPill.height > 0))",
+                     holder.reads == 1 && heldN == held0 && held != nil && heldMid != nil && abs(heldMid! - held!.y) <= 2 && heldPill.height > 0)
+                ConversationProbe.scrolling = false
+                print("churn-trace: scrolling check released")
+                try? await Task.sleep(for: .milliseconds(1500))
+                let heldAfter = held.flatMap { y(of: $0.text) }
+                stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-held-in.png"); stall.resume()
+                step("autoload-scrolling: when the scroll stops they go in, and the top message stays (\(held0) -> \(messages()) messages, \(held.map { Int($0.y) } ?? -1) -> \(heldAfter.map { Int($0) } ?? -1) pt)",
+                     messages() > held0 && held != nil && heldAfter != nil && abs(heldAfter! - held!.y) <= 2)
+
+                // Page after page from the top: read from the log, from the rows at hand, at the cap and past it.
+                ConversationProbe.pressLatest?()
+                try? await Task.sleep(for: .milliseconds(600))
+                first = 2900; holder.items = Array(pool[first...]); holder.reads = 0
+                try? await Task.sleep(for: .milliseconds(600))
+                await scroll(top: false)
+                for page in 1...4 {
+                    await intoTop()
+                    let before = topMessage()
+                    try? await Task.sleep(for: .milliseconds(2000))
+                    let after = before.flatMap { y(of: $0.text) }
+                    step("autoload-log: page \(page) (\(holder.reads) log reads, Jump to latest \(ConversationProbe.latest.height > 0)): the top message stays (\(before.map { Int($0.y) } ?? -1) -> \(after.map { Int($0) } ?? -1) pt)",
+                         before != nil && after != nil && abs(after! - before!.y) <= 2)
+                }
+                step("autoload-log: the pages read the log and went past the cap (\(holder.reads) reads, Jump to latest \(ConversationProbe.latest.height > 0))",
+                     holder.reads >= 2 && ConversationProbe.latest.height > 0)
+            }
+            holder.load = nil; holder.reads = 0
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+
             // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
             holder.items = ChurnData.even(120)
             holder.load = { @MainActor [holder] in holder.reads += 1; return false }

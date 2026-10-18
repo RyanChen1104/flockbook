@@ -872,7 +872,8 @@ async function fakeRun() {
   await p.click("#load-earlier");
   check(await p.until(`${rowCount} > ${capped}`, 4000) === true, `earlier: past the cap, Load earlier still loads (${await p.eval(rowCount)})`);
   // A failed load says so; the notice and Try again leave the row being read where it is. Sends of loadEarlier fail
-  // while window.__failEarlier > 0 (they ask for a row the hub does not have); window.__holdEarlier holds the next one 600 ms.
+  // while window.__failEarlier > 0 (they ask for a row the hub does not have); window.__holdEarlier holds the next one 600 ms;
+  // window.__parkEarlier holds the next one until window.__parked() (a log read that ends while the reader still scrolls).
   const readRow = `(() => { const e = [...document.querySelectorAll('.items > .msg')].find((e) => e.getBoundingClientRect().bottom > 0);
     return JSON.stringify(e ? { text: e.textContent, top: e.getBoundingClientRect().top } : { text: "", top: NaN }); })()`;
   const topOf = (text) => `[...document.querySelectorAll('.items > .msg')].find((e) => e.textContent === ${JSON.stringify(text)})?.getBoundingClientRect().top ?? NaN`;
@@ -881,6 +882,7 @@ async function fakeRun() {
     WebSocket.prototype.send = function (d) {
       if (window.__failEarlier > 0 && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__failEarlier--; d = d.replace(/"before":"[^"]*"/, '"before":"no-such-row"'); }
       if (window.__holdEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__holdEarlier = 0; setTimeout(() => send.call(this, d), 600); return; }
+      if (window.__parkEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__parkEarlier = 0; window.__parked = () => send.call(this, d); return; }
       return send.call(this, d);
     }; })()`);
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 3000)");
@@ -922,6 +924,53 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   check(await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Load earlier'`) === true,
     `earlier: another session in the pane starts without the other's failure (${await p.eval("document.getElementById('load-earlier')?.textContent")})`);
+  // The reader's case: older rows that come while the reader still scrolls at the top wait until the scroll stops. On a
+  // phone a finger on the glass (or the bounce at the top), on a Mac a trackpad's momentum, takes the page back to its
+  // own top whatever the page does meanwhile: rows put in then push the message being read out of view. Rows of a long
+  // session that come from the hub; the reply to the read waits until window.__parked().
+  hub.stdin.write("session w2:p2 s12 60\nrich s12 300\n");
+  await p.until("document.body.innerText.includes('New session reply 59')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  /** A reader's scroll to the top, a read of older rows held, and the row on top then. */
+  async function heldAtTop() {
+    await p.eval("window.__parkEarlier = 1; window.__parked = null");
+    const at = JSON.parse(await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0); return ${readRow}; })()`));
+    await p.until("!!window.__parked", 2000);
+    await new Promise((r) => setTimeout(r, 300));   // the reader's round from the wheel is over
+    return at;
+  }
+  const finger = await heldAtTop(), fingerN = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
+  await p.eval("window.__parked()");
+  await new Promise((r) => setTimeout(r, 700));
+  const fingerMid = await p.eval(topOf(finger.text)), fingerMidN = await p.eval(rowCount), fingerPill = await p.eval("!!document.querySelector('.earlier-pill')");
+  check(fingerMidN === fingerN && Math.abs(fingerMid - finger.top) <= 2 && fingerPill,
+    `earlier: while a finger is on the glass at the top, older rows wait and the row being read stays (${fingerN} -> ${fingerMidN} rows, ${Math.round(finger.top)} -> ${Math.round(fingerMid)}, notice ${fingerPill})`);
+  await p.shot("earlier-held");
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await p.until(`${rowCount} > ${fingerN}`, 3000);
+  await new Promise((r) => setTimeout(r, 800));
+  const fingerAfter = await p.eval(topOf(finger.text)), fingerAfterN = await p.eval(rowCount);
+  check(fingerAfterN > fingerN && Math.abs(fingerAfter - finger.top) <= 2,
+    `earlier: when the finger lifts they go in, and the row being read stays (${fingerN} -> ${fingerAfterN} rows, ${Math.round(finger.top)} -> ${Math.round(fingerAfter)})`);
+  await p.shot("earlier-held-in");
+  // A hand that keeps pushing at the top (a trackpad's rubber band): wheel ticks every 40 ms while the rows come (a
+  // trackpad sends 60 or more a second). From a timer in the page: a tick sent from here waits for the page's reply,
+  // and on a busy machine two of them can be more than the round's 150 ms apart.
+  const push = await heldAtTop(), pushN = await p.eval(rowCount);
+  await p.eval("window.__push = setInterval(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: -60 })), 40)");
+  await new Promise((r) => setTimeout(r, 100));
+  await p.eval("window.__parked()");   // the rows come once the pushing has started
+  await new Promise((r) => setTimeout(r, 700));
+  const pushMidN = await p.eval(rowCount), pushMid = await p.eval(topOf(push.text));
+  await p.eval("clearInterval(window.__push)");
+  check(pushMidN === pushN && Math.abs(pushMid - push.top) <= 2,
+    `earlier: while the reader keeps pushing at the top, older rows wait (${pushN} -> ${pushMidN} rows, ${Math.round(push.top)} -> ${Math.round(pushMid)})`);
+  await p.until(`${rowCount} > ${pushN}`, 3000);
+  await new Promise((r) => setTimeout(r, 800));
+  const pushAfter = await p.eval(topOf(push.text)), pushAfterN = await p.eval(rowCount);
+  check(pushAfterN > pushN && Math.abs(pushAfter - push.top) <= 2,
+    `earlier: when the pushing stops they go in, and the row being read stays (${pushN} -> ${pushAfterN} rows, ${Math.round(push.top)} -> ${Math.round(pushAfter)})`);
   // Older rows of a real reply's weight, on a CPU slowed 4x (a phone): near the top a "Loading earlier" notice shows over
   // the rows (it moves none of them) until the rows are in, and the page never stalls past the budget. The meter: the
   // longest gap between ticks of a 5 ms timer (the Mac churn check's meter). WEB_PROFILE=<dir>: a CPU profile of the load.

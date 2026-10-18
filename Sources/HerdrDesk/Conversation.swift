@@ -134,6 +134,8 @@ struct ConversationView: View {
         var loadPage = ConversationView.page
         /// Older rows are going into the window, a few per frame.
         var adding = false
+        /// The reader is scrolling: a gesture, its momentum, the bounce at an end.
+        var scrolling = false
         /// Counts the pages of older rows put in. Jump to latest starts a new count: the rest of a page on its way stays out.
         var batches = 0
         /// Loads counted (the notice's number) and when the notice showed.
@@ -219,13 +221,16 @@ struct ConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition($position)
-            // Over the rows, not among them: it moves none of them.
+            // Over the rows, not among them: it moves none of them. Its fade is its own: on the scroll view, the fade also
+            // animated a scroll to hold the row on top that happened in the same update, and the rows came in mid-way.
             .overlay(alignment: .top) {
-                if notice != nil {
-                    EarlierNotice().padding(.top, 8).transition(.opacity)
+                ZStack {
+                    if notice != nil {
+                        EarlierNotice().padding(.top, 8).transition(.opacity)
+                    }
                 }
+                .animation(.easeOut(duration: 0.15), value: notice != nil)
             }
-            .animation(.easeOut(duration: 0.15), value: notice != nil)
             // Following: the reader is "at the bottom" only through their own scrolling (offset changes alone).
             // When the content or the viewport changes size (a new message, a tool result, markdown settling, a window or
             // composer resize, safe-area insets settling) a reader at the bottom stays there.
@@ -250,13 +255,16 @@ struct ConversationView: View {
                     if new.offset + new.top < Self.nearTop, old.offset + old.top >= Self.nearTop { Task { @MainActor in showEarlier(page: Self.autoPage) } }
                 }
             }
+            .onScrollPhaseChange { _, phase in tracker.scrolling = phase != .idle }
             .onChange(of: scrollToken) { _, _ in jumpToLatest() }
             .onChange(of: items.first?.id) { _, _ in
                 // Older rows arrived in front after "Show earlier" read the log: the window takes a page of them.
                 // A few at a time, like rows at hand (all at once is one long layout pass).
                 guard window.pendingLoad != nil, !tracker.adding else { return }
                 window.loadEnded(window.pendingLoad!)
-                add(tracker.loadPage, notice: notice ?? showNotice())
+                // A notice of its own: the read's own notice may be on its way out (nothing seemed to come), and the rows
+                // may wait a while (the reader still scrolls).
+                add(tracker.loadPage, notice: showNotice())
             }
     }
 
@@ -291,12 +299,20 @@ struct ConversationView: View {
         Task { @MainActor in
             defer { if earlierSession == mine, tracker.batches == batch { tracker.adding = false; hideNotice(shown) } }
             try? await Task.sleep(for: .milliseconds(16))
-            var left = count
+            var left = count, held = false
             while left > 0 {
+                // The reader still scrolls (a trackpad's momentum, the bounce at the top): the rows wait. Put in now, the
+                // bounce ends at the new top, and the message being read is out of view.
+                while tracker.scrolling || ConversationProbe.scrolling {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    guard earlierSession == mine, tracker.batches == batch else { return }
+                }
                 guard earlierSession == mine, tracker.batches == batch else { return }
                 let ids = items.map(\.id)
                 guard window.range(ids).lowerBound > 0 else { return }
-                keepTop(ids)
+                // One row stays in place for the whole page. A new one per batch could be taken before the last batch's
+                // rows were laid out and its move made up for (a busy frame), and that move then stayed.
+                if held, tracker.anchor != nil { tracker.anchor?.until = Date().addingTimeInterval(1.5) } else { keepTop(ids); held = true }
                 window.showEarlier(ids, page: min(Self.batch, left))
                 left -= Self.batch
                 // Two frames: the rows are laid out and drawn, and the anchor fixed, before the next ones go in.
@@ -597,6 +613,8 @@ private struct EarlierNotice: View {
     static var earlier = CGRect.zero, latest = CGRect.zero
     /// The "Loading earlier" notice while older rows load (window coordinates), else zero.
     static var loading = CGRect.zero
+    /// A check holds the reader's scrolling here (an offscreen window gets no trackpad gestures).
+    static var scrolling = false
     private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
     private static var owners: [Button: UUID] = [:]
     enum Button { case earlier, latest }

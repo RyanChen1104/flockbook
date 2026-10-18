@@ -344,7 +344,7 @@ const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
  * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
  * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
  * page catches up. */
-const reader = { active: false, holding: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
+const reader = { active: false, holding: false, touching: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
 const settleMs = 150;
 /** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
  * a move. */
@@ -353,7 +353,9 @@ const shown = (): boolean => !!state.watching && state.welcomed && document.visi
 function cancelRound(): void {
   clearTimeout(reader.settle);
   clearTimeout(reader.still);
-  reader.active = reader.holding = reader.reachedEnd = false;
+  reader.active = reader.holding = reader.touching = reader.reachedEnd = false;
+  // Older rows that waited for the round go in, after the change that ended it (another session drops them).
+  setTimeout(() => { if (state.watching) addWaiting(state.watching); });
 }
 /** The bottom reached in this round: the view moved down to it. Kept until the view is more than 1 px above the
  *  lowest place it reached since (a page that got shorter moves it up too). */
@@ -383,6 +385,7 @@ function settled(): void {
   if (reader.reachedEnd) following = true;
   else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
   toBottom();
+  if (state.watching && !reader.touching) addWaiting(state.watching);
 }
 function holdBar(): void {
   readerActs();
@@ -399,6 +402,12 @@ function letGoBar(): void {
 }
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
+/** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. */
+addEventListener("touchstart", () => { reader.touching = true; }, { passive: true });
+for (const type of ["touchend", "touchcancel"]) addEventListener(type, (e) => {
+  reader.touching = (e as TouchEvent).touches.length > 0;
+  if (!reader.touching) readerActs();
+}, { passive: true });
 /** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
 const downKeys = new Set(["PageDown", "ArrowDown", " "]);
 addEventListener("keydown", (e) => {
@@ -549,13 +558,17 @@ function topRow(): { id: string; top: number } | null {
   }
   return null;
 }
-/** The next few older rows that came in go in front, the row on top staying in place; the rest a frame later. */
+/** The next few older rows that came in go in front, the row on top staying in place; the rest a frame later. While the
+ *  reader still scrolls the pane on screen (a finger on the glass, a glide, the bounce at the top) they wait, and go in
+ *  when the round ends: a phone takes the page back to its own top after a bounce, whatever the page does meanwhile, so
+ *  rows put in then push the message being read out of view. */
 const addTimers = new Map<string, number>();
 function addWaiting(pane: string): void {
   clearTimeout(addTimers.get(pane));   // one run per pane: new rows that come in while one runs join it
   addTimers.delete(pane);
   const v = view(pane);
-  if (!v.waiting?.length) { v.waiting = undefined; render(); return; }
+  if (!v.waiting?.length) { if (v.waiting) { v.waiting = undefined; render(); } return; }
+  if (state.watching === pane && (reader.active || reader.touching)) { render(); return; }
   v.items = [...v.waiting.splice(Math.max(0, v.waiting.length - EARLIER_BATCH)), ...v.items];
   if (!v.waiting.length) v.waiting = undefined;
   keepTopRow = state.watching === pane;
