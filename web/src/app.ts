@@ -353,6 +353,7 @@ const shown = (): boolean => !!state.watching && state.welcomed && document.visi
 function cancelRound(): void {
   clearTimeout(reader.settle);
   clearTimeout(reader.still);
+  clearTimeout(touchStill);
   reader.active = reader.holding = reader.touching = reader.reachedEnd = false;
   // Older rows that waited for the round go in, after the change that ended it (another session drops them).
   setTimeout(() => { if (state.watching) addWaiting(state.watching); });
@@ -402,12 +403,33 @@ function letGoBar(): void {
 }
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
-/** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. */
-addEventListener("touchstart", () => { reader.touching = true; }, { passive: true });
-for (const type of ["touchend", "touchcancel"]) addEventListener(type, (e) => {
-  reader.touching = (e as TouchEvent).touches.length > 0;
-  if (!reader.touching) readerActs();
+/** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. A render
+ *  may put a new node in place of the one under the finger (a reply comes in): the lift then goes to the old node, out
+ *  of the page, and never reaches the window, so the old node hears it too. A lift heard nowhere ends the touch after
+ *  `stillMs` without a touch event. */
+let touched: EventTarget | null = null, touchStill = 0;
+function lift(e: Event): void {
+  if (e.currentTarget !== window && (e.currentTarget as Node).isConnected) return;   // the window hears it
+  fingerUp((e as TouchEvent).touches.length > 0);
+}
+function fingerUp(down: boolean): void {
+  reader.touching = down;
+  clearTimeout(touchStill);
+  if (down) { touchStill = setTimeout(() => fingerUp(false), stillMs); return; }
+  for (const type of ["touchend", "touchcancel"]) touched?.removeEventListener(type, lift);
+  touched = null;
+  readerActs();
+}
+addEventListener("touchstart", (e) => {
+  const at = e.target;
+  if (at && at !== touched && at instanceof Node) {
+    for (const type of ["touchend", "touchcancel"]) { touched?.removeEventListener(type, lift); at.addEventListener(type, lift, { passive: true }); }
+    touched = at;
+  }
+  fingerUp(true);
 }, { passive: true });
+addEventListener("touchmove", () => { if (reader.touching) fingerUp(true); }, { passive: true });
+for (const type of ["touchend", "touchcancel"]) addEventListener(type, lift, { passive: true });
 /** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */
 const downKeys = new Set(["PageDown", "ArrowDown", " "]);
 addEventListener("keydown", (e) => {
@@ -759,12 +781,15 @@ function conversationScreen(pane: string): HTMLElement {
   const head = h("header", { class: "top bar glass-bar" },
     h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
+  // Older rows on the way: a notice under the bar, over the rows (it moves none of them).
+  const notice = earlierOf(pane);
+  const noticed = !!v.waiting || !!(notice && (notice.busy || (!notice.failed && performance.now() < notice.noticeUntil)));
   const items: Child[] = [];
   if (v.hasEarlier && v.session) {
-    const mine = earlierOf(pane);
+    const mine = notice;
     if (mine?.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
-    // While it loads the button keeps its words: the notice over the rows says it (one "Loading earlier", not two).
-    items.push(h("button", { id: "load-earlier", class: "quiet", disabled: !!mine?.busy, "aria-busy": mine?.busy ? "true" : "false", onclick: () => loadEarlier(pane) },
+    // While the notice shows the button keeps its words and its room but is not seen (one "Loading earlier", not two).
+    items.push(h("button", { id: "load-earlier", class: noticed ? "quiet under-notice" : "quiet", disabled: !!mine?.busy, "aria-busy": mine?.busy ? "true" : "false", onclick: () => loadEarlier(pane) },
       mine?.failed && !mine.busy ? "Try again" : "Load earlier"));
   }
   items.push(...rowsFor(pane, v.items));
@@ -774,9 +799,7 @@ function conversationScreen(pane: string): HTMLElement {
   if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
-  // Older rows on the way: a notice under the bar, over the rows (it moves none of them).
-  const notice = earlierOf(pane);
-  const pill = v.waiting || (notice && (notice.busy || (!notice.failed && performance.now() < notice.noticeUntil))) ? h("div", { class: "earlier-pill glass-float", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Loading earlier…") : null;
+  const pill = noticed ? h("div", { class: "earlier-pill glass-float", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Loading earlier…") : null;
   // The rows go in when the screen is put in the page (`keepScreen`, `fillItems`): putting the row nodes on hand in a
   // new list here would take them out of the page.
   const list = h("div", { class: "items" });

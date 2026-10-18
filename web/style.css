@@ -245,8 +245,8 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
 .earlier-pill .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(var(--primary), .15); border-top-color: var(--label-2);
   animation: spin .8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .earlier-pill .spin { animation: none; } }
-/* While it loads, the pill is the one notice: the button keeps its room (no row moves) but is not seen. */
-#load-earlier[aria-busy="true"] { visibility: hidden; }
+/* While the pill shows, it is the one notice: the button keeps its room (no row moves) but is not seen. */
+#load-earlier.under-notice { visibility: hidden; }
 /* Opaque (the float surface without glass): text behind a notice would show through and mix with it. */
 .toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 84px); z-index: 5; color: var(--label); padding: 10px 14px;
   background: var(--solid-float);

@@ -928,9 +928,14 @@ async function fakeRun() {
   // phone a finger on the glass (or the bounce at the top), on a Mac a trackpad's momentum, takes the page back to its
   // own top whatever the page does meanwhile: rows put in then push the message being read out of view. Rows of a long
   // session that come from the hub; the reply to the read waits until window.__parked().
-  hub.stdin.write("session w2:p2 s12 60\nrich s12 300\n");
+  hub.stdin.write("session w2:p2 s12 60\nrich s12 400\n");
   await p.until("document.body.innerText.includes('New session reply 59')", 4000);
   await new Promise((r) => setTimeout(r, 900));
+  // While the pill shows, it is the one "Loading earlier": the Load earlier button keeps its room but is not seen.
+  // An XPath query: a walk of every node here, on the slowed CPU, would be a stall of its own.
+  const loadingSeen = `(() => { const r = document.evaluate("//body//*[text()[contains(., 'Loading earlier')]]", document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    let n = 0; for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i); if (e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden') n++; } return n; })()`;
+  const loadButtonSeen = "(() => { const b = document.getElementById('load-earlier'); return !!b && getComputedStyle(b).visibility !== 'hidden'; })()";
   /** A reader's scroll to the top, a read of older rows held, and the row on top then. */
   async function heldAtTop() {
     await p.eval("window.__parkEarlier = 1; window.__parked = null");
@@ -946,6 +951,9 @@ async function fakeRun() {
   const fingerMid = await p.eval(topOf(finger.text)), fingerMidN = await p.eval(rowCount), fingerPill = await p.eval("!!document.querySelector('.earlier-pill')");
   check(fingerMidN === fingerN && Math.abs(fingerMid - finger.top) <= 2 && fingerPill,
     `earlier: while a finger is on the glass at the top, older rows wait and the row being read stays (${fingerN} -> ${fingerMidN} rows, ${Math.round(finger.top)} -> ${Math.round(fingerMid)}, notice ${fingerPill})`);
+  const fingerSeen = await p.eval(loadingSeen), fingerButton = await p.eval(loadButtonSeen);
+  check(fingerSeen === 1 && !fingerButton,
+    `earlier: while a finger is on the glass and older rows wait, one notice shows: the pill, not the button under it (${fingerSeen}, button seen ${fingerButton})`);
   await p.shot("earlier-held");
   await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await p.until(`${rowCount} > ${fingerN}`, 3000);
@@ -954,6 +962,20 @@ async function fakeRun() {
   check(fingerAfterN > fingerN && Math.abs(fingerAfter - finger.top) <= 2,
     `earlier: when the finger lifts they go in, and the row being read stays (${fingerN} -> ${fingerAfterN} rows, ${Math.round(finger.top)} -> ${Math.round(fingerAfter)})`);
   await p.shot("earlier-held-in");
+  // A render while the finger is down puts a new node in place of the one under it (a reply comes in): the lift goes to
+  // the old node, out of the page, and never reaches the window. The rows still go in when the finger lifts.
+  const swap = await heldAtTop(), swapN = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
+  const swapped = await p.eval("(() => { const e = document.elementFromPoint(195, 420); if (!e || !e.closest('.items')) return false; e.replaceWith(e.cloneNode(true)); return true; })()");
+  await p.eval("window.__parked()");
+  await new Promise((r) => setTimeout(r, 700));
+  const swapMidN = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await p.until(`${rowCount} > ${swapN}`, 3000);
+  await new Promise((r) => setTimeout(r, 800));
+  const swapAfter = await p.eval(topOf(swap.text)), swapAfterN = await p.eval(rowCount), swapPill = await p.eval("!!document.querySelector('.earlier-pill')");
+  check(swapped && swapMidN === swapN && swapAfterN > swapN && Math.abs(swapAfter - swap.top) <= 2 && !swapPill,
+    `earlier: the node under the finger leaves the page while it waits; at the lift the rows go in and the notice goes (node swapped ${swapped}, ${swapN} -> ${swapMidN} -> ${swapAfterN} rows, ${Math.round(swap.top)} -> ${Math.round(swapAfter)}, notice ${swapPill})`);
   // A hand that keeps pushing at the top (a trackpad's rubber band): wheel ticks every 40 ms while the rows come (a
   // trackpad sends 60 or more a second). From a timer in the page: a tick sent from here waits for the page's reply,
   // and on a busy machine two of them can be more than the round's 150 ms apart.
@@ -994,11 +1016,8 @@ async function fakeRun() {
   check(pillAt !== null && Math.abs(richBusy - richTop.top) < 2,
     `earlier: while older rows load, a notice shows at the top (at ${pillAt}) and the row being read stays (${Math.round(richTop.top)} -> ${Math.round(richBusy)})`);
   // One notice: the Load earlier button keeps its words while the pill says it.
-  // An XPath query: a walk of every node here, on the slowed CPU, would be a stall of its own.
-  const loadingSeen = `(() => { const r = document.evaluate("//body//*[text()[contains(., 'Loading earlier')]]", document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-    let n = 0; for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i); if (e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden') n++; } return n; })()`;
   const seen = await p.eval(loadingSeen);
-  const buttonSeen = await p.eval("(() => { const b = document.getElementById('load-earlier'); return !!b && getComputedStyle(b).visibility !== 'hidden'; })()");
+  const buttonSeen = await p.eval(loadButtonSeen);
   check(seen === 1 && !buttonSeen, `earlier: while older rows load, one notice shows: the pill, not the button under it (${seen}, button seen ${buttonSeen})`);
   await p.shot("earlier-loading");
   await p.shot("earlier-loading", true);
