@@ -517,7 +517,9 @@ extension ContentTests {
 
             // 8h. A window at the cap whose rows all fit in view: tool rows merge into a few short groups, so each batch at
             // the cap drops rows in view. The reader is at rest and presses Show earlier: the older rows go in all the same.
-            holder.items = ChurnData.chips(3000)
+            // The notes before 2800 are long: the content then outgrows the view. The message on top stays in place, or, when
+            // the rows that stay below it (newer ones go at the cap) cannot fill the view, the view goes no farther than its end.
+            holder.items = ChurnData.chips(3000, longBefore: 2800)
             try? await Task.sleep(for: .milliseconds(600))
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
@@ -528,12 +530,19 @@ extension ContentTests {
                 ConversationProbe.pressEarlier?()
                 try? await Task.sleep(for: .milliseconds(1500))
                 let fits = (sv.documentView?.frame.height ?? .infinity) <= sv.contentView.bounds.height
-                let oldest1 = notes().first ?? -1
+                let oldest1 = notes().first ?? -1, before = topMessage()
                 ConversationProbe.pressEarlier?()
                 try? await Task.sleep(for: .milliseconds(1500))
-                let oldest2 = notes().first ?? -1
+                let oldest2 = notes().first ?? -1, after = before.flatMap { y(of: $0.text) }
+                let doc = sv.documentView?.frame.height ?? 0, clip = sv.contentView.bounds
+                let grew = doc > clip.height
+                // Where the view would have to be for the message to stay, and where it can go at most.
+                let need = clip.minY + (after ?? 0) - (before?.y ?? 0), end = doc + sv.contentInsets.bottom - clip.height
+                let stays = before != nil && after != nil && (abs(after! - before!.y) < 3 || after! > before!.y && abs(clip.minY - end) < 1 && need > end)
                 step("autoload-cap-short: at the cap, every row in view, at rest: Show earlier puts older rows in (fits \(fits), oldest note \(oldest1) -> \(oldest2))",
                      fits && oldest1 >= 0 && oldest2 >= 0 && oldest2 < oldest1)
+                step("autoload-cap-short: long older notes outgrow the view, and the message on top stays in place or the view is at its end (grew \(grew), \(before?.text.prefix(16) ?? "none") \(before.map { Int($0.y) } ?? -1) -> \(after.map { Int($0) } ?? -1) pt, view at \(Int(clip.minY)), needs \(Int(need)), ends at \(Int(end)))",
+                     grew && stays)
             }
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
@@ -648,12 +657,13 @@ enum ChurnData {
         }
     }
 
-    /// Tool rows with a short note every 50th: the tool rows between two notes merge into one row, so a window at the cap
-    /// is a few short rows.
-    static func chips(_ n: Int) -> [ConversationItem] {
+    /// Tool rows with a note every 50th: the tool rows between two notes merge into one row, so a window at the cap is a
+    /// few short rows. The notes before `longBefore` are long.
+    static func chips(_ n: Int, longBefore: Int = 0) -> [ConversationItem] {
         (0..<n).map { i in
             i % 50 == 0
-                ? ConversationItem(id: "cn\(i)", kind: .assistantText("Chip note \(i)."))
+                ? ConversationItem(id: "cn\(i)", kind: .assistantText("Chip note \(i)." + (i < longBefore
+                    ? (1...40).map { "\n\nOlder line \($0) of a long note." }.joined() : "")))
                 : ConversationItem(id: "ct\(i)", kind: .toolChips([ToolChip(symbol: "doc.text", text: "Read a file",
                                                                        id: UUID(uuidString: String(format: "00000000-0000-0000-0002-%012d", i))!)]))
         }
