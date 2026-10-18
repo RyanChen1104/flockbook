@@ -873,7 +873,8 @@ async function fakeRun() {
   check(await p.until(`${rowCount} > ${capped}`, 4000) === true, `earlier: past the cap, Load earlier still loads (${await p.eval(rowCount)})`);
   // A failed load says so; the notice and Try again leave the row being read where it is. Sends of loadEarlier fail
   // while window.__failEarlier > 0 (they ask for a row the hub does not have); window.__holdEarlier holds the next one 600 ms;
-  // window.__parkEarlier holds the next one until window.__parked() (a log read that ends while the reader still scrolls).
+  // window.__parkEarlier holds the next one until window.__parked() (a log read that ends while the reader still scrolls);
+  // window.__slowEarlier holds each one that many ms (the hub's read of a long log).
   const readRow = `(() => { const e = [...document.querySelectorAll('.items > .msg')].find((e) => e.getBoundingClientRect().bottom > 0);
     return JSON.stringify(e ? { text: e.textContent, top: e.getBoundingClientRect().top } : { text: "", top: NaN }); })()`;
   const topOf = (text) => `[...document.querySelectorAll('.items > .msg')].find((e) => e.textContent === ${JSON.stringify(text)})?.getBoundingClientRect().top ?? NaN`;
@@ -883,6 +884,7 @@ async function fakeRun() {
       if (window.__failEarlier > 0 && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__failEarlier--; d = d.replace(/"before":"[^"]*"/, '"before":"no-such-row"'); }
       if (window.__holdEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__holdEarlier = 0; setTimeout(() => send.call(this, d), 600); return; }
       if (window.__parkEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__parkEarlier = 0; window.__parked = () => send.call(this, d); return; }
+      if (window.__slowEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { setTimeout(() => send.call(this, d), window.__slowEarlier); return; }
       return send.call(this, d);
     }; })()`);
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 3000)");
@@ -1034,6 +1036,52 @@ async function fakeRun() {
   const pushAfter = await p.eval(topOf(push.text)), pushAfterN = await p.eval(rowCount);
   check(pushAfterN > pushN && Math.abs(pushAfter - push.top) <= 2,
     `earlier: when the pushing stops they go in, and the row being read stays (${pushN} -> ${pushAfterN} rows, ${Math.round(push.top)} -> ${Math.round(pushAfter)})`);
+  // A fast fling up, from 3000 px below the top at 6000 px/s, slowing down at 6000 px/s² (it would stop at the top), each
+  // read 300 ms on its way (the hub's read of a 30 MB log took 85-300 ms, longer as more of it is loaded): older rows load early enough to go in while the page still glides, far from the top, and the glide goes on over them; the
+  // rows in view move only with the glide (2 px at most). Once with a trackpad's momentum (wheel ticks, on a Mac), once
+  // with a finger's glide (scroll alone after the lift, on a phone). The glide moves from where the page is at each step,
+  // as the browser's does. `window.__fling()` gives: where the read began (px above the top of the view), how long it took
+  // to the rows in, where the view was then, whether the glide met the top before, the worst move of the rows in view
+  // past the glide's own, and the longest step.
+  await p.eval(`window.__fling = (wheel) => new Promise((done) => {
+    const rows = () => document.querySelectorAll('.items > .msg').length, n0 = rows();
+    const at = [...document.querySelectorAll('.items > .msg')].find((e) => e.getBoundingClientRect().top > 0), y0 = at.getBoundingClientRect().top;
+    const out = { from: -1, loadMs: -1, inAt: -1, hitTop: false, hitBeforeIn: false, drift: 0, stall: 0, rows: 0 };
+    let v = 6000, last = performance.now(), glided = 0, t0 = last, asked = 0, prevY = scrollY;
+    const seen = new MutationObserver(() => { if (out.from < 0 && document.querySelector('.earlier-pill')) { out.from = Math.round(scrollY); asked = performance.now(); } });
+    seen.observe(document.body, { childList: true, subtree: true });
+    const step = () => {
+      const t = performance.now(), dt = Math.min(t - last, 50) / 1000; out.stall = Math.max(out.stall, t - last); last = t;
+      if (out.inAt < 0 && rows() > n0) { out.inAt = Math.round(prevY); out.loadMs = Math.round(t - (asked || t0)); }
+      const dy = Math.min(v * dt, scrollY);
+      if (wheel) window.dispatchEvent(new WheelEvent('wheel', { deltaY: -dy }));
+      const was = scrollY; window.scrollBy(0, -dy); glided += was - scrollY;
+      out.drift = Math.max(out.drift, Math.abs(at.getBoundingClientRect().top - (y0 + glided)));
+      if (scrollY <= 0) { out.hitTop = true; if (out.inAt < 0) out.hitBeforeIn = true; }
+      prevY = scrollY;
+      v -= 6000 * dt;
+      if (v > 0 && !out.hitTop) setTimeout(step, 16);
+      else { seen.disconnect(); out.drift = Math.round(out.drift); out.stall = Math.round(out.stall); out.rows = rows() - n0; done(out); }
+    };
+    setTimeout(step, 16);
+  })`);
+  await p.eval("window.__slowEarlier = 300");
+  for (const [s, wheel] of [["s14", true], ["s15", false]]) {
+    hub.stdin.write(`session w2:p2 ${s} 120\nrich ${s} 600\n`);
+    await p.until("document.body.innerText.includes('New session reply 119')", 4000);
+    await new Promise((r) => setTimeout(r, 900));
+    await p.eval("window.scrollTo(0, 3000)");
+    await new Promise((r) => setTimeout(r, 600));
+    if (wheel) await p.shot("earlier-fling-start");
+    if (!wheel) { await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] }); await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); }
+    const f = JSON.parse(await p.eval("window.__fling(" + wheel + ").then(JSON.stringify)"));
+    await new Promise((r) => setTimeout(r, 1200));
+    const how = wheel ? "a trackpad's fling" : "a finger's fling";
+    check(f.from > 0 && f.inAt > 0 && !f.hitBeforeIn && !f.hitTop && f.drift <= 2,
+      `earlier: ${how} up, fast: older rows go in before the top and the glide goes on over them (read from ${f.from} px, rows in after ${f.loadMs} ms, ${f.inAt} px from the top just before, +${f.rows} rows, top met ${f.hitTop}${f.hitBeforeIn ? " before the rows" : ""}, drift ${f.drift} px, longest step ${f.stall} ms)`);
+    if (wheel) await p.shot("earlier-fling");
+  }
+  await p.eval("window.__slowEarlier = 0");
   // Older rows of a real reply's weight, on a CPU slowed 4x (a phone): near the top a "Loading earlier" notice shows over
   // the rows (it moves none of them) until the rows are in, and the page never stalls past the budget. The meter: the
   // longest gap between ticks of a 5 ms timer (the Mac churn check's meter). WEB_PROFILE=<dir>: a CPU profile of the load.

@@ -141,12 +141,20 @@ struct ConversationView: View {
         /// Loads counted (the notice's number) and when the notice showed.
         var loads = 0
         var noticeSince = Date.distantPast
+        /// How fast the reader scrolls up (pt/s; 0 going down) and when the offset was last seen.
+        var speed: CGFloat = 0
+        var seenAt = Date.distantPast
+        /// How long older rows take, from the call to the last of them in: a read of the log (85-300 ms on a 30 MB log,
+        /// longer as more of it is loaded) and the batches. Measured on each load; this is the start.
+        var loadTime: TimeInterval = 0.5
+        var loadSince: Date?
 
         /// Called while the frame is drawn, when the anchor row was placed: the view moves by as much as the row did, in
         /// the frame that shows the new rows. False when the clip view cannot move that far yet.
         @discardableResult func fixNow(_ sv: NSScrollView) -> Bool {
             guard !atBottom, let a = anchor, a.until > Date(), let top = tops[a.key], abs(top - a.top) > 0.5 else { return true }
-            let offset = a.offset + top - a.top, clip = sv.contentView, was = clip.bounds.origin
+            // From where the view is now: a glide may have moved it since the offset was last reported.
+            let clip = sv.contentView, was = clip.bounds.origin, offset = was.y + top - a.top
             clip.scroll(to: NSPoint(x: was.x, y: offset))
             guard abs(clip.bounds.minY - offset) < 0.5 else { clip.scroll(to: was); return false }   // clamped: no half move
             sv.reflectScrolledClipView(clip)
@@ -158,10 +166,15 @@ struct ConversationView: View {
     /// Closer than this to the top, the reader's scrolling loads older rows by itself (Show earlier stays as the button).
     /// Half a page at a time: the stack lays out every new row in one pass, and 100 at once came near the 250 ms stall limit.
     static let nearTop: CGFloat = 400
+    /// A fast scroll up starts the load farther away: as far as the view goes, at its speed, in the time a load takes (with
+    /// half again to spare), so the rows are in before the top.
+    static func lead(speed: CGFloat, loadTime: TimeInterval) -> CGFloat { max(nearTop, speed * CGFloat(loadTime) * 1.5) }
     static var autoPage: Int { max(1, page / 2) }
     /// Rows that go into the window per frame. All at once, the stack lays out and draws every new row in one pass: a
     /// hitch the reader sees mid-scroll (about 100 ms for half a page).
     static let batch = 10
+    /// Nearer the top than this while the reader scrolls (the bounce, a push into the top), older rows wait.
+    static let edge: CGFloat = 1
     /// The notice stays at least this long (a flash reads as a glitch).
     static let noticeMin: TimeInterval = 0.5
     @State private var tracker = BottomTracker()
@@ -250,9 +263,20 @@ struct ConversationView: View {
                 } else {
                     tracker.atBottom = new.atBottom
                     tracker.offset = new.offset
-                    if let a = tracker.anchor, let top = tracker.tops[a.key] { tracker.anchor = (a.key, top, new.offset, a.until) }
-                    // The reader came near the top: older rows load by themselves.
-                    if new.offset + new.top < Self.nearTop, old.offset + old.top >= Self.nearTop { Task { @MainActor in showEarlier(page: Self.autoPage) } }
+                    // Only the offset: rows that came in above but are not made up for yet (the anchor row's move) are still due, also
+                    // when the view glides on before the fix.
+                    tracker.anchor?.offset = new.offset
+                    let now = Date(), dt = now.timeIntervalSince(tracker.seenAt)
+                    tracker.seenAt = now
+                    tracker.speed = new.offset < old.offset && dt > 0.002 && dt < 0.25 ? (old.offset - new.offset) / CGFloat(dt) : 0
+                    // The reader scrolls up near the top (farther from it the faster): older rows load by themselves. Only a
+                    // scroll of the reader's own counts for speed: a move of the view's own (to the bottom after a send, the
+                    // offset kept in range as rows go) can look like a fast scroll up.
+                    let ahead = tracker.scrolling || ConversationProbe.scrolling ? Self.lead(speed: tracker.speed, loadTime: tracker.loadTime) : Self.nearTop
+                    if new.offset < old.offset, new.offset + new.top < ahead,
+                       !tracker.adding, !loadingEarlier {
+                        Task { @MainActor in showEarlier(page: Self.autoPage) }
+                    }
                 }
             }
             .onScrollPhaseChange { _, phase in tracker.scrolling = phase != .idle }
@@ -273,9 +297,10 @@ struct ConversationView: View {
     private func showEarlier(page: Int = Self.page) {
         let ids = items.map(\.id)
         guard !tracker.adding else { return }
-        if window.range(ids).lowerBound > 0 { add(page, notice: showNotice()); return }
+        if window.range(ids).lowerBound > 0 { tracker.loadSince = Date(); add(page, notice: showNotice()); return }
         guard let load = onLoadEarlier, moreEarlier, !loadingEarlier else { return }
         loadingEarlier = true
+        tracker.loadSince = Date()
         tracker.loadPage = page
         keepTop(ids, for: 4)
         let token = window.beginLoad(), mine = earlierSession, shown = showNotice()
@@ -299,11 +324,14 @@ struct ConversationView: View {
         Task { @MainActor in
             defer { if earlierSession == mine, tracker.batches == batch { tracker.adding = false; hideNotice(shown) } }
             try? await Task.sleep(for: .milliseconds(16))
-            var left = count, held = false
+            var left = count, held = false, waited: TimeInterval = 0
             while left > 0 {
-                // The reader still scrolls (a trackpad's momentum, the bounce at the top): the rows wait. Put in now, the
-                // bounce ends at the new top, and the message being read is out of view.
-                while tracker.scrolling || ConversationProbe.scrolling {
+                // The reader still scrolls at the top (the bounce there, a trackpad's push into it): the rows wait. Put in
+                // now, the bounce ends at the new top, and the message being read is out of view. Farther down they go in
+                // while the view glides (a trackpad's momentum moves the view from where it is), so a fast fling up does
+                // not meet the top first.
+                let since = Date()
+                while (tracker.scrolling || ConversationProbe.scrolling) && tracker.offset + tracker.inset < Self.edge {
                     try? await Task.sleep(for: .milliseconds(16))
                     guard earlierSession == mine, tracker.batches == batch else { return }
                 }
@@ -312,11 +340,17 @@ struct ConversationView: View {
                 guard window.range(ids).lowerBound > 0 else { return }
                 // One row stays in place for the whole page. A new one per batch could be taken before the last batch's
                 // rows were laid out and its move made up for (a busy frame), and that move then stayed.
+                waited += Date().timeIntervalSince(since)
                 if held, tracker.anchor != nil { tracker.anchor?.until = Date().addingTimeInterval(1.5) } else { keepTop(ids); held = true }
                 window.showEarlier(ids, page: min(Self.batch, left))
                 left -= Self.batch
                 // Two frames: the rows are laid out and drawn, and the anchor fixed, before the next ones go in.
                 try? await Task.sleep(for: .milliseconds(32))
+            }
+            // The load's own time (not the wait at the top), for how far ahead the next one starts.
+            if let t = tracker.loadSince {
+                tracker.loadSince = nil
+                tracker.loadTime = min(2, max(0.2, 0.7 * tracker.loadTime + 0.3 * (Date().timeIntervalSince(t) - waited)))
             }
         }
     }

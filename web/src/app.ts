@@ -344,7 +344,7 @@ const viewTop = (): number => window.visualViewport?.pageTop ?? window.scrollY;
  * background) leaves `following` alone. A round ends without a verdict when the conversation stops being shown
  * (disconnected, hidden, another page or agent). During a round nothing pulls the page down; at its end a following
  * page catches up. */
-const reader = { active: false, holding: false, touching: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0 };
+const reader = { active: false, holding: false, touching: false, from: 0, last: 0, reachedEnd: false, endTop: 0, settle: 0, still: 0, speed: 0, seenAt: 0 };
 const settleMs = 150;
 /** A release the page never hears (outside the window) ends the hold with the window's focus, or after 10 s without
  * a move. */
@@ -360,7 +360,11 @@ function cancelRound(): void {
 /** The bottom reached in this round: the view moved down to it. Kept until the view is more than 1 px above the
  *  lowest place it reached since (a page that got shorter moves it up too). */
 function track(): void {
-  const top = viewTop();
+  const top = viewTop(), now = performance.now(), dt = now - reader.seenAt;
+  // How fast the reader scrolls up (px/s; 0 going down), for how far ahead older rows start to load.
+  if (top >= reader.last || dt >= 250) reader.speed = 0;
+  else if (dt > 2) reader.speed = ((reader.last - top) * 1000) / dt;
+  reader.seenAt = now;
   if (top > reader.last && nearBottom()) reachEnd();
   else if (reader.reachedEnd) {
     if (top > reader.endTop) reader.endTop = top;
@@ -561,7 +565,11 @@ function render(): void {
     // Older rows came in above: the row that was on top stays where it was on screen.
     const row = [...document.querySelectorAll<HTMLElement>(".items > [data-id]")].find((e) => e.dataset.id === anchor.id);
     const moved = row ? row.getBoundingClientRect().top - anchor.top : 0;
-    if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
+    if (Math.abs(moved) >= 1) {
+      window.scrollBy(0, moved);
+      // Not the reader's move: the round goes on from the same rows.
+      reader.from += moved; reader.last += moved; reader.endTop += moved;
+    }
   }
   toBottom();
 }
@@ -569,6 +577,15 @@ function render(): void {
 // --- Older rows. The reader scrolling near the top loads them; "Load earlier" stays for a keyboard or screen reader,
 // and to try again after a failure. Auto-loading stops at `AUTO_ITEMS` rows in a pane (the button still loads more).
 const NEAR_TOP = 600, AUTO_ITEMS = 1000, EARLIER_NOTICE_MS = 500, EARLIER_BATCH = 12;
+/** A fast scroll up starts the read farther away: as far as the page goes, at its speed, in the time older rows take to
+ *  come and go in (with half again to spare), so they are in before the top. That time is measured on each read. */
+let earlierMs = 400;
+/** When the last read began, and how long its rows waited at the top (not the read's own time). */
+let earlierAsked = 0, earlierWaited = 0, waitSince = 0;
+const lead = (): number => Math.max(NEAR_TOP, (reader.speed * earlierMs * 1.5) / 1000);
+/** Nearer the top than this while the reader scrolls (the bounce there, a push into it) older rows wait, and while a
+ *  finger is on the glass; farther down they go in while the page glides. */
+const EDGE = 1;
 /** The next render follows a prepend: it keeps the top row in place. */
 let keepTopRow = false;
 /** The last read of older rows: its pane, session and number. Another pane or session does not see it, and a reply to
@@ -594,9 +611,16 @@ function addWaiting(pane: string): void {
   addTimers.delete(pane);
   const v = view(pane);
   if (!v.waiting?.length) { if (v.waiting) { v.waiting = undefined; render(); } return; }
-  if (state.watching === pane && (reader.active || reader.touching)) { render(); return; }
+  if (state.watching === pane && (reader.touching || (reader.active && viewTop() < EDGE))) {
+    if (!waitSince) waitSince = performance.now();
+    render(); return;
+  }
+  if (waitSince) { earlierWaited += performance.now() - waitSince; waitSince = 0; }
   v.items = [...v.waiting.splice(Math.max(0, v.waiting.length - EARLIER_BATCH)), ...v.items];
-  if (!v.waiting.length) v.waiting = undefined;
+  if (!v.waiting.length) {
+    v.waiting = undefined;
+    if (earlierAsked) { earlierMs = Math.min(2000, Math.max(200, 0.7 * earlierMs + 0.3 * (performance.now() - earlierAsked - earlierWaited))); earlierAsked = 0; }
+  }
   keepTopRow = state.watching === pane;
   render();
   if (v.waiting) { const session = v.session; addTimers.set(pane, setTimeout(() => { if (view(pane).session === session) addWaiting(pane); }, 16)); }
@@ -604,6 +628,7 @@ function addWaiting(pane: string): void {
 async function loadEarlier(pane: string): Promise<void> {
   const v = view(pane), session = v.session;
   if (!session || !v.hasEarlier || !v.items.length || earlierOf(pane)?.busy) return;
+  earlierAsked = performance.now(); earlierWaited = 0;
   const gen = earlier.gen + 1;
   earlier = { pane, session, gen, busy: true, failed: false, noticeUntil: performance.now() + EARLIER_NOTICE_MS };
   // The notice and the button above the rows change: the row on top stays in place (the page has no scroll anchoring).
@@ -621,7 +646,7 @@ async function loadEarlier(pane: string): Promise<void> {
 /** Only the reader scrolling up loads: a script's scroll (opening, switching, a page that got shorter) does not. */
 function nearTop(): void {
   const pane = state.watching;
-  if (!pane || !state.welcomed || !reader.active || viewTop() >= reader.from || window.scrollY > NEAR_TOP) return;
+  if (!pane || !state.welcomed || !reader.active || viewTop() >= reader.from || window.scrollY > lead()) return;
   const v = view(pane);
   if (v.waiting || v.items.length >= AUTO_ITEMS || earlierOf(pane)?.failed) return;
   loadEarlier(pane);

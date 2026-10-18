@@ -405,6 +405,45 @@ extension ContentTests {
                 }
                 step("autoload-log: the pages read the log and went past the cap (\(holder.reads) reads, Jump to latest \(ConversationProbe.latest.height > 0))",
                      holder.reads >= 2 && ConversationProbe.latest.height > 0)
+
+                // 8f. A fast fling up, from 3000 pt below the top at 6000 pt/s, slowing down at 6000 pt/s² (it would stop at
+                // the top), the rows at hand all shown: the read of the log (300 ms here, the slowest of a 30 MB log) starts
+                // early enough that the rows go in while the view still glides, far from the top, and the glide goes on over
+                // them. The rows in view move only with the glide (2 pt at most). The glide moves from where the view is at
+                // each step, as a trackpad's momentum does; the view's "reader scrolls" state is held all the while.
+                ConversationProbe.pressLatest?()
+                try? await Task.sleep(for: .milliseconds(600))
+                first = 2900; holder.items = Array(pool[first...]); holder.reads = 0
+                try? await Task.sleep(for: .milliseconds(600))
+                await scroll(top: false)
+                let top0 = -sv.contentInsets.top
+                for _ in 0..<2 { sv.contentView.scroll(to: NSPoint(x: 0, y: top0 + 3000)); sv.reflectScrolledClipView(sv.contentView); try? await Task.sleep(for: .milliseconds(500)) }
+                func docHeight() -> CGFloat { sv.documentView?.frame.height ?? 0 }
+                ConversationProbe.scrolling = true
+                let fAt = topMessage(), h0 = docHeight(), t0 = Date()
+                var v: CGFloat = 6000, glided: CGFloat = 0, last = t0, asked: Date?, from: CGFloat = -1, loadMs = -1, inAt: CGFloat = -1
+                var hitTop = false, hitBeforeIn = false, drift: CGFloat = 0, longest: TimeInterval = 0, prevY: CGFloat = 3000
+                while v > 0, !hitTop, let at = fAt {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    let now = Date(), dt = min(now.timeIntervalSince(last), 0.05)
+                    longest = max(longest, now.timeIntervalSince(last)); last = now
+                    let y0 = sv.contentView.bounds.minY
+                    defer { prevY = sv.contentView.bounds.minY - top0 }
+                    if asked == nil, holder.reads > 0 { asked = now; from = y0 - top0 }
+                    if inAt < 0, docHeight() > h0 + 1 { inAt = prevY; loadMs = Int(now.timeIntervalSince(asked ?? t0) * 1000) }
+                    let dy = min(v * CGFloat(dt), y0 - top0)
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: y0 - dy)); sv.reflectScrolledClipView(sv.contentView)
+                    glided += y0 - sv.contentView.bounds.minY
+                    if let d = y(of: at.text) { drift = max(drift, abs(d - (at.y + glided))) }
+                    if sv.contentView.bounds.minY <= top0 + 0.5 { hitTop = true; if inAt < 0 { hitBeforeIn = true } }
+                    v -= 6000 * CGFloat(dt)
+                }
+                stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-fling.png"); stall.resume()
+                ConversationProbe.scrolling = false
+                try? await Task.sleep(for: .milliseconds(1500))
+                stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-fling-rest.png"); stall.resume()
+                step("autoload-fling: a fast fling up: older rows go in before the top and the glide goes on over them (read from \(Int(from)) pt, rows in after \(loadMs) ms, \(Int(inAt)) pt from the top just before, top met \(hitTop)\(hitBeforeIn ? " before the rows" : ""), drift \(Int(drift.rounded(.up))) pt, longest step \(Int(longest * 1000)) ms)",
+                     fAt != nil && from > 0 && inAt > 0 && !hitBeforeIn && !hitTop && drift <= 2)
             }
             holder.load = nil; holder.reads = 0
             ConversationProbe.pressLatest?()
