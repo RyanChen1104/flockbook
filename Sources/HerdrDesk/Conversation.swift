@@ -132,6 +132,8 @@ struct ConversationView: View {
         /// The bottom of the view, in the rows' space, as last seen.
         var viewBottom: CGFloat = 0
         var fixDue = false
+        /// The scroll view, as the anchor row's probe last saw it: the fallback fix moves its clip view the same way.
+        weak var scrollView: NSScrollView?
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
         /// The read of the log in flight is an early one: the reader's scroll up started it, away from the top.
@@ -154,15 +156,17 @@ struct ConversationView: View {
         var loadSince: Date?
 
         /// Called while the frame is drawn, when the anchor row was placed: the view moves by as much as the row did, in
-        /// the frame that shows the new rows. False when the clip view cannot move that far yet.
-        @discardableResult func fixNow(_ sv: NSScrollView) -> Bool {
+        /// the frame that shows the new rows. False when the clip view cannot move that far yet. `partly`: the fallback a frame
+        /// later moves as far as the clip view goes (the end of content that does not fill the view).
+        @discardableResult func fixNow(_ sv: NSScrollView, partly: Bool = false) -> Bool {
             guard !atBottom, let a = anchor, a.until > Date(), let top = tops[a.key], abs(top - a.top) > 0.5 else { return true }
             // From where the view is now: a glide may have moved it since the offset was last reported.
             let clip = sv.contentView, was = clip.bounds.origin, offset = was.y + top - a.top
             clip.scroll(to: NSPoint(x: was.x, y: offset))
-            guard abs(clip.bounds.minY - offset) < 0.5 else { clip.scroll(to: was); return false }   // clamped: no half move
+            guard partly || abs(clip.bounds.minY - offset) < 0.5 else { clip.scroll(to: was); return false }   // clamped: no half move
             sv.reflectScrolledClipView(clip)
-            anchor = (a.key, top, offset, a.until); self.offset = offset
+            let got = clip.bounds.minY
+            anchor = (a.key, top, got, a.until); self.offset = got
             return true
         }
         let merged = MergedRows()
@@ -404,7 +408,10 @@ struct ConversationView: View {
 
     /// The row now on top of the window stays where it is on screen while older rows come in above it (for `seconds`).
     private func keepTop(_ ids: [String], for seconds: Double = 1.5) {
-        guard let key = Self.anchorKey(Self.entries(Self.displayRows(items[window.range(ids)]))), let top = tracker.tops[key] else { return }
+        // No top for the row yet: no anchor, not the last one (it would be held again for these rows).
+        guard let key = Self.anchorKey(Self.entries(Self.displayRows(items[window.range(ids)]))), let top = tracker.tops[key] else {
+            tracker.anchor = nil; return
+        }
         tracker.anchor = (key, top, tracker.offset, Date().addingTimeInterval(seconds))
     }
 
@@ -424,6 +431,9 @@ struct ConversationView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(20))
             tracker.fixDue = false
+            // From where the clip view is now, as the probe does. A scrollTo(y:) of the position lands later, at a place worked
+            // out now: when the next batch's probe fix came first (a busy frame), it put the view back by that batch's rows.
+            if let sv = tracker.scrollView { tracker.fixNow(sv, partly: true); return }
             guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
             let offset = a.offset + top - a.top
             position.scrollTo(y: offset + tracker.inset)
@@ -648,7 +658,7 @@ private struct AnchorProbe: NSViewRepresentable {
         }
         /// The first placement comes before the probe is in a window (no scroll view yet).
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); moved() }
-        @objc func moved() { if let sv = enclosingScrollView { tracker?.fixNow(sv) } }
+        @objc func moved() { if let sv = enclosingScrollView { tracker?.scrollView = sv; tracker?.fixNow(sv) } }
     }
     func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; return v }
     func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker }
