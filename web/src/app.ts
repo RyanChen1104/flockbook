@@ -403,29 +403,35 @@ function letGoBar(): void {
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
 /** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. A render
- *  may put a new node in place of the one under the finger (a reply comes in). Every touch event of the gesture still
- *  goes to the node first touched, out of the page now, and never reaches the window: that node hears the moves and
- *  the lift too. The next touchstart, or the page hidden (`cancelRound`), sets the finger again from what is down. */
-let touched: EventTarget | null = null;
+ *  may put a new node in place of the one under a finger (a reply comes in). Every touch event of that finger still
+ *  goes to the node it first touched, out of the page now, and never reaches the window: that node hears the moves and
+ *  the lift too. Each node a finger went down on keeps listening until no finger is down (two fingers: one node may be
+ *  out of the page while the other lifts first). The next touchstart, or the page hidden (`cancelRound`), sets the
+ *  finger again from what is down. */
+const touched = new Set<EventTarget>();
 const fingerTypes = ["touchmove", "touchend", "touchcancel"];
 function onTouched(e: Event): void {
   if ((e.currentTarget as Node).isConnected) return;   // the window hears it
   if (e.type === "touchmove") readerActs(); else lift(e);
 }
+function letGoTouched(): void {
+  for (const at of touched) for (const type of fingerTypes) at.removeEventListener(type, onTouched);
+  touched.clear();
+}
 function lift(e: Event): void {
   reader.touching = (e as TouchEvent).touches.length > 0;
   if (reader.touching) return;
-  for (const type of fingerTypes) touched?.removeEventListener(type, onTouched);
-  touched = null;
+  letGoTouched();
   readerActs();
 }
 addEventListener("touchstart", (e) => {
-  const at = e.target;
-  if (at !== touched && at instanceof Node) {
-    for (const type of fingerTypes) { touched?.removeEventListener(type, onTouched); at.addEventListener(type, onTouched, { passive: true }); }
-    touched = at;
+  const t = e as TouchEvent, at = e.target;
+  if (t.touches.length === t.changedTouches.length) letGoTouched();   // a new gesture: the last one's lift went unheard
+  if (at instanceof Node && !touched.has(at)) {
+    for (const type of fingerTypes) at.addEventListener(type, onTouched, { passive: true });
+    touched.add(at);
   }
-  reader.touching = (e as TouchEvent).touches.length > 0;
+  reader.touching = t.touches.length > 0;
 }, { passive: true });
 for (const type of ["touchend", "touchcancel"]) addEventListener(type, lift, { passive: true });
 /** Pushing down at the bottom (or End, ⌘↓: to the bottom from anywhere) counts as reaching it, though nothing moves. */

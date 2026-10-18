@@ -928,7 +928,7 @@ async function fakeRun() {
   // phone a finger on the glass (or the bounce at the top), on a Mac a trackpad's momentum, takes the page back to its
   // own top whatever the page does meanwhile: rows put in then push the message being read out of view. Rows of a long
   // session that come from the hub; the reply to the read waits until window.__parked().
-  hub.stdin.write("session w2:p2 s12 60\nrich s12 500\n");
+  hub.stdin.write("session w2:p2 s12 60\nrich s12 600\n");
   await p.until("document.body.innerText.includes('New session reply 59')", 4000);
   await new Promise((r) => setTimeout(r, 900));
   // While the pill shows, it is the one "Loading earlier": the Load earlier button keeps its room but is not seen.
@@ -993,6 +993,30 @@ async function fakeRun() {
   const dragAfterN = await p.eval(rowCount), dragAfter = await p.eval(topOf(drag.text));
   check(dragSwapped && dragMidN === dragN && dragAfterN > dragN && Math.abs(dragAfter - drag.top) <= 2,
     `earlier: the node under the finger leaves the page and the finger moves on for 11 s: the rows wait for the lift (node swapped ${dragSwapped}, ${dragN} -> ${dragMidN} -> ${dragAfterN} rows, ${Math.round(drag.top)} -> ${Math.round(dragMid)} -> ${Math.round(dragAfter)})`);
+  // Two fingers: the node under finger A leaves the page, then finger B goes down on another node. B lifts first (A is
+  // still down), then A: A's lift goes to its old node only, out of the page. The rows go in at A's lift. The browser
+  // lifts every point of the protocol's touchEnd at once, so the two lifts are sent from the page, each to its node.
+  const two = await heldAtTop(), twoN = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x: 195, y: 420 }] });
+  const twoSwapped = await p.eval(`(() => { const e = document.elementFromPoint(195, 420); if (!e || !e.closest('.items')) return false;
+    window.__a = e; e.replaceWith(e.cloneNode(true)); return true; })()`);
+  const twoB = await p.eval(`(() => { const a = document.elementFromPoint(195, 420); for (let y = 120; y < 700; y += 20) {
+    const b = document.elementFromPoint(195, y); if (b && b.closest('.items') && !b.contains(a) && !a.contains(b) && b.closest('.msg, .logged, .tools') !== a.closest('.msg, .logged, .tools')) return y; } return 0; })()`);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x: 195, y: 420 }, { id: 2, x: 195, y: twoB || 250 }] });
+  await p.eval("window.__parked()");
+  await new Promise((r) => setTimeout(r, 300));
+  const lift = (at, id, down) => `(() => { const at = ${at}, t = (n, e) => new Touch({ identifier: n, target: e, clientX: 195, clientY: 420 });
+    at.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: ${down}, changedTouches: [t(${id}, at)] })); return at.isConnected; })()`;
+  const bOn = await p.eval(lift(`document.elementFromPoint(195, ${twoB || 250})`, 2, "[t(1, window.__a)]"));   // B lifts
+  await new Promise((r) => setTimeout(r, 700));
+  const twoMidN = await p.eval(rowCount);
+  const aOn = await p.eval(lift("window.__a", 1, "[]"));   // A lifts, on its old node
+  await p.until(`${rowCount} > ${twoN}`, 3000);
+  await new Promise((r) => setTimeout(r, 800));
+  const twoAfterN = await p.eval(rowCount), twoAfter = await p.eval(topOf(two.text));
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });   // the protocol's points up too
+  check(twoSwapped && twoB > 0 && bOn && !aOn && twoMidN === twoN && twoAfterN > twoN && Math.abs(twoAfter - two.top) <= 2,
+    `earlier: two fingers, A's node leaves the page, B lifts first, then A: the rows go in at A's lift (node swapped ${twoSwapped}, B at ${twoB}, B on page ${bOn}, A on page ${aOn}, ${twoN} -> ${twoMidN} -> ${twoAfterN} rows, ${Math.round(two.top)} -> ${Math.round(twoAfter)})`);
   // A hand that keeps pushing at the top (a trackpad's rubber band): wheel ticks every 40 ms while the rows come (a
   // trackpad sends 60 or more a second). From a timer in the page: a tick sent from here waits for the page's reply,
   // and on a busy machine two of them can be more than the round's 150 ms apart.
