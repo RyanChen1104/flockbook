@@ -134,6 +134,10 @@ struct ConversationView: View {
         var fixDue = false
         /// The scroll view, as the anchor row's probe last saw it: the fallback fix moves its clip view the same way.
         weak var scrollView: NSScrollView?
+        /// The anchor row's probe and its row: where the row is now, read from the view itself. SwiftUI can place the row
+        /// (move a parent of it) before the row's top is reported, and without a frame change of the probe's own.
+        weak var probe: NSView?
+        var probeKey: String?
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
         /// The read of the log in flight is an early one: the reader's scroll up started it, away from the top.
@@ -159,7 +163,7 @@ struct ConversationView: View {
         /// the frame that shows the new rows. False when the clip view cannot move that far yet. `partly`: the fallback a frame
         /// later moves as far as the clip view goes (the end of content that does not fill the view).
         @discardableResult func fixNow(_ sv: NSScrollView, partly: Bool = false) -> Bool {
-            guard !atBottom, let a = anchor, a.until > Date(), let top = tops[a.key], abs(top - a.top) > 0.5 else { return true }
+            guard !atBottom, let a = anchor, a.until > Date(), let top = top(a.key, in: sv), abs(top - a.top) > 0.5 else { return true }
             // From where the view is now: a glide may have moved it since the offset was last reported.
             let clip = sv.contentView, was = clip.bounds.origin, offset = was.y + top - a.top
             clip.scroll(to: NSPoint(x: was.x, y: offset))
@@ -168,6 +172,14 @@ struct ConversationView: View {
             let got = clip.bounds.minY
             anchor = (a.key, top, got, a.until); self.offset = got
             return true
+        }
+        /// The row's top in the rows' space: from the probe's place in the document when the probe is on that row (the
+        /// rows sit `listPadding` below the document's top), else as last reported.
+        func top(_ key: String, in sv: NSScrollView) -> CGFloat? {
+            if probeKey == key, let p = probe, p.window != nil, let doc = sv.documentView, p.isDescendant(of: doc) {
+                return p.convert(p.bounds, to: doc).minY - ConversationView.listPadding
+            }
+            return tops[key]
         }
         let merged = MergedRows()
     }
@@ -223,7 +235,7 @@ struct ConversationView: View {
                                 tracker.tops[p.entry.key] = $0
                                 if tracker.anchor?.key == p.entry.key { holdAnchor() }
                             }
-                            .background { if tracker.anchor?.key == p.entry.key { AnchorProbe(tracker: tracker) } }
+                            .background { if tracker.anchor?.key == p.entry.key { AnchorProbe(tracker: tracker, key: p.entry.key) } }
                             .padding(.top, p.gap)
                     }
                     if window.detached {
@@ -646,27 +658,38 @@ private struct EntryRow: View, Equatable {
 }
 
 /// In the background of the anchor row: when SwiftUI places the row (while the frame is drawn), the view moves by as much
-/// as the row did, so that frame shows the row where it was.
+/// as the row did, so that frame shows the row where it was. It watches its host and the document: SwiftUI can move a
+/// parent of the row, and then only the document's frame changes (it grew by the rows that came in above).
 private struct AnchorProbe: NSViewRepresentable {
     let tracker: ConversationView.BottomTracker
+    let key: String
     final class Probe: NSView {
         weak var tracker: ConversationView.BottomTracker?
-        private var watched: NSView?
-        override func viewDidMoveToSuperview() {
-            super.viewDidMoveToSuperview()
-            if let w = watched { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
-            watched = superview
-            guard let host = superview else { return }
-            host.postsFrameChangedNotifications = true
-            NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSView.frameDidChangeNotification, object: host)
+        var key = ""
+        private var watched: [NSView] = []
+        private func watch(_ views: [NSView]) {
+            for w in watched { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
+            watched = views
+            for w in views {
+                w.postsFrameChangedNotifications = true
+                NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSView.frameDidChangeNotification, object: w)
+            }
+        }
+        override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); rewatch() }
+        /// The first placement comes before the probe is in a window (no scroll view yet).
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); rewatch() }
+        private func rewatch() {
+            watch([superview, window == nil ? nil : enclosingScrollView?.documentView].compactMap { $0 })
             moved()
         }
-        /// The first placement comes before the probe is in a window (no scroll view yet).
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); moved() }
-        @objc func moved() { if let sv = enclosingScrollView { tracker?.scrollView = sv; tracker?.fixNow(sv) } }
+        @objc func moved() {
+            guard let t = tracker, window != nil, let sv = enclosingScrollView else { return }
+            t.scrollView = sv; t.probe = self; t.probeKey = key
+            t.fixNow(sv)
+        }
     }
-    func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; return v }
-    func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker }
+    func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; v.key = key; return v }
+    func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker; v.key = key }
 }
 
 /// "Loading earlier…" over the top of the rows while older rows come in.
