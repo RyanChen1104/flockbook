@@ -449,6 +449,72 @@ extension ContentTests {
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
 
+            // 8g. A window at the cap (Show earlier went past it: the newest rows are out), the reader at its bottom, and a
+            // short flick up so fast the load starts at once (800 pt, then it stops). Each batch at the cap drops as many
+            // rows from the bottom, faster than this glide moves: rows still in view must not go. A message in view stays
+            // until the glide takes it out (it moves only with the glide, 2 pt at most). Near the top later, the older rows
+            // go in.
+            holder.items = ChurnData.even(3000)
+            try? await Task.sleep(for: .milliseconds(600))
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+            ConversationProbe.pressEarlier?()
+            try? await Task.sleep(for: .milliseconds(1500))
+            await scroll(top: false)
+            try? await Task.sleep(for: .milliseconds(600))
+            do {
+                let top0 = -sv.contentInsets.top
+                func inView() -> [String: CGFloat] {
+                    let b = sv.contentView.bounds, top = b.minY + sv.contentInsets.top, bottom = b.maxY - sv.contentInsets.bottom
+                    var out: [String: CGFloat] = [:]
+                    for v in Self.all(MessageTextView.self, in: host) {
+                        let r = v.convert(v.bounds, to: sv.contentView)
+                        if r.minY >= top && r.maxY <= bottom { out[String(v.string.prefix(80))] = r.minY - top }
+                    }
+                    return out
+                }
+                let dist = sv.contentView.bounds.minY - top0, oldest0 = evens().first ?? -1
+                let v0: CGFloat = 12000, decel = v0 * v0 / (2 * 800)
+                let viewH = sv.contentView.bounds.height - sv.contentInsets.top - sv.contentInsets.bottom
+                ConversationProbe.scrolling = true
+                var v = v0, last = Date(), seen = inView(), gone = 0, worst: CGFloat = 0, hitTop = false, stopped: Date?
+                // The glide, then 600 ms at rest (the view still in the reader's hands): the batches go on meanwhile.
+                while !hitTop, stopped.map({ Date().timeIntervalSince($0) < 0.6 }) ?? true {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    let now = Date(), dt = min(now.timeIntervalSince(last), 0.05); last = now
+                    // What was in view at the last step, where the glide alone puts it now (the rows came in, if any).
+                    let y0 = sv.contentView.bounds.minY
+                    let dy = min(v * CGFloat(dt), y0 - top0)
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: y0 - dy)); sv.reflectScrolledClipView(sv.contentView)
+                    let moved = y0 - sv.contentView.bounds.minY
+                    try? await Task.sleep(for: .milliseconds(1))
+                    let now2 = inView(), all = Dictionary(Self.all(MessageTextView.self, in: host).map {
+                        (String($0.string.prefix(80)), $0.convert($0.bounds, to: sv.contentView).minY - sv.contentView.bounds.minY - sv.contentInsets.top)
+                    }, uniquingKeysWith: { a, _ in a })
+                    for (text, y) in seen {
+                        let want = y + moved
+                        guard want >= 0, want <= viewH - 40 else { continue }   // the glide takes it out
+                        if let got = all[text] { worst = max(worst, abs(got - want)) } else { gone += 1 }
+                    }
+                    seen = now2
+                    if sv.contentView.bounds.minY <= top0 + 0.5 { hitTop = true }
+                    v = max(0, v - decel * CGFloat(dt))
+                    if v == 0, stopped == nil { stopped = Date() }
+                }
+                ConversationProbe.scrolling = false
+                try? await Task.sleep(for: .milliseconds(1500))
+                let oldest1 = evens().first ?? -1
+                step("autoload-cap-fling: at the cap, from its bottom, a flick up at \(Int(v0)) pt/s (\(Int(dist)) pt to the top): no message in view goes or moves past the glide (\(gone) gone, worst \(Int(worst.rounded(.up))) pt)",
+                     gone == 0 && worst <= 2)
+                await intoTop()
+                try? await Task.sleep(for: .milliseconds(1500))
+                let oldest2 = evens().first ?? -1
+                step("autoload-cap-fling: near the top later, the older rows go in (oldest \(oldest0) -> \(oldest1) after the flick -> \(oldest2) at the top)",
+                     oldest2 >= 0 && oldest2 < oldest0)
+            }
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+
             // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
             holder.items = ChurnData.even(120)
             holder.load = { @MainActor [holder] in holder.reads += 1; return false }

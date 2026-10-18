@@ -1081,6 +1081,34 @@ async function fakeRun() {
       `earlier: ${how} up, fast: older rows go in before the top and the glide goes on over them (read from ${f.from} px, rows in after ${f.loadMs} ms, ${f.inAt} px from the top just before, +${f.rows} rows, top met ${f.hitTop}${f.hitBeforeIn ? " before the rows" : ""}, drift ${f.drift} px, longest step ${f.stall} ms)`);
     if (wheel) await p.shot("earlier-fling");
   }
+  // The read's answer comes while the finger is still on the glass (it drags up fast, then rests), and the finger then
+  // flicks: at the lift the rows go in, while the page glides far from the top, not when the glide ends at the top.
+  hub.stdin.write("session w2:p2 s16 120\nrich s16 600\n");
+  await p.until("document.body.innerText.includes('New session reply 119')", 4000);
+  await new Promise((r) => setTimeout(r, 900));
+  await p.eval("window.scrollTo(0, 3000)");
+  await new Promise((r) => setTimeout(r, 600));
+  await p.eval("window.__parkEarlier = 1; window.__parked = undefined");
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
+  const dragFrom = await p.eval(`new Promise((done) => {
+    let last = performance.now(); const t0 = last;
+    const step = () => {
+      const t = performance.now(), dt = Math.min(t - last, 50) / 1000; last = t;
+      if (typeof window.__parked === 'function' || t - t0 > 1500 || scrollY < 600) { done(Math.round(scrollY)); return; }
+      window.scrollBy(0, -6000 * dt); setTimeout(step, 16);
+    };
+    setTimeout(step, 16);
+  })`);
+  const asked = await p.until("typeof window.__parked === 'function'", 2000) === true;
+  const heldN = await p.eval(rowCount);
+  await p.eval("window.__parked()");
+  await new Promise((r) => setTimeout(r, 400));
+  const heldStill = await p.eval(rowCount);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const g = JSON.parse(await p.eval("window.__fling(false).then(JSON.stringify)"));
+  await new Promise((r) => setTimeout(r, 1200));
+  check(asked && dragFrom > 600 && heldStill === heldN && g.inAt > 0 && !g.hitBeforeIn && !g.hitTop && g.drift <= 2,
+    `earlier: the answer comes while the finger is down, then a flick: the rows wait for the lift and go in as the glide begins (read asked at ${dragFrom} px, ${heldN} -> ${heldStill} rows with the finger down, then in at ${g.inAt} px from the top, +${g.rows} rows, top met ${g.hitTop}${g.hitBeforeIn ? " before the rows" : ""}, drift ${g.drift} px)`);
   await p.eval("window.__slowEarlier = 0");
   // Older rows of a real reply's weight, on a CPU slowed 4x (a phone): near the top a "Loading earlier" notice shows over
   // the rows (it moves none of them) until the rows are in, and the page never stalls past the budget. The meter: the

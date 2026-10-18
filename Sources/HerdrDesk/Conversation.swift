@@ -129,6 +129,8 @@ struct ConversationView: View {
         var anchor: (key: String, top: CGFloat, offset: CGFloat, until: Date)?
         /// The top inset as last seen (scrollTo(y:) takes a content point, under it), and a fix of the anchor due next turn.
         var inset: CGFloat = 0
+        /// The bottom of the view, in the rows' space, as last seen.
+        var viewBottom: CGFloat = 0
         var fixDue = false
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
@@ -229,7 +231,7 @@ struct ConversationView: View {
                 }
                 .coordinateSpace(.named(Self.rowSpace))
                 .frame(maxWidth: size.column, alignment: .leading)
-                .padding(.horizontal, (ReadingWidth(rawValue: widthRaw) ?? .medium).sidePadding).padding(.vertical, 24)
+                .padding(.horizontal, (ReadingWidth(rawValue: widthRaw) ?? .medium).sidePadding).padding(.vertical, Self.listPadding)
                 .frame(maxWidth: .infinity)
             }
             .defaultScrollAnchor(.bottom)
@@ -253,6 +255,7 @@ struct ConversationView: View {
                               insets: g.contentInsets.top + g.contentInsets.bottom, top: g.contentInsets.top)
             } action: { old, new in
                 tracker.inset = new.top
+                tracker.viewBottom = new.offset + new.top + new.container - Self.listPadding
                 if abs(new.content - old.content) > 0.5 || abs(new.container - old.container) > 0.5 || abs(new.insets - old.insets) > 0.5 {
                     if tracker.atBottom {
                         // Next turn of the run loop: scrolling inside the update pass makes SwiftUI report "multiple times per frame".
@@ -330,14 +333,18 @@ struct ConversationView: View {
                 // now, the bounce ends at the new top, and the message being read is out of view. Farther down they go in
                 // while the view glides (a trackpad's momentum moves the view from where it is), so a fast fling up does
                 // not meet the top first.
+                // At the cap, a batch drops as many rows from the bottom: while any of them is in view (a fast scroll up
+                // from near the bottom of a short window starts the load at once) the rows wait for the glide to take
+                // them out. If the reader stops there, the rest stays at hand for the top.
                 let since = Date()
-                while (tracker.scrolling || ConversationProbe.scrolling) && tracker.offset + tracker.inset < Self.edge {
+                while (tracker.scrolling || ConversationProbe.scrolling)
+                        && (tracker.offset + tracker.inset < Self.edge || dropsInView(items.map(\.id), page: min(Self.batch, left))) {
                     try? await Task.sleep(for: .milliseconds(16))
                     guard earlierSession == mine, tracker.batches == batch else { return }
                 }
                 guard earlierSession == mine, tracker.batches == batch else { return }
                 let ids = items.map(\.id)
-                guard window.range(ids).lowerBound > 0 else { return }
+                guard window.range(ids).lowerBound > 0, !dropsInView(ids, page: min(Self.batch, left)) else { return }
                 // One row stays in place for the whole page. A new one per batch could be taken before the last batch's
                 // rows were laid out and its move made up for (a busy frame), and that move then stayed.
                 waited += Date().timeIntervalSince(since)
@@ -353,6 +360,22 @@ struct ConversationView: View {
                 tracker.loadTime = min(2, max(0.2, 0.7 * tracker.loadTime + 0.3 * (Date().timeIntervalSince(t) - waited)))
             }
         }
+    }
+
+    /// Whether a batch of `page` older rows would drop rows from the bottom of the window (at the cap) that are in view.
+    private func dropsInView(_ ids: [String], page: Int) -> Bool {
+        var next = window
+        next.showEarlier(ids, page: page)
+        let r = window.range(ids), end = next.range(ids).upperBound
+        guard end < r.upperBound else { return false }
+        let keys = Set(Self.entries(Self.displayRows(items[r], merged: tracker.merged)).map(\.key))
+        // The first row that goes (with a time line above it), or the row it merges into (an older id's key).
+        for i in stride(from: end, through: r.lowerBound, by: -1) {
+            if let top = ["s-\(ids[i])", "r-\(ids[i])"].filter(keys.contains).compactMap({ tracker.tops[$0] }).min() {
+                return top < tracker.viewBottom
+            }
+        }
+        return false
     }
 
     private func showNotice() -> Int {
@@ -418,6 +441,8 @@ struct ConversationView: View {
         var atBottom: Bool { offset + top + container >= content - 40 }
     }
     static let rowSpace = "conversation-rows"
+    /// Above and below the rows, in the scroll view.
+    static let listPadding: CGFloat = 24
 
     struct Entry {
         enum Kind { case row(ConversationItem), separator(String), footer(String) }

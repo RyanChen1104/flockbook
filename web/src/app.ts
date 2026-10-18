@@ -427,6 +427,9 @@ function lift(e: Event): void {
   if (reader.touching) return;
   letGoTouched();
   readerActs();
+  // Older rows that came while the finger was down go in now, as the page glides (the glide keeps the round going, so
+  // the round's end would put them in only at the top). At the top they still wait for the round's end.
+  if (state.watching) addWaiting(state.watching);
 }
 addEventListener("touchstart", (e) => {
   const t = e as TouchEvent, at = e.target;
