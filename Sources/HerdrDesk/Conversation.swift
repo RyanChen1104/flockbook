@@ -433,7 +433,12 @@ struct ConversationView: View {
             tracker.fixDue = false
             // From where the clip view is now, as the probe does. A scrollTo(y:) of the position lands later, at a place worked
             // out now: when the next batch's probe fix came first (a busy frame), it put the view back by that batch's rows.
-            if let sv = tracker.scrollView { tracker.fixNow(sv, partly: true); return }
+            if let sv = tracker.scrollView {
+                let was = sv.contentView.bounds.minY
+                tracker.fixNow(sv, partly: true)
+                if abs(sv.contentView.bounds.minY - was) > 0.5 { ConversationProbe.lateFixes += 1 }
+                return
+            }
             guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
             let offset = a.offset + top - a.top
             position.scrollTo(y: offset + tracker.inset)
@@ -692,6 +697,8 @@ private struct EarlierNotice: View {
     static var loading = CGRect.zero
     /// A check holds the reader's scrolling here (an offscreen window gets no trackpad gestures).
     static var scrolling = false
+    /// Anchor moves the fallback made a frame late (the probe missed them): that frame showed the rows out of place.
+    static var lateFixes = 0
     private(set) static var pressEarlier: (() -> Void)?, pressLatest: (() -> Void)?
     private static var owners: [Button: UUID] = [:]
     enum Button { case earlier, latest }
