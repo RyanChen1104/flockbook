@@ -1052,7 +1052,7 @@ async function fakeRun() {
     seen.observe(document.body, { childList: true, subtree: true });
     const step = () => {
       const t = performance.now(), dt = Math.min(t - last, 50) / 1000; out.stall = Math.max(out.stall, t - last); last = t;
-      if (out.inAt < 0 && rows() > n0) { out.inAt = Math.round(prevY); out.loadMs = Math.round(t - (asked || t0)); }
+      if (out.inAt < 0 && rows() > n0) { out.inAt = Math.round(prevY); out.loadMs = Math.round(t - (asked || t0)); window.__flingIn = true; }
       const dy = Math.min(v * dt, scrollY);
       if (wheel) window.dispatchEvent(new WheelEvent('wheel', { deltaY: -dy }));
       const was = scrollY; window.scrollBy(0, -dy); glided += was - scrollY;
@@ -1074,7 +1074,10 @@ async function fakeRun() {
     await new Promise((r) => setTimeout(r, 600));
     if (wheel) await p.shot("earlier-fling-start");
     if (!wheel) { await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] }); await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); }
-    const f = JSON.parse(await p.eval("window.__fling(" + wheel + ").then(JSON.stringify)"));
+    await p.eval("window.__flingIn = false; window.__flingOut = null; window.__fling(" + wheel + ").then((o) => { window.__flingOut = JSON.stringify(o); })");
+    // Mid-glide, the older rows in: the page still glides while the shot is taken.
+    if (wheel && await p.until("window.__flingIn", 3000)) await p.shot("earlier-fling-mid");
+    const f = JSON.parse(await p.until("window.__flingOut", 5000));
     await new Promise((r) => setTimeout(r, 1200));
     const how = wheel ? "a trackpad's fling" : "a finger's fling";
     check(f.from > 0 && f.inAt > 0 && !f.hitBeforeIn && !f.hitTop && f.drift <= 2,

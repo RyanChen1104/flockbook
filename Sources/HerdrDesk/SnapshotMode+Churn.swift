@@ -163,6 +163,10 @@ extension ContentTests {
             let rest = ink()
             if rest >= 0, rest < 40 { blanks.append("\(name)#\(i) rest \(rest)") }
         }
+        /// The main thread's time in texts since the last scenario (markdown parse, text build, text measure) and the rows
+        /// it made or sized: a stall with little of these was the stack's own layout.
+        var spent = (MarkdownCache.parseTime, MessageContent.buildTime, MessageContent.measureTime, MarkdownView.bodies, MessageText.makes, MessageText.fits)
+        func ms(_ d: Duration) -> Int { Int(d.components.seconds * 1000) + Int(d.components.attoseconds / 1_000_000_000_000_000) }
         /// After a scenario: the view must come to rest within 1.5 s, then stay still for 2 s.
         func settle(_ name: String, budget: Double = 250) async {
             try? await Task.sleep(for: .milliseconds(1000))
@@ -176,6 +180,9 @@ extension ContentTests {
             let worst = stall.take() * 1000, p = (passes[name] ?? []).sorted()
             let p95 = p.isEmpty ? 0 : p[min(p.count - 1, p.count * 95 / 100)]
             print("churn-test: \(name): at \(Int(Date().timeIntervalSince(t0))) s; layout pass after a change: median \(Int(p.isEmpty ? 0 : p[p.count / 2])) ms, p95 \(Int(p95)) ms")
+            let now = (MarkdownCache.parseTime, MessageContent.buildTime, MessageContent.measureTime, MarkdownView.bodies, MessageText.makes, MessageText.fits)
+            print("churn-test: \(name): main thread in texts: parse \(ms(now.0 - spent.0)) ms, build \(ms(now.1 - spent.1)) ms, measure \(ms(now.2 - spent.2)) ms; \(now.3 - spent.3) markdown bodies, \(now.4 - spent.4) texts made, \(now.5 - spent.5) sized")
+            spent = now
             step("\(name): longest main-thread stall \(Int(worst)) ms (under \(Int(budget)))", worst < budget)
         }
 
@@ -406,6 +413,28 @@ extension ContentTests {
                 step("autoload-log: the pages read the log and went past the cap (\(holder.reads) reads, Jump to latest \(ConversationProbe.latest.height > 0))",
                      holder.reads >= 2 && ConversationProbe.latest.height > 0)
 
+                // 8i. The same pages on a busy main thread: every 100 ms it is held for 200-500 ms (a busy Mac, a long
+                // layout pass elsewhere), while the rows come in batch by batch. The message on top stays where it was.
+                ConversationProbe.pressLatest?()
+                try? await Task.sleep(for: .milliseconds(600))
+                first = 2900; holder.items = Array(pool[first...]); holder.reads = 0
+                try? await Task.sleep(for: .milliseconds(600))
+                await scroll(top: false)
+                for (page, hold) in [200, 300, 400, 500].enumerated() {
+                    await intoTop()
+                    let before = topMessage()
+                    let busy = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in Thread.sleep(forTimeInterval: Double(hold) / 1000) }
+                    // And the other cores busy too, as on a loaded Mac: threads that spin until the page is in.
+                    let spin = SpinLoad(threads: ProcessInfo.processInfo.activeProcessorCount * 2)
+                    try? await Task.sleep(for: .milliseconds(2500))
+                    busy.invalidate(); spin.stop()
+                    try? await Task.sleep(for: .milliseconds(1000))
+                    let after = before.flatMap { y(of: $0.text) }
+                    step("autoload-busy: page \(page + 1), main thread held \(hold) ms each 100 ms: the top message stays (\(before.map { Int($0.y) } ?? -1) -> \(after.map { Int($0) } ?? -1) pt)",
+                         before != nil && after != nil && abs(after! - before!.y) <= 2)
+                }
+                _ = stall.take()
+
                 // 8f. A fast fling up, from 3000 pt below the top at 6000 pt/s, slowing down at 6000 pt/s² (it would stop at
                 // the top), the rows at hand all shown: the read of the log (300 ms here, the slowest of a 30 MB log) starts
                 // early enough that the rows go in while the view still glides, far from the top, and the glide goes on over
@@ -422,7 +451,7 @@ extension ContentTests {
                 ConversationProbe.scrolling = true
                 let fAt = topMessage(), h0 = docHeight(), t0 = Date()
                 var v: CGFloat = 6000, glided: CGFloat = 0, last = t0, asked: Date?, from: CGFloat = -1, loadMs = -1, inAt: CGFloat = -1
-                var hitTop = false, hitBeforeIn = false, drift: CGFloat = 0, longest: TimeInterval = 0, prevY: CGFloat = 3000
+                var hitTop = false, hitBeforeIn = false, drift: CGFloat = 0, longest: TimeInterval = 0, prevY: CGFloat = 3000, sinceIn = 0
                 while v > 0, !hitTop, let at = fAt {
                     try? await Task.sleep(for: .milliseconds(16))
                     let now = Date(), dt = min(now.timeIntervalSince(last), 0.05)
@@ -437,6 +466,11 @@ extension ContentTests {
                     if let d = y(of: at.text) { drift = max(drift, abs(d - (at.y + glided))) }
                     if sv.contentView.bounds.minY <= top0 + 0.5 { hitTop = true; if inAt < 0 { hitBeforeIn = true } }
                     v -= 6000 * CGFloat(dt)
+                    // A few frames after the rows went in, the view still gliding: the capture's own time is not a step.
+                    if inAt >= 0 { sinceIn += 1 }
+                    if sinceIn == 3, v > 0, !hitTop {
+                        stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-fling-mid.png"); stall.resume(); last = Date()
+                    }
                 }
                 stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-fling.png"); stall.resume()
                 ConversationProbe.scrolling = false
@@ -693,4 +727,21 @@ enum ChurnData {
         }
         return out
     }
+}
+
+/// Threads that keep the cores busy until stopped.
+final class SpinLoad: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = true
+    init(threads: Int) {
+        for _ in 0..<threads {
+            Thread.detachNewThread { [self] in
+                var x = 0.0
+                while self.running { for i in 0..<10_000 { x += sin(Double(i)) } }
+                _ = x
+            }
+        }
+    }
+    private var running: Bool { lock.lock(); defer { lock.unlock() }; return on }
+    func stop() { lock.lock(); on = false; lock.unlock() }
 }
