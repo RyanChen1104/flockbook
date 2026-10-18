@@ -515,6 +515,29 @@ extension ContentTests {
             ConversationProbe.pressLatest?()
             try? await Task.sleep(for: .milliseconds(600))
 
+            // 8h. A window at the cap whose rows all fit in view: tool rows merge into a few short groups, so each batch at
+            // the cap drops rows in view. The reader is at rest and presses Show earlier: the older rows go in all the same.
+            holder.items = ChurnData.chips(3000)
+            try? await Task.sleep(for: .milliseconds(600))
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+            do {
+                func notes() -> [Int] {
+                    Self.all(MessageTextView.self, in: host).compactMap { Int($0.string.dropFirst("Chip note ".count).prefix { $0.isNumber }) }.sorted()
+                }
+                ConversationProbe.pressEarlier?()
+                try? await Task.sleep(for: .milliseconds(1500))
+                let fits = (sv.documentView?.frame.height ?? .infinity) <= sv.contentView.bounds.height
+                let oldest1 = notes().first ?? -1
+                ConversationProbe.pressEarlier?()
+                try? await Task.sleep(for: .milliseconds(1500))
+                let oldest2 = notes().first ?? -1
+                step("autoload-cap-short: at the cap, every row in view, at rest: Show earlier puts older rows in (fits \(fits), oldest note \(oldest1) -> \(oldest2))",
+                     fits && oldest1 >= 0 && oldest2 >= 0 && oldest2 < oldest1)
+            }
+            ConversationProbe.pressLatest?()
+            try? await Task.sleep(for: .milliseconds(600))
+
             // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
             holder.items = ChurnData.even(120)
             holder.load = { @MainActor [holder] in holder.reads += 1; return false }
@@ -622,6 +645,17 @@ enum ChurnData {
                 ? ConversationItem(id: "et\(i)", kind: .toolChips([ToolChip(symbol: "doc.text", text: "Read a file",
                                                                        id: UUID(uuidString: String(format: "00000000-0000-0000-0001-%012d", i))!)]))
                 : ConversationItem(id: "ea\(i)", kind: .assistantText("Even reply \(i)."))
+        }
+    }
+
+    /// Tool rows with a short note every 50th: the tool rows between two notes merge into one row, so a window at the cap
+    /// is a few short rows.
+    static func chips(_ n: Int) -> [ConversationItem] {
+        (0..<n).map { i in
+            i % 50 == 0
+                ? ConversationItem(id: "cn\(i)", kind: .assistantText("Chip note \(i)."))
+                : ConversationItem(id: "ct\(i)", kind: .toolChips([ToolChip(symbol: "doc.text", text: "Read a file",
+                                                                       id: UUID(uuidString: String(format: "00000000-0000-0000-0002-%012d", i))!)]))
         }
     }
 

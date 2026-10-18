@@ -134,6 +134,8 @@ struct ConversationView: View {
         var fixDue = false
         /// The page the read of the log in flight asked for: half a page when it loads by itself.
         var loadPage = ConversationView.page
+        /// The read of the log in flight is an early one: the reader's scroll up started it, away from the top.
+        var loadEarly = false
         /// Older rows are going into the window, a few per frame.
         var adding = false
         /// The reader is scrolling: a gesture, its momentum, the bounce at an end.
@@ -198,6 +200,8 @@ struct ConversationView: View {
                         .frame(maxWidth: .infinity).padding(.bottom, 20).help("Load older messages")
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.earlier = $0 }
                         .onAppear { ConversationProbe.set(.earlier, probeId) { showEarlier() } }
+                        // The action reads the rows it was made with: new rows (a check that swaps them) make it anew.
+                        .onChange(of: ConversationProbe.enabled ? ids : []) { ConversationProbe.set(.earlier, probeId) { showEarlier() } }
                         .onDisappear { ConversationProbe.clear(.earlier, probeId) }
                     }
                     let rows = Self.displayRows(items[range], merged: tracker.merged)
@@ -278,7 +282,7 @@ struct ConversationView: View {
                     let ahead = tracker.scrolling || ConversationProbe.scrolling ? Self.lead(speed: tracker.speed, loadTime: tracker.loadTime) : Self.nearTop
                     if new.offset < old.offset, new.offset + new.top < ahead,
                        !tracker.adding, !loadingEarlier {
-                        Task { @MainActor in showEarlier(page: Self.autoPage) }
+                        Task { @MainActor in showEarlier(page: Self.autoPage, early: true) }
                     }
                 }
             }
@@ -291,20 +295,21 @@ struct ConversationView: View {
                 window.loadEnded(window.pendingLoad!)
                 // A notice of its own: the read's own notice may be on its way out (nothing seemed to come), and the rows
                 // may wait a while (the reader still scrolls).
-                add(tracker.loadPage, notice: showNotice())
+                add(tracker.loadPage, notice: showNotice(), early: tracker.loadEarly)
             }
     }
 
     /// A page of older rows: from the rows at hand, else read from the log (the window takes them when they arrive). A
-    /// notice shows over the top of the rows until they are in.
-    private func showEarlier(page: Int = Self.page) {
+    /// notice shows over the top of the rows until they are in. `early`: the reader's scroll up asked for them.
+    private func showEarlier(page: Int = Self.page, early: Bool = false) {
         let ids = items.map(\.id)
         guard !tracker.adding else { return }
-        if window.range(ids).lowerBound > 0 { tracker.loadSince = Date(); add(page, notice: showNotice()); return }
+        if window.range(ids).lowerBound > 0 { tracker.loadSince = Date(); add(page, notice: showNotice(), early: early); return }
         guard let load = onLoadEarlier, moreEarlier, !loadingEarlier else { return }
         loadingEarlier = true
         tracker.loadSince = Date()
         tracker.loadPage = page
+        tracker.loadEarly = early
         keepTop(ids, for: 4)
         let token = window.beginLoad(), mine = earlierSession, shown = showNotice()
         Task {
@@ -320,7 +325,7 @@ struct ConversationView: View {
 
     /// `count` rows at hand go into the window, `batch` per frame, the row on top staying in place; then the notice goes.
     /// The notice is drawn before the first rows go in.
-    private func add(_ count: Int, notice shown: Int) {
+    private func add(_ count: Int, notice shown: Int, early: Bool = false) {
         tracker.adding = true
         tracker.batches += 1
         let mine = earlierSession, batch = tracker.batches
@@ -333,18 +338,21 @@ struct ConversationView: View {
                 // now, the bounce ends at the new top, and the message being read is out of view. Farther down they go in
                 // while the view glides (a trackpad's momentum moves the view from where it is), so a fast fling up does
                 // not meet the top first.
-                // At the cap, a batch drops as many rows from the bottom: while any of them is in view (a fast scroll up
-                // from near the bottom of a short window starts the load at once) the rows wait for the glide to take
-                // them out. If the reader stops there, the rest stays at hand for the top.
+                // At the cap, a batch drops as many rows from the bottom. In a load the reader's scroll up started
+                // early (a fast scroll up from near the bottom of a short window starts it at once), while any of them is
+                // in view the rows wait for the glide to take them out; if the reader stops away from the top, the rest
+                // stays at hand for the top. Show earlier, or a load at the top, puts them in all the same: rows that all
+                // fit in view (tool rows merged into a few short ones) would else never go in.
                 let since = Date()
                 while (tracker.scrolling || ConversationProbe.scrolling)
-                        && (tracker.offset + tracker.inset < Self.edge || dropsInView(items.map(\.id), page: min(Self.batch, left))) {
+                        && (tracker.offset + tracker.inset < Self.edge || early && dropsInView(items.map(\.id), page: min(Self.batch, left))) {
                     try? await Task.sleep(for: .milliseconds(16))
                     guard earlierSession == mine, tracker.batches == batch else { return }
                 }
                 guard earlierSession == mine, tracker.batches == batch else { return }
                 let ids = items.map(\.id)
-                guard window.range(ids).lowerBound > 0, !dropsInView(ids, page: min(Self.batch, left)) else { return }
+                guard window.range(ids).lowerBound > 0 else { return }
+                if early, tracker.offset + tracker.inset >= Self.nearTop, dropsInView(ids, page: min(Self.batch, left)) { return }
                 // One row stays in place for the whole page. A new one per batch could be taken before the last batch's
                 // rows were laid out and its move made up for (a busy frame), and that move then stayed.
                 waited += Date().timeIntervalSince(since)
