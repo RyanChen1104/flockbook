@@ -634,12 +634,12 @@ private struct EntryRow: View, Equatable {
         case .userText(let t):
             HStack {
                 Spacer(minLength: min(size.column * 0.2, 120))
-                UserBubble(text: t, size: size)
+                UserBubble(text: t, size: size, images: item.images)
             }
         case .assistantText(let t):
             MarkdownView(text: t, foldable: foldable)
         case .toolChips(let chips):
-            ChipGroup(chips: chips)
+            ChipGroup(chips: chips, maxWidth: size.column)
         case .permissionRequest(let r):
             if r.state == .pending {
                 if r.toolUseId == liveCard { approval(r) } else { FlowLayout(spacing: 6) { ChipView(chip: ToolChip(symbol: "hourglass", text: "Running \(r.toolName.isEmpty ? "tool" : r.toolName)…")) } }
@@ -740,13 +740,16 @@ private struct EarlierNotice: View {
     }
 }
 
-/// Gray bubble, right aligned, inline markdown only (reading.md §10).
+/// Gray bubble, right aligned, inline markdown only (reading.md §10). The owner's pictures sit under the text.
 struct UserBubble: View {
     let text: String
     let size: ReadingSize
     var images: [LogImage.Ref] = []
     var body: some View {
-        MessageText(content: .bubble(text, size: size), fit: true)
+        VStack(alignment: .trailing, spacing: 8) {
+            if !text.isEmpty || images.isEmpty { MessageText(content: .bubble(text, size: size), fit: true) }
+            if !images.isEmpty { PictureStrip(refs: images, maxWidth: size.column * 0.8 - 28) }
+        }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: Radius.bubble))
             .frame(maxWidth: size.column * 0.8, alignment: .trailing)
@@ -774,6 +777,7 @@ struct ChipView: View {
 }
 
 /// A row of tool chips. Clicking a chip expands its calls below (no popover); clicking a call shows input/output.
+/// Pictures the tools returned sit under the group, folded or not; `maxWidth` is the column they fit.
 struct ChipGroup: View {
     let chips: [ToolChip]
     var maxWidth: CGFloat = 480
@@ -807,6 +811,8 @@ struct ChipGroup: View {
                 .padding(6)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: Radius.card))
             }
+            let pictures = chips.flatMap(\.calls).flatMap(\.images)
+            if !pictures.isEmpty { PictureStrip(refs: pictures, single: maxWidth, maxWidth: maxWidth) }
         }
     }
 

@@ -102,6 +102,7 @@ struct PaneView: View {
                                  scrollToken: model.sendTokens[pane.id] ?? 0,
                                  session: agent.sessionId,
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })
+                    .environment(\.logURL, model.store.logURL(for: agent.sessionId))
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
                     .paneBar(.top) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }

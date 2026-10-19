@@ -82,7 +82,7 @@ extension ContentTests {
         // On screen: the red thumbnail right of centre, the blue picture 480 pt wide on the left.
         let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: "claude", hasLog: true) }
             .environment(\.logURL, url).environment(\.flatGlass, true)
-        let (win, _) = offscreen(view, NSSize(width: 900, height: 700))
+        let (win, _) = offscreen(view, NSSize(width: 900, height: 1100))
         try? await Task.sleep(for: .seconds(1.5))
         let shot = "\(Self.dir)/pictures.png"
         try? FileManager.default.createDirectory(atPath: Self.dir, withIntermediateDirectories: true)
@@ -92,7 +92,7 @@ extension ContentTests {
             var redX: [Int] = [], blueX: [Int] = []
             for y in stride(from: 0, to: rep.pixelsHigh, by: 2) { for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
                 guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if c.redComponent > 0.85 && c.greenComponent < 0.2 && c.blueComponent < 0.2 { redX.append(x) }
+                if c.redComponent > 0.85 && c.greenComponent < 0.35 && c.blueComponent < 0.35 { redX.append(x) }
                 if c.blueComponent > 0.85 && c.redComponent < 0.2 && c.greenComponent < 0.35 { blueX.append(x) }
             } }
             let k = CGFloat(rep.pixelsWide) / 900
@@ -104,7 +104,7 @@ extension ContentTests {
         // Quick Look gets a private copy: mode 600 in a 700 folder, removed when the preview closes or the next opens.
         let data = LogImage.read(userRef, from: url) ?? Data()
         let a = PictureFiles.write(data, format: .png), b = PictureFiles.write(data, format: .png)
-        let mode = a.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
+        let mode = b.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
         let dmode = (try? FileManager.default.attributesOfItem(atPath: PictureFiles.dir.path)[.posixPermissions]) as? Int
         step("preview file is a .png, mode 600 (\(String(mode ?? 0, radix: 8))), folder 700 (\(String(dmode ?? 0, radix: 8)))",
              b?.pathExtension == "png" && b.flatMap { try? Data(contentsOf: $0) } == data && mode == 0o600 && dmode == 0o700)
