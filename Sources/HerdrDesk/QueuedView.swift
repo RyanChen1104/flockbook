@@ -117,6 +117,7 @@ struct QueuedStrip: View {
     let pulling: Bool
     let onPull: () -> Void
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
+    @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue   // re-renders when the width changes
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
 
     private var when: String {
@@ -156,8 +157,9 @@ struct QueuedStrip: View {
                 }
             }
         }
-        .frame(maxWidth: 780)
-        .padding(.horizontal, 24).padding(.top, 6)
+        // The conversation's own column, so a queued bubble ends where the user's bubbles end.
+        .readingColumn(size, ReadingWidth(rawValue: widthRaw) ?? .medium, alignment: .trailing)
+        .padding(.top, 6)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Queued messages")
     }
