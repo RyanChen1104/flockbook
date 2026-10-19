@@ -34,6 +34,7 @@ Rollup order: blocked > working > done > idle > unknown.
     public func stop()
     public func refresh() async         // force a snapshot
     public func conversation(for sessionId: String?) -> [ConversationItem]   // latest parsed items (empty if none)
+    public func logURL(for sessionId: String?) -> URL?   // the log file those items come from; nil before it is found
     public static var preview: HerdrStore   // mock data
     public let client: HerdrClient
 }
@@ -92,6 +93,7 @@ public final class SessionLog: Sendable {
     public func items() -> AsyncStream<[ConversationItem]>   // full list, re-yielded on every change
     public func loadEarlier(bytes: Int = 2_000_000) async -> Bool   // true while older content remains
     public func setFull(_ full: Bool)   // full = 2 MB tail, short = ~256 KB; HerdrStore drives it from visibility
+    public var url: URL?   // the file the tailer reads; nil until found
     public static func parse(lines: [String]) -> [ConversationItem]   // pure, for tests
 }
 ```

@@ -170,6 +170,19 @@ private func json(_ o: Any) -> String { String(decoding: try! JSONSerialization.
         check(LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: 3, index: 0), from: file) == nil
               && LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: nil, index: 0), from: file) == nil,
               "image read back: an offset mid-line or none reads nothing")
+
+        // The tailer's refs read back from the file it found (the view gets the file from the store).
+        let log = SessionLog(sessionId: file.path)
+        check(log.url == nil, "image log url: none before the first read")
+        var it = log.snapshots(pollInterval: .milliseconds(20)).makeAsyncIterator()
+        var tailed: [ConversationItem] = []
+        for _ in 0..<20 where tailed.isEmpty { if let s = await it.next(), s.load == .ready { tailed = s.items } }
+        let tref = tailed.flatMap(\.images).first
+        check(log.url?.standardizedFileURL == file.standardizedFileURL, "image log url: the file the tailer reads (\(String(describing: log.url)))")
+        check(tref.flatMap { LogImage.read($0, from: file) } == png(1440, 900), "image log url: a tailed ref reads back \(String(describing: tref))")
+        let st = HerdrStore(session: HerdrSession(name: "x", socketPath: "/nonexistent"))
+        check(st.logURL(for: nil) == nil && st.logURL(for: "no-such-session") == nil, "image log url: store has none for an unknown session")
+        st.stop()
         try? FileManager.default.removeItem(at: dir)
     }
 }

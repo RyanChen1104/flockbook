@@ -170,6 +170,12 @@ public final class HerdrStore {
         return snap.items
     }
 
+    /// The log file `conversation(for:)` reads (picture refs point into it); nil before it is found.
+    public func logURL(for sessionId: String?) -> URL? {
+        guard !isPreview, let sessionId else { return nil }
+        return logs[sessionId]?.url
+    }
+
     /// Whether `conversation(for:)` is still loading, ready (possibly empty), has no log file, or failed.
     /// Starts tailing on first call, like `conversation(for:)`. A nil session id is `.missing`.
     public func conversationState(for sessionId: String?) -> ConversationLoadState {
