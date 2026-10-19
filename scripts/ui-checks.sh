@@ -109,6 +109,7 @@ for entry in "${CHECKS[@]}"; do
         else
             failed+=("$name")
         fi
+        grep 'FAIL' "$log" | sed "s/^/$name failed: /"   # every FAIL line, also those above the tail below
         echo "::group::$name log"; tail -40 "$log"; echo "::endgroup::"
     elif [ "$known" = yes ]; then
         echo "::notice title=ui-checks::$name passes now: remove it from KNOWN in scripts/ui-checks.sh"
