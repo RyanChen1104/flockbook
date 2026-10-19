@@ -43,6 +43,7 @@ OFFLINE=(
     "root-width|root-width: PASS|--test-root-width"
     "settings-migration|settings-migration: PASS|--test-settings-migration"
     "island-height|island-height: PASS|--test-island-height"
+    "tab-overflow|tab-overflow: PASS|--test-tab-overflow"
     "tabkeys|tabkeys-test: PASS|--test-tabkeys"
     "settings-page|settings-page-test: PASS|--test-settings-page"
     "sendfail|sendfail-test: PASS|--test-sendfail"
