@@ -87,6 +87,23 @@ extension View {
     }
 }
 
+extension View {
+    /// The composer's place under the conversation (the composer, or a question or approval card in its place): the
+    /// reading column at the current size and width, so it ends where the user's bubbles end.
+    func inputColumn() -> some View { modifier(InputColumn()) }
+}
+
+private struct InputColumn: ViewModifier {
+    @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
+    @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue
+
+    func body(content: Content) -> some View {
+        content
+            .readingColumn(ReadingSize(rawValue: sizeRaw) ?? .m, ReadingWidth(rawValue: widthRaw) ?? .medium, alignment: .center)
+            .padding(.bottom, 12).padding(.top, 6)
+    }
+}
+
 /// The content column of the full-width screens (Overview, Needs you, Search). The same rule as the conversation's reading
 /// column: at most `width` wide, centred in the detail area, so a wide or full-screen window does not leave the content
 /// against the left edge. 960 holds three Overview cards (adaptive grid, 260 pt minimum).

@@ -160,8 +160,7 @@ extension PaneView {
                          onSend: { try await answer(q, $0) },
                          onLoadAll: { try await loadAllQuestions() })
                 .id(q.toolUseId)   // fresh answers per question
-                .frame(maxWidth: 780)
-                .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                .inputColumn()
         } else if let r = model.cardInComposer(pane) {
             // A prompt the log does not have (no transcript, a log that lags, a box the log's call does not match): the
             // card from the screen, where the question card goes.
@@ -170,8 +169,7 @@ extension PaneView {
                          onDeny: { model.approve(pane: pane, allow: false, bound: r) },
                          onOpen: { model.showTerminal = true })
                 .id(r.toolUseId)
-                .frame(maxWidth: 780)
-                .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                .inputColumn()
         } else {
             composerField(agent)
         }
@@ -253,8 +251,7 @@ extension PaneView {
                         .buttonStyle(.plain).accessibilityLabel("Reply to \(agent.name)")
                 }
             }
-            .frame(maxWidth: 780)
-            .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+            .inputColumn()
     }
 }
 

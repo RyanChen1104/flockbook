@@ -89,8 +89,7 @@ extension ContentTests {
                         QuestionCard(model: q, agentName: agent, canSend: canSend, onSend: onSend, onLoadAll: onLoadAll, onFlow: onFlow)
                             .id(q.toolUseId)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame($0) }
-                            .frame(maxWidth: 780)
-                            .padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                            .inputColumn()
                     } else {
                         Text("Reply to \(agent)").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 18)
                     }

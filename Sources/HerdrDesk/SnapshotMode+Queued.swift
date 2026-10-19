@@ -141,11 +141,11 @@ extension SnapshotRunner {
             QueuedStrip(queue: QueuedInput(agent: "claude", items: ["Also run the lint step."], pullable: true), canPull: true, pulling: false, onPull: {})
             ComposerView(agentName: "claude", draft: ComposerDraft(), onSend: { _ in })
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composer = $0.maxX }
-                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                .inputColumn()
             ApprovalCard(request: PermissionRequest(title: "claude wants to run a build", command: "swift build", toolUseId: "toolu_a"),
                          agentName: "claude", canRespond: true, onAllow: {}, onDeny: {}, onOpen: {})
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { card = $0.maxX }
-                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                .inputColumn()
         }
         .environment(\.flatGlass, true)
         .frame(width: pane, height: 900)
@@ -178,7 +178,7 @@ extension SnapshotRunner {
                 .readingColumn(.m, .medium).padding(.bottom, 14)
                 if let queue { QueuedStrip(queue: queue, canPull: true, pulling: false, onPull: {}) }
                 ComposerView(agentName: agent, draft: draft ?? ComposerDraft(), onSend: { _ in })
-                    .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                    .inputColumn()
             }
         }
         .overlay(alignment: .top) { if let notice { NoticeCapsule(text: notice).padding(.top, 16).padding(.horizontal, 24) } }
