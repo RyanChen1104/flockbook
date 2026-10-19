@@ -56,9 +56,9 @@ extension SnapshotRunner {
         for width in ReadingWidth.allCases {
             for size in ReadingSize.allCases {
                 for pane in [CGFloat(700), 1400] {
-                    let (user, queued, away) = await edges(width: width, size: size, pane: pane)
-                    step("aligned: \(width.rawValue) \(size.rawValue) in \(Int(pane)): queued ends at the user's bubble (\(user) vs \(queued)), off every screen",
-                         user > 0 && abs(user - queued) < 0.5 && away)
+                    let e = await edges(width: width, size: size, pane: pane)
+                    step("aligned: \(width.rawValue) \(size.rawValue) in \(Int(pane)): queued, composer and approval card end at the user's bubble (\(e.user) vs \(e.queued), \(e.composer), \(e.card)), off every screen",
+                         e.user > 0 && [e.queued, e.composer, e.card].allSatisfy { abs($0 - e.user) < 0.5 } && e.away)
                 }
             }
         }
@@ -120,12 +120,14 @@ extension SnapshotRunner {
         exit(failures == 0 ? 0 : 1)
     }
 
-    /// The right edges (global x) of a user bubble in the conversation's reading column and of a queued bubble under it,
-    /// in a pane `pane` wide, and whether the window touched no screen. Draws nothing to disk.
-    @MainActor private static func edges(width: ReadingWidth, size: ReadingSize, pane: CGFloat) async -> (CGFloat, CGFloat, Bool) {
+    /// The right edges (global x) of a user bubble in the conversation's reading column and of what goes under it (a queued
+    /// bubble, the composer, an approval card in the composer's place), in a pane `pane` wide, and whether the window
+    /// touched no screen. Draws nothing to disk.
+    @MainActor private static func edges(width: ReadingWidth, size: ReadingSize, pane: CGFloat) async
+        -> (user: CGFloat, queued: CGFloat, composer: CGFloat, card: CGFloat, away: Bool) {
         AppDefaults.store.set(width.rawValue, forKey: ReadingWidth.key)
         AppDefaults.store.set(size.rawValue, forKey: ReadingSize.key)
-        var user = CGFloat(0), queued = CGFloat(0)
+        var user = CGFloat(0), queued = CGFloat(0), composer = CGFloat(0), card = CGFloat(0)
         QueueProbe.bubble = { queued = $0.maxX }
         defer { QueueProbe.bubble = nil }
         let view = VStack(spacing: 0) {
@@ -137,18 +139,26 @@ extension SnapshotRunner {
             }
             .readingColumn(size, width)
             QueuedStrip(queue: QueuedInput(agent: "claude", items: ["Also run the lint step."], pullable: true), canPull: true, pulling: false, onPull: {})
+            ComposerView(agentName: "claude", draft: ComposerDraft(), onSend: { _ in })
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composer = $0.maxX }
+                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+            ApprovalCard(request: PermissionRequest(title: "claude wants to run a build", command: "swift build", toolUseId: "toolu_a"),
+                         agentName: "claude", canRespond: true, onAllow: {}, onDeny: {}, onOpen: {})
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { card = $0.maxX }
+                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
         }
         .environment(\.flatGlass, true)
-        .frame(width: pane, height: 400)
+        .frame(width: pane, height: 900)
         let host = NSHostingView(rootView: view)
-        host.frame = NSRect(x: 0, y: 0, width: pane, height: 400)
+        host.frame = NSRect(x: 0, y: 0, width: pane, height: 900)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         var away = true
         func check() { away = away && !NSScreen.screens.contains(where: { $0.frame.intersects(win.frame) }) }
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless(); check()
         for _ in 0..<3 { try? await Task.sleep(for: .milliseconds(100)); host.layoutSubtreeIfNeeded(); check() }
         win.orderOut(nil)
-        return ((user * 2).rounded() / 2, (queued * 2).rounded() / 2, away)
+        func half(_ x: CGFloat) -> CGFloat { (x * 2).rounded() / 2 }
+        return (half(user), half(queued), half(composer), half(card), away)
     }
 
     /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not

@@ -230,14 +230,18 @@ extension ContentTests {
              QuestionCard.problemText(QuestionAdapter.Failure.notOnScreen).contains("Nothing was sent")
              && QuestionCard.problemText(QuestionAdapter.Failure.unsupported("x")).contains("Nothing was sent"))
 
+        AppDefaults.store.set(ReadingSize.m.rawValue, forKey: ReadingSize.key)
+        AppDefaults.store.set(ReadingWidth.medium.rawValue, forKey: ReadingWidth.key)
         for width in [1200, 960] as [CGFloat] {
             let size = NSSize(width: width, height: 760), w = Int(width)
             // Single choice: keys, recommended tag, send stays off.
             var flow = QuestionFlow([]), frame = CGRect.zero, sent: [QuestionAnswer]?
             let (win, host) = window(scene(items(single()), onFlow: { flow = $0 }, onSend: { sent = $0 }, onFrame: { frame = $0 }), size)
             try? await Task.sleep(for: .seconds(1.2))
-            step("\(w): card in the composer slot, at most 780 wide and inside the window (x \(Int(frame.minX))..\(Int(frame.maxX)), y \(Int(frame.minY))..\(Int(frame.maxY)), window \(Int(win.frame.height)) with title bar)",
-                 frame.width > 300 && frame.width <= 780.5 && frame.minX >= 23.5 && frame.maxX <= width - 23.5 && frame.maxY <= win.frame.height - 11.5)
+            // The conversation's reading column (size M, Medium): as wide as the user's bubbles reach, centred.
+            let column = min(ReadingSize.m.column, width - 2 * ReadingWidth.medium.sidePadding)
+            step("\(w): card in the composer slot, in the reading column and inside the window (x \(Int(frame.minX))..\(Int(frame.maxX)), y \(Int(frame.minY))..\(Int(frame.maxY)), column \(Int(column)), window \(Int(win.frame.height)) with title bar)",
+                 abs(frame.width - column) < 0.5 && abs(frame.midX - width / 2) < 0.5 && frame.maxY <= win.frame.height - 11.5)
             let labels = await axLabels(host)
             step("\(w): Recommended tag on the stripped label", labels.contains("Local file, recommended") && !labels.contains { $0.contains("(Recommended)") })
             await digit(win, 2)
