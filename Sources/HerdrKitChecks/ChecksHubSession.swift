@@ -73,6 +73,8 @@ import Foundation
     private(set) var pulls: [String] = []
     /// How long a pull takes (the web test switches agents meanwhile).
     var pullDelay: Duration = .zero
+    /// Runs while the pull is under way, after `pullDelay`, before `keep` (a check changes things mid-pull here).
+    var duringPull: (@MainActor () -> Void)?
     /// What `keep` answered for the last pull with text (nil: not asked).
     private(set) var kept: Bool?
     /// The kept text's note right after `keep` (while the pull runs).
@@ -84,6 +86,7 @@ import Foundation
         guard allowed() else { return .refused("Input is off. Nothing was sent.") }
         pulls.append("\(pane) \(agent.sessionId ?? "")")
         if pullDelay > .zero { try? await Task.sleep(for: pullDelay) }
+        duringPull?()
         kept = pullOutcome.text.map(keep)
         keptNote = pulledTexts.all.last?.note
         return pullOutcome

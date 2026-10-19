@@ -160,11 +160,10 @@ import Foundation
         b.pullOutcome = .pulled("QC reply GAMMA")
         let s = HubSession(backend: b, devices: own)
         _ = await s.receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok-gone","client":"test","clientVersion":"1"}"#))
-        b.pullDelay = .milliseconds(50)
-        Task { @MainActor in try? await Task.sleep(for: .milliseconds(10)); own.revoke(device: "d-gone"); b.pulledTexts.drop(device: "d-gone") }
+        b.duringPull = { own.revoke(device: "d-gone"); b.pulledTexts.drop(device: "d-gone") }
         _ = await s.receive(pull)
         check(b.kept == false && b.pulledTexts.all.isEmpty, "hub queue: r3 P2-4: removed mid-pull: nothing kept for it, keep says no (\(String(describing: b.kept)), \(b.pulledTexts.all.count))")
-        b.pullDelay = .zero
+        b.duringPull = nil
     }
 
     // r3 P3-5: the panes there are now, from a snapshot herdr gave (an empty one too); nil before any.
