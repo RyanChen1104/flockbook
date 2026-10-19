@@ -744,6 +744,7 @@ private struct EarlierNotice: View {
 struct UserBubble: View {
     let text: String
     let size: ReadingSize
+    var images: [LogImage.Ref] = []
     var body: some View {
         MessageText(content: .bubble(text, size: size), fit: true)
             .padding(.horizontal, 14).padding(.vertical, 10)
@@ -775,6 +776,7 @@ struct ChipView: View {
 /// A row of tool chips. Clicking a chip expands its calls below (no popover); clicking a call shows input/output.
 struct ChipGroup: View {
     let chips: [ToolChip]
+    var maxWidth: CGFloat = 480
     @State private var open: Int?
     @State private var openCall: String?
     @State private var showAll = false
