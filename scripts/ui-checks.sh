@@ -102,6 +102,7 @@ for entry in "${CHECKS[@]}"; do
     fi
     line=$(printf '%-20s %4ss  %s' "$name" "$secs" "$verdict")
     echo "$line" | tee -a "$summary"
+    grep 'WARN (CI runner' "$log" | sed "s/^/::warning title=ui-checks::$name: /"   # timing misses a CI runner does not count
     known=no; [[ "$KNOWN" == *" $name "* ]] && known=yes
     if [ "$verdict" != ok ]; then
         if [ "$known" = yes ]; then
