@@ -38,7 +38,13 @@ extension SnapshotRunner {
                 let path = "\(dir)/settings-\(name)-\(dark ? "dark" : "light").png"
                 // The window's own capture must show content: a blank one (no screen-capture permission) is a FAIL,
                 // not a wallpaper-only PASS.
-                let ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
+                // The first window of a run can still be undrawn after 900 ms on a busy machine: capture again, up to 2 s
+                // more. A window that never draws stays blank and fails.
+                var ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
+                for _ in 0..<4 where ink <= 0.02 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
+                }
                 let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
                 let ok = ink > 0.02 && bytes > 5_000 && size.width >= 480 && size.width <= 600 && size.height > 200 && size.height < 900
                 if !ok { failures += 1 }
