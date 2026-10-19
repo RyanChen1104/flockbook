@@ -9,6 +9,7 @@ public struct ConversationParser: Sendable {
     var openOrder: [String] = []
     var callTS: [String: Date] = [:]        // tool call id -> time of its line
     var lineTS: Date?                        // time of the line being fed
+    var lineOffset: UInt64?                  // byte offset of the line being fed (picture refs point at it)
     var callById: [String: ToolCall] = [:]   // call details; results patch these after the chip was emitted
     var runsByKey: [String: [(tool: String, label: ToolLabel, id: String)]] = [:]
     var questionAt: [String: Int] = [:]      // AskUserQuestion tool_use id -> index in `done`
@@ -53,8 +54,9 @@ public struct ConversationParser: Sendable {
         guard let data = line.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         lineTS = Self.parseTime(o["timestamp"] as? String)
+        lineOffset = offset
         if let payload = o["payload"] as? [String: Any] { feedCodex(type: o["type"] as? String, payload: payload, offset: offset); return }
-        if o["uuid"] == nil, let t = o["type"] as? String, Self.piTypes.contains(t) { feedPi(o, line: line); return }
+        if o["uuid"] == nil, let t = o["type"] as? String, Self.piTypes.contains(t) { feedPi(o, line: line, offset: offset); return }
         if Self.isCursor(o) { feedCursor(o, offset: offset); return }
         if o["isSidechain"] as? Bool == true { return }
         let type = o["type"] as? String
@@ -69,6 +71,8 @@ public struct ConversationParser: Sendable {
         var blocks: [[String: Any]] = []
         if let s = msg["content"] as? String { blocks = [["type": "text", "text": s]] }
         else if let a = msg["content"] as? [[String: Any]] { blocks = a }
+        let pics = type == "user" && !meta && !compactFlag ? LogImage.refs(LogImage.found(message: msg), offset: offset) : []
+        let firstNew = done.count
 
         for (i, b) in blocks.enumerated() {
             let bid = "\(uuid)-\(i)"
@@ -117,11 +121,22 @@ public struct ConversationParser: Sendable {
                 } else if let id = b["tool_use_id"] as? String {
                     callById[id]?.output = Self.cut(Self.resultText(b["content"]))
                     callById[id]?.isError = b["is_error"] as? Bool ?? false
+                    callById[id]?.images = pics.filter { $0.call == id }.map(\.ref)
                     openToolUses[id] = nil
                     openOrder.removeAll { $0 == id }
                 }
             default: break
             }
+        }
+        // The owner's pictures go on the user item from this line; a line of pictures alone makes one.
+        let own = pics.filter { $0.call == nil }.map(\.ref)
+        guard !own.isEmpty else { return }
+        if let at = done[firstNew...].firstIndex(where: { if case .userText = $0.kind { true } else { false } }) {
+            done[at].images = own
+        } else {
+            flush()
+            done.append(ConversationItem(id: "\(uuid)-img", kind: .userText(""), timestamp: lineTS))
+            done[done.count - 1].images = own
         }
     }
 
@@ -158,12 +173,19 @@ public struct ConversationParser: Sendable {
             guard role == "user" || role == "assistant" else { return }
             let parts = (payload["content"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }
             let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty { return }
+            let pics = role == "user" ? LogImage.refs(LogImage.found(codex: payload), offset: offset).map(\.ref) : []
+            if text.isEmpty && pics.isEmpty { return }
             flush()
             if role == "user" {
-                guard !text.hasPrefix("# AGENTS.md"), let shown = Self.userVisible(text) else { return }
+                var shown = ""
+                if !text.isEmpty {
+                    guard !text.hasPrefix("# AGENTS.md"), let s = Self.userVisible(text) else { return }
+                    shown = s
+                }
                 answerAsyncQuestions()
-                done.append(ConversationItem(id: bid, kind: .userText(shown), timestamp: lineTS))
+                var item = ConversationItem(id: bid, kind: .userText(shown), timestamp: lineTS)
+                item.images = pics
+                done.append(item)
             } else {
                 done.append(ConversationItem(id: bid, kind: .assistantText(text), timestamp: lineTS))
             }
@@ -193,6 +215,7 @@ public struct ConversationParser: Sendable {
             }
             if let id = payload["call_id"] as? String {
                 callById[id]?.output = Self.cut(Self.resultText(payload["output"]))
+                callById[id]?.images = LogImage.refs(LogImage.found(codex: payload), offset: offset).map(\.ref)
                 openToolUses[id] = nil
                 openOrder.removeAll { $0 == id }
             }

@@ -6,6 +6,7 @@ import Foundation
 struct PiState: Sendable {
     var parent: [String: String] = [:]   // entry id -> parent id ("" = root)
     var lines: [String: String] = [:]    // entry id -> line, only for entries that render
+    var offsets: [String: UInt64] = [:]  // entry id -> the line's byte offset (picture refs), when known
     var last: String?
     var replaying = false
 }
@@ -14,13 +15,13 @@ extension ConversationParser {
     static let piTypes: Set<String> = ["session", "message", "model_change", "thinking_level_change", "custom", "custom_message",
                                        "session_info", "compaction", "context_edit", "branch_summary"]
 
-    mutating func feedPi(_ o: [String: Any], line: String) {
+    mutating func feedPi(_ o: [String: Any], line: String, offset: UInt64?) {
         guard o["type"] as? String != "session", let id = o["id"] as? String else { return }   // header: not in the tree
         let parent = o["parentId"] as? String
         if !pi.replaying, let parent, let last = pi.last, parent != last, pi.parent[parent] != nil { rebuildPi(upTo: parent) }
         pi.parent[id] = parent ?? ""
         pi.last = id
-        if !pi.replaying, Self.piRenders(o) { pi.lines[id] = line }
+        if !pi.replaying, Self.piRenders(o) { pi.lines[id] = line; pi.offsets[id] = offset }
         renderPi(o, id: id)
     }
 
@@ -40,7 +41,7 @@ extension ConversationParser {
         var fresh = ConversationParser()
         fresh.pi = pi
         fresh.pi.replaying = true
-        for id in chain.reversed() { if let l = pi.lines[id] { fresh.feed(line: l) } }
+        for id in chain.reversed() { if let l = pi.lines[id] { fresh.feed(line: l, offset: pi.offsets[id]) } }
         fresh.pi.replaying = false
         fresh.pi.last = leaf
         self = fresh
@@ -103,6 +104,7 @@ extension ConversationParser {
             guard let call = m["toolCallId"] as? String else { return }
             callById[call]?.output = Self.cut(Self.resultText(m["content"]))
             callById[call]?.isError = m["isError"] as? Bool ?? false
+            callById[call]?.images = LogImage.refs(LogImage.found(message: m), offset: lineOffset).map(\.ref)
             openToolUses[call] = nil
             openOrder.removeAll { $0 == call }
         case "bashExecution":   // the user ran `!command` in pi
