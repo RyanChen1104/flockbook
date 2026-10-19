@@ -106,6 +106,8 @@ extension AppModel {
 @MainActor enum QueueProbe {
     static var report: ((QueuePull.Outcome) -> Void)?
     static var injected: [String: QueuedInput] = [:]
+    /// Each queued bubble's frame in global coordinates, for the alignment check. nil in the app.
+    static var bubble: ((CGRect) -> Void)?
 }
 
 /// The agent's queued messages, faded user bubbles over the composer, with when they go in and Pull back.
@@ -172,6 +174,7 @@ struct QueuedStrip: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: Radius.bubble))
         .overlay(RoundedRectangle(cornerRadius: Radius.bubble).strokeBorder(Color.primary.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { QueueProbe.bubble?($0) }
         .frame(maxWidth: size.column * 0.8, alignment: .trailing)
         .fixedSize(horizontal: false, vertical: true)
     }

@@ -76,6 +76,17 @@ enum ReadingWidth: String, CaseIterable, Identifiable {
     static var current: ReadingWidth { ReadingWidth(rawValue: AppDefaults.store.string(forKey: key) ?? "") ?? .medium }
 }
 
+extension View {
+    /// Puts this content in the conversation's reading column: at most `size.column` wide, inside the width setting's side
+    /// padding, centred in the pane. The queue strip under the conversation uses it too, so its bubbles end where the
+    /// user's bubbles end.
+    func readingColumn(_ size: ReadingSize, _ width: ReadingWidth, alignment: Alignment = .leading, vertical: CGFloat = 0) -> some View {
+        frame(maxWidth: size.column, alignment: alignment)
+            .padding(.horizontal, width.sidePadding).padding(.vertical, vertical)
+            .frame(maxWidth: .infinity)
+    }
+}
+
 /// The content column of the full-width screens (Overview, Needs you, Search). The same rule as the conversation's reading
 /// column: at most `width` wide, centred in the detail area, so a wide or full-screen window does not leave the content
 /// against the left edge. 960 holds three Overview cards (adaptive grid, 260 pt minimum).
