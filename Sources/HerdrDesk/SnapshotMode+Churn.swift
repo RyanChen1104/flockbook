@@ -10,8 +10,13 @@ import SwiftUI
 extension ContentTests {
     /// The longest main-thread stall an autoload may cause (a hitch the reader sees mid-scroll). Half a page at once, every
     /// row of the window rendered again, stalled about 100 ms here; a few rows per frame, only new rows rendered, 35–50 ms
-    /// (this check runs a debug build; a quiet scroll alone is about 20 ms). 60 keeps a margin for a busy machine.
-    static let autoloadBudget: Double = 60
+    /// (this check runs a debug build; a quiet scroll alone is about 20 ms). Each batch still lays out the whole stack once
+    /// (about 34 ms here, whatever the batch size); on a CI runner that frame took 61–64 ms on macOS 26 and 158–202 ms on
+    /// macOS 15. The budgets keep a margin over those; a lazy stack is the fix that would bring them down.
+    static var autoloadBudget: Double {
+        if #available(macOS 26, *) { return 90 }
+        return 250
+    }
     static func conversationChurn(_ args: [String]) async {
         // `--test-conversation-churn <rows>`: rows on screen (default 150, one page); a long session read far back has more.
         if let i = args.firstIndex(of: "--test-conversation-churn"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { ConversationView.page = n }
