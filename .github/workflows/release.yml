@@ -113,7 +113,7 @@ jobs:
               echo "macOS blocks it on first open. To run it anyway: \`xattr -dr com.apple.quarantine /Applications/Flockbook.app\`."
             fi
             echo
-            echo "Requires macOS 26 or later and a running Herdr. Universal (Apple silicon + Intel)."
+            echo "Requires macOS 15 or later and a running Herdr. Universal (Apple silicon + Intel)."
             echo "Unofficial: not affiliated with, endorsed by, or supported by Herdr, Inc."
           } > dist/NOTES.md
 

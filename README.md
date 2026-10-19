@@ -8,7 +8,7 @@ Your agents' conversations are already in the terminal. Flockbook shows the same
 
 **Built with AI.** AI coding agents write Flockbook: Claude Code writes the code and Codex reviews it. A human sets the direction, tests the app, and reviews every change. See [How this was built](#how-this-was-built).
 
-**[Download for macOS](https://github.com/minchenlee/flockbook/releases/latest)** · [Website](https://flockbook.mclee.dev) · Requires macOS 26 or later.
+**[Download for macOS](https://github.com/minchenlee/flockbook/releases/latest)** · [Website](https://flockbook.mclee.dev) · Requires macOS 15 or later.
 
 ## Features
 
@@ -105,7 +105,7 @@ Codex questions can be answered from the phone. Claude Code questions need one m
 
 ## Requirements
 
-- macOS 26 or later
+- macOS 15 or later
 - Herdr, running
 - Agents in Herdr: Claude Code, Codex, Cursor, or pi. Flockbook reads their local session logs to show the conversation.
 
