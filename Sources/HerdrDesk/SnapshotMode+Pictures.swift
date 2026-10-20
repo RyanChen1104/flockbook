@@ -176,9 +176,14 @@ extension ContentTests {
         PictureCache.shared.removeAll()
         try? await Task.sleep(for: .milliseconds(500))
         let gone = liveThumbs()
+        capture(longWin, to: "\(Self.dir)/pictures-long-away.png")
+        await scroll(top: true)
+        capture(longWin, to: "\(Self.dir)/pictures-long-back.png")
+        let back = liveThumbs()
         longWin.orderOut(nil)
         step("conversation list: a picture far out of view does not load (\(atBottom) at the bottom), loads at the top (\(atTop)), and goes when scrolled away (\(gone))",
              atBottom == 0 && atTop >= 1 && gone == 0)
+        step("conversation list: scrolled back, the picture loads again (\(back))", back >= 1)
 
         // On screen: the red thumbnail right of centre, the blue picture 480 pt wide on the left.
         let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: "claude", hasLog: true) }
