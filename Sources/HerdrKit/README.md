@@ -34,6 +34,7 @@ Rollup order: blocked > working > done > idle > unknown.
     public func stop()
     public func refresh() async         // force a snapshot
     public func conversation(for sessionId: String?) -> [ConversationItem]   // latest parsed items (empty if none)
+    public func logURL(for sessionId: String?) -> URL?   // the log file those items come from; nil before it is found
     public static var preview: HerdrStore   // mock data
     public let client: HerdrClient
 }
@@ -66,6 +67,7 @@ public struct ToolCall: Identifiable, Sendable, Hashable {
     input: String         // full arguments, pretty JSON; cut at 4 KB, "…" marks the cut
     output: String?       // tool_result text, cut at 4 KB; nil until the result arrives
     isError: Bool
+    images: [LogImage.Ref]   // pictures in the result, in order; [] when none
 }
 // The result is a later log line. When it arrives, the next `items` emission carries it in the same chip
 // (the chip's item id stays stable), so the UI updates the open detail in place. Codex: mapped by call_id.
@@ -74,6 +76,14 @@ public struct ConversationItem: Identifiable, Sendable, Hashable {
     public enum Kind { case userText(String), assistantText(String), toolChips([ToolChip]), permissionRequest(PermissionRequest), status(String) }
     public var id: String; public var kind: Kind
     public var timestamp: Date?   // time of the log line (`timestamp` field, Claude and Codex). Tool chips: first call of the run. Pending permission: its call. Nil when the line has none.
+    public var images: [LogImage.Ref]   // userText: the pictures the owner attached, in order; [] when none
+}
+public enum LogImage {
+    public enum Format { case png, jpeg, webp, gif }
+    public struct Ref: Sendable, Hashable { format: Format; width: Int; height: Int; offset: UInt64?; index: Int }
+    public static func read(_ ref: Ref, from url: URL) -> Data?   // the picture's bytes from the log file, or nil
+    public static func data(line: String, index: Int) -> Data?   // the nth picture of one log line
+    public static func header(_ d: Data) -> (format: Format, width: Int, height: Int)?
 }
 public final class SessionLog: Sendable {
     public init(sessionId: String, agent: String = "claude")   // agent = Agent.kind; sessionId = herdr agent_session.value
@@ -83,12 +93,28 @@ public final class SessionLog: Sendable {
     public func items() -> AsyncStream<[ConversationItem]>   // full list, re-yielded on every change
     public func loadEarlier(bytes: Int = 2_000_000) async -> Bool   // true while older content remains
     public func setFull(_ full: Bool)   // full = 2 MB tail, short = ~256 KB; HerdrStore drives it from visibility
+    public var url: URL?   // the file the tailer reads; nil until found
     public static func parse(lines: [String]) -> [ConversationItem]   // pure, for tests
 }
 ```
 If no log is found, `items()` yields `[]` once and keeps polling for the file.
 
 `loadEarlier` reads up to `bytes` before the current start, cut to whole lines. The older items appear at the front of the next `items()` emission (within one poll, 0.5 s). The whole loaded range is parsed again together, so a tool result in a later segment still matches its call. Item ids do not change (Codex ids come from the line's byte offset), so the UI can keep scroll position. It returns `false` before the first load and when the file start is reached. `HerdrStore.loadEarlier(paneId:) async -> Bool` (or `loadEarlier(for: sessionId)`) wraps it for the store's own log; false for an unknown pane or a pane without an agent session. Call it from the "Show earlier" button after the loaded items are all shown.
+
+### Pictures in the log
+Logs keep pictures as base64 inside the JSON line. Items never hold the bytes. They hold a `LogImage.Ref`: the byte
+offset of the line, the picture's index in that line (log order), the format and size read from the picture's
+header (PNG, JPEG, WebP, GIF), and `digest`: `LogImage.fingerprint(base64:)`, the first 8 bytes of the SHA-256 of the
+picture's base64 text. A picture whose header cannot be read gets no ref, but still counts for `index`.
+- Claude Code: `image` blocks in a user message go on its `userText` item (a message with only pictures makes a
+  `userText("")`). `image` blocks inside a `tool_result` go on the matching `ToolCall`.
+- Codex: `input_image` data URLs in a message (its `userText`) or in a tool's output (its `ToolCall`).
+- pi: `image` blocks in a `toolResult` go on its `ToolCall`. Rebuilt branches keep each line's offset.
+- A picture given as a web URL is never fetched. Cursor: not covered.
+
+`LogImage.read(ref, from: logURL)` reads the line at `offset` and decodes picture `index`. It returns nil unless
+`offset` starts a line and the picture there still has the ref's fingerprint, format and size, so a rewritten log
+never shows another picture. Reading is file I/O: call it off the main thread.
 
 ### User text (Claude Code, Codex)
 A user message that starts with a tag is injected context (`<system-reminder>`, `<command-name>`, `<local-command-*>`,
@@ -113,7 +139,7 @@ pi entries form a tree (`id`/`parentId`). The conversation is the branch that en
 - `bashExecution` (the user ran `!cmd`): a "Ran a command" chip with its output.
 - `stopReason` `error` → `.status("Error: <first line>")`; `aborted` → `.status("Interrupted")`.
 - `compaction` → `.status("Context compacted")`. `custom_message` with `display: true` → `.status(<first line>)`.
-- Not shown: `session`, `model_change`, `thinking_level_change`, `session_info`, `custom` (e.g. worked-for, permission-gate decisions), `context_edit`, the system prompt, images in tool results and user messages.
+- Not shown: `session`, `model_change`, `thinking_level_change`, `session_info`, `custom` (e.g. worked-for, permission-gate decisions), `context_edit`, the system prompt, images in user messages.
 
 Cursor transcripts have no ids, no times and no tool results. Item ids come from the line's byte offset (`cu@<offset>-<block>`), like Codex.
 - User text: the body of `<user_query>`; its `<timestamp>` (minute precision, with the UTC offset) is the item time. User lines without `<user_query>` that start with a tag or `[` are injected context and are skipped. Assistant items have no time.

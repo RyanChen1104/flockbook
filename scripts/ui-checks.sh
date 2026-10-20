@@ -60,6 +60,7 @@ OFFLINE=(
     "conversation-churn|churn-test: PASS|--test-conversation-churn"
     "busy-tab|busy-tab: PASS|--test-busy-tab"
     "legacy-look|legacy-look-test: PASS|--test-legacy-look"
+    "pictures|pictures-test: PASS|--test-pictures"
 )
 REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"

@@ -21,7 +21,7 @@ public enum LaunchGuard {
         "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn",
         "--test-question-live", "--bench-conversation", "--test-conversation-churn", "--test-busy-tab",
         "--test-open-latest", "--test-open-latest-live", "--test-open-latest-log",
-        "--test-legacy-look",
+        "--test-legacy-look", "--test-pictures",
     ]
     /// The checks with a real window, run only with the owner's leave.
     public static let realWindow: Set<String> = ["--test-fullscreen-real", "--test-scroll-real"]

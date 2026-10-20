@@ -10,6 +10,9 @@ public final class SessionLog: Sendable {
     public init(sessionId: String, agent: String = "claude") { self.sessionId = sessionId; self.agent = agent }
     public convenience init(sessionId: String, codex: Bool) { self.init(sessionId: sessionId, agent: codex ? "codex" : "claude") }
 
+    /// The log file the tailer reads; nil until `snapshots` found it.
+    public var url: URL? { state.lock.withLock { state.url } }
+
     /// Where an agent keeps its logs (the search root for an id).
     public static func defaultDir(agent: String) -> String {
         NSHomeDirectory() + (agent == "codex" ? "/.codex/sessions" : agent == "cursor" ? "/.cursor/projects" : "/.claude/projects")

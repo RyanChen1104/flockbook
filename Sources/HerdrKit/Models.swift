@@ -83,6 +83,7 @@ public struct ToolCall: Identifiable, Sendable, Hashable {
     public var input: String       // full arguments as pretty JSON
     public var output: String?     // nil until the result arrives
     public var isError: Bool
+    public var images: [LogImage.Ref] = []   // pictures in the result, in order
     public init(id: String, toolName: String, summary: String, input: String, output: String? = nil, isError: Bool = false) {
         self.id = id; self.toolName = toolName; self.summary = summary; self.input = input; self.output = output; self.isError = isError
     }
@@ -186,5 +187,7 @@ public struct ConversationItem: Identifiable, Sendable, Hashable {
     public var kind: Kind
     /// When the log line was written. For tool chips: the first call of the run. Nil when the line has no time.
     public var timestamp: Date?
+    /// userText: the pictures the owner attached, in order.
+    public var images: [LogImage.Ref] = []
     public init(id: String = UUID().uuidString, kind: Kind, timestamp: Date? = nil) { self.id = id; self.kind = kind; self.timestamp = timestamp }
 }
