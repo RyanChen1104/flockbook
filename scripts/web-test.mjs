@@ -1557,9 +1557,15 @@ async function pictures() {
   check(await p.until(viewerGone, 2000) === true, "pictures: a quick flick up closes the viewer though it is short");
   // A drag that closes right after one that sprang back: the spring's late end does not cut the slide out short.
   check(await opened(), "pictures: the viewer opens for two drags");
+  // The second drag starts while the spring back runs and lets go about 150 ms after it began (touch times do not
+  // move timers): the spring's end, by its event or its timer, comes during the slide out. The observer reads each
+  // change itself, so one the closing viewer had just before it left counts too.
   await swipe(line(195, 300, 195, 360, 2));
-  await p.eval("window.__cut = false; new MutationObserver(() => { const v = document.querySelector('.viewer'); if (v?.classList.contains('closing') && !v.classList.contains('moving')) window.__cut = true; }).observe(document.querySelector('.viewer'), { attributes: true, attributeFilter: ['class'] })");
-  await swipe([[195, 300], [195, 600]], { ms: 16 });   // starts before the spring back has ended
+  const sprang = Date.now();
+  await p.eval("window.__cut = false; new MutationObserver((rs) => { for (const r of rs) if (r.target.classList.contains('closing') && !r.target.classList.contains('moving')) window.__cut = true; }).observe(document.querySelector('.viewer'), { attributes: true, attributeFilter: ['class'] })");
+  await swipe([[195, 300], [195, 600]], { ms: 16, lift: false });
+  await new Promise((r) => setTimeout(r, Math.max(0, 150 - (Date.now() - sprang))));
+  await touch("touchEnd", [], 16);
   check(await p.until(viewerGone, 2000) === true && await p.eval("window.__cut") === false, "pictures: a drag that closes right after a spring back slides out whole");
   check(await opened(), "pictures: the viewer opens for a sideways drag");
   await swipe(line(60, 420, 330, 440, 16));
