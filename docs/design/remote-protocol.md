@@ -166,7 +166,12 @@ Rules:
 - Only for a pane this connection watches (`badRequest` otherwise). Any level.
 - An unknown pane, item or index, or a picture no longer in the log: `notFound`. A picture that does not decode: `failed`.
 - The hub checks again after the encoding: a removed device gets `unauthorized` and a close; a pane no longer watched,
-  or one that now shows another session, gets `stale` and no parts.
+  or one that now shows another session, gets `stale` and no parts. The setting off: `failed`.
+- The hub checks again before each part goes out. When the picture is no longer wanted, the remaining parts are not
+  sent, and the reply is the error above instead of `ok`. A client drops the parts it got for that request.
+- At most 2 pictures per device, waiting or encoding, over all its connections: more get `rateLimited`. A request that
+  waits for an encoding slot is not encoded when, once a slot is free, its connection has ended or the picture is no
+  longer wanted. It still counts until then.
 - The setting "Show pictures on remote devices" (default on). Off: items have no `images`, and `picture` replies
   `failed`. A change sends the items again.
 - At most 2 pictures are encoded at once on the hub (shared with `attach`).

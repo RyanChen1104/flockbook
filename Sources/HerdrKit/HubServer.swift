@@ -300,7 +300,7 @@ import Network
             await prev?.value
             guard let self, let c = self.conns[key], !c.closed, c.isSocket else { return }
             let out = await step(c)
-            for m in out { await self.send(m, on: c) }
+            for m in out { if let m = c.session.vet(m) { await self.send(m, on: c) } }
             if c.session.closed { self.finish(c, WebSocketFrames.close(1008)) }
         }
     }

@@ -603,7 +603,8 @@ function requestPicture(pane: string, item: string, index: number, full: boolean
   });
 }
 
-/** Picture boxes near the view, and the blob URL each one shows. */
+/** Picture boxes watched for the view, those near it, and the blob URL each one shows. */
+const observed = new Set<HTMLElement>();
 const near = new Set<HTMLElement>();
 const shownURLs = new Map<HTMLElement, string>();
 const seen = new IntersectionObserver((entries) => {
@@ -612,6 +613,7 @@ const seen = new IntersectionObserver((entries) => {
     if (e.isIntersecting) { near.add(b); showPicture(b); } else { near.delete(b); hidePicture(b); }
   }
 }, { rootMargin: "600px 0px" });
+function observePicture(b: HTMLElement): void { observed.add(b); seen.observe(b); }
 
 /** The pictures of an item: each keeps its place (its size in the log, at most the column wide and `PICTURE_HEIGHT` high). */
 function picturesView(pane: string, item: string, list: Picture[]): HTMLElement {
@@ -622,7 +624,7 @@ function picturesView(pane: string, item: string, list: Picture[]): HTMLElement 
     // CSSOM, not a style attribute (the page's CSP has no inline styles).
     b.style.aspectRatio = `${w} / ${ht}`;
     b.style.width = `min(${w}px, 100%, ${Math.round((PICTURE_HEIGHT * w) / ht)}px)`;
-    seen.observe(b);
+    observePicture(b);
     return b;
   }));
 }
@@ -646,13 +648,18 @@ function hidePicture(b: HTMLElement): void {
   b.replaceChildren();
   URL.revokeObjectURL(url);
 }
-/** After a render: pictures out of the page let go of their URLs and are not watched (a row put back watches them again). */
+/** After a render: pictures out of the page let go of their URLs and are not watched (a row put back watches them again).
+ *  The viewer closes when its picture left the conversation: another pane or session, or the item without it. */
 function dropPictures(): void {
-  for (const b of [...near, ...shownURLs.keys()]) if (!b.isConnected) { near.delete(b); hidePicture(b); seen.unobserve(b); }
+  for (const b of observed) if (!b.isConnected) { observed.delete(b); near.delete(b); hidePicture(b); seen.unobserve(b); }
+  if (!viewer) return;
+  const v = view(viewer.pane), it = v.items.find((i) => i.id === viewer!.item);
+  const images = it && "images" in it ? it.images : undefined;
+  if (state.watching !== viewer.pane || v.session !== viewer.session || (images?.length ?? 0) <= viewer.index) closeViewer();
 }
 
 /** The full picture over the page. It shows the preview until the full one comes; tap it for its own size. */
-let viewer: { node: HTMLElement; url: string | null; from: HTMLElement } | null = null;
+let viewer: { node: HTMLElement; url: string | null; from: HTMLElement; pane: string; session?: string; item: string; index: number } | null = null;
 function openViewer(b: HTMLElement, w: number, ht: number): void {
   closeViewer();
   const img = h("img", { alt: "", width: w, height: ht, onclick: () => img.classList.toggle("zoomed") });
@@ -661,11 +668,12 @@ function openViewer(b: HTMLElement, w: number, ht: number): void {
   const status = h("p", { class: "viewer-status", role: "status" }, "Loading…");
   const node = h("div", { class: "viewer", role: "dialog", "aria-modal": "true", "aria-label": "Picture" },
     h("button", { type: "button", class: "viewer-close glass-float", onclick: closeViewer }, "Close"), status, img);
-  const mine = { node, url: null as string | null, from: b };
+  const pane = b.dataset.pane!, item = b.dataset.item!, index = Number(b.dataset.index);
+  const mine = { node, url: null as string | null, from: b, pane, session: view(pane).session, item, index };
   viewer = mine;
   document.body.append(node);
   (node.querySelector(".viewer-close") as HTMLElement).focus();
-  void requestPicture(b.dataset.pane!, b.dataset.item!, Number(b.dataset.index), true).then((blob) => {
+  void requestPicture(pane, item, index, true).then((blob) => {
     if (viewer !== mine) return;
     if (!blob) { status.textContent = preview ? "Could not load the full picture." : "Could not load the picture."; return; }
     mine.url = URL.createObjectURL(blob);
@@ -677,7 +685,11 @@ function closeViewer(): void {
   if (!viewer) return;
   viewer.node.remove();
   if (viewer.url) URL.revokeObjectURL(viewer.url);
-  if (viewer.from.isConnected) viewer.from.focus({ preventScroll: true });
+  // Back to the box it opened from, or the box that shows the same picture now (rows are built again on changes).
+  const v = viewer;
+  const from = v.from.isConnected ? v.from
+    : [...document.querySelectorAll<HTMLElement>("button.picture")].find((b) => b.dataset.pane === v.pane && b.dataset.item === v.item && b.dataset.index === String(v.index));
+  from?.focus({ preventScroll: true });
   viewer = null;
 }
 addEventListener("keydown", (e) => { if (e.key === "Escape" && viewer) closeViewer(); });
@@ -776,7 +788,7 @@ function rowsFor(pane: string, list: Item[]): HTMLElement[] {
     const node = had && had.item === item ? had.node : itemView(it, pane);
     node.dataset.id = it.id;
     // A kept row that was out of the page (another screen) watches its pictures again.
-    for (const b of node.querySelectorAll<HTMLElement>("button.picture")) seen.observe(b);
+    for (const b of node.querySelectorAll<HTMLElement>("button.picture")) observePicture(b);
     rowNodes.set(it.id, { item, node });
     return node;
   });

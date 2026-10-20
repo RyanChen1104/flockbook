@@ -457,8 +457,8 @@ extension Hub {
     private enum Picture: Sendable { case gone, undecodable, encoded(HubImage.Encoded) }
 
     /// One picture of a watched pane's conversation (remote-protocol.md 3.4), read back from the log (the ref's digest
-    /// checked) and re-encoded off the main thread. Checked again after encoding: the same device, still watching the
-    /// pane with the same session, the setting still on.
+    /// checked) and re-encoded off the main thread. At most `HubUploadLimiter.maxPictureJobs` per device at once; not
+    /// encoded when no longer wanted once a slot is free. Checked again after encoding and before each part (`vet`).
     private func picture(_ re: String, device: HubDevice, pane id: String, item: String, index: Int, full: Bool) async -> [HubMessage] {
         let off = fail(re, .failed, "Pictures are off on this hub.")
         guard backend.remotePictures else { return [off] }
@@ -470,21 +470,24 @@ extension Hub {
         let gone = fail(re, .notFound, "The picture is no longer in the log.")
         guard let url = backend.logURL(session: session) else { return [gone] }
         let ref = refs[index]
-        let result = await pictureSlots.run { () -> Picture in
+        // Taken until the job ends, also when the connection ends meanwhile.
+        guard uploads.beginPicture(device: device.id) else { return [fail(re, .rateLimited, "Too many pictures at once. Try again soon.")] }
+        defer { uploads.endPicture(device: device.id) }
+        let result = await pictureSlots.run(if: { !self.closed && self.pictureChanged(re, device: device.id, pane: id, session: session) == nil }) { () -> Picture in
             guard let data = LogImage.read(ref, from: url) else { return .gone }
             guard let e = full ? HubImage.full(data) : HubImage.preview(data) else { return .undecodable }
             return .encoded(e)
         }
         await afterEncode?()
         guard !closed else { return [] }
-        guard self.device?.id == device.id else { closed = true; return [fail(re, .unauthorized, "This device was removed.")] }
-        guard backend.remotePictures else { return [off] }
-        guard watched.contains(id), pane(id)?.agent?.sessionId == session else { return [fail(re, .stale, "The pane changed. No picture was sent.")] }
+        if let why = pictureChanged(re, device: device.id, pane: id, session: session) { return [why] }
+        guard let result else { return [fail(re, .stale, "The pane changed. No picture was sent.")] }
         switch result {
         case .gone: return [gone]
         case .undecodable: return [fail(re, .failed, "The picture could not be read.")]
         case .encoded(let e):
             let parts = HubImage.parts(e.data)
+            sending[re] = (device.id, id, session)
             return parts.enumerated().map { i, d in
                 .picturePart(HubPicturePart(re: re, pane: id, item: item, index: index, full: full, part: i, parts: parts.count, mime: "image/jpeg",
                                             width: e.width, height: e.height, data: d.base64EncodedString()))
@@ -492,8 +495,39 @@ extension Hub {
         }
     }
 
-    /// A message about to go out, checked again (stub).
-    public func vet(_ m: HubMessage) -> HubMessage? { m }
+    /// The reply when a picture is no longer wanted: the device removed (and the connection closed), the setting off,
+    /// the pane not watched or showing another session. Nil while it is.
+    private func pictureChanged(_ re: String, device: String, pane id: String, session: String) -> HubMessage? {
+        guard self.device?.id == device else { closed = true; return fail(re, .unauthorized, "This device was removed.") }
+        guard backend.remotePictures else { return fail(re, .failed, "Pictures are off on this hub.") }
+        guard watched.contains(id), pane(id)?.agent?.sessionId == session else { return fail(re, .stale, "The pane changed. No picture was sent.") }
+        return nil
+    }
+
+    /// Pictures whose parts are on their way, by request (device, pane, session); requests stopped part way, by the
+    /// reply that replaces their `ok`.
+    private var sending: [String: (device: String, pane: String, session: String)] = [:]
+    private var stopped: [String: HubMessage] = [:]
+
+    /// A message about to go out, checked again (the server sends a step's messages one by one): a picture part no
+    /// longer wanted is not sent, nor the rest of its picture, and its reply says why.
+    public func vet(_ m: HubMessage) -> HubMessage? {
+        switch m {
+        case .picturePart(let p):
+            if closed || stopped[p.re] != nil { return nil }
+            guard let s = sending[p.re] else { return m }
+            if let why = pictureChanged(p.re, device: s.device, pane: s.pane, session: s.session) {
+                sending[p.re] = nil
+                stopped[p.re] = why
+                return nil
+            }
+            return m
+        case .reply(let r):
+            sending[r.re] = nil
+            return stopped.removeValue(forKey: r.re) ?? m
+        default: return m
+        }
+    }
 
     // MARK: - Helpers
 

@@ -235,12 +235,15 @@ public enum HubImage {
     public private(set) var started = 0
     public init(max: Int) { self.max = Swift.max(1, max) }
 
-    public func run<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T {
+    public func run<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T { await run(if: { true }, work)! }
+
+    /// `wanted` is asked once the slot is free: false, and the job does not run (nil).
+    public func run<T: Sendable>(if wanted: @MainActor () -> Bool, _ work: @escaping @Sendable () async -> T) async -> T? {
         if running < max { running += 1 } else { await withCheckedContinuation { queue.append($0) } }   // the slot is handed over
+        defer { if queue.isEmpty { running -= 1 } else { queue.removeFirst().resume() } }
+        guard wanted() else { return nil }
         started += 1
-        let result = await Task.detached(priority: .userInitiated) { await work() }.value
-        if queue.isEmpty { running -= 1 } else { queue.removeFirst().resume() }
-        return result
+        return await Task.detached(priority: .userInitiated) { await work() }.value
     }
 }
 
@@ -275,6 +278,17 @@ public enum HubImage {
         return true
     }
     public func disconnect(device: String) { connections[device] = Swift.max(0, (connections[device] ?? 0) - 1) }
+
+    /// Pictures for devices (remote-protocol.md 3.4), waiting or encoding, per device over its connections.
+    public static let maxPictureJobs = 2
+    private var pictureJobs: [String: Int] = [:]
+    /// Takes one picture job for `device`; false when it has `maxPictureJobs`.
+    public func beginPicture(device: String) -> Bool {
+        guard pictureJobs[device, default: 0] < Self.maxPictureJobs else { return false }
+        pictureJobs[device, default: 0] += 1
+        return true
+    }
+    public func endPicture(device: String) { pictureJobs[device] = Swift.max(0, (pictureJobs[device] ?? 0) - 1) }
     /// What `device` used in the window.
     public func used(device: String) -> (images: Int, bytes: Int) {
         let t = now()
