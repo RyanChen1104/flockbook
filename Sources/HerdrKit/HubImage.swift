@@ -229,13 +229,17 @@ public enum HubImage {
     public static let images = HubWorkSlots(max: 2)
     private let max: Int
     private var running = 0
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var queue: [CheckedContinuation<Void, Never>] = []
+    /// Jobs waiting for a slot; jobs that ran.
+    public var waiting: Int { queue.count }
+    public private(set) var started = 0
     public init(max: Int) { self.max = Swift.max(1, max) }
 
     public func run<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T {
-        if running < max { running += 1 } else { await withCheckedContinuation { waiting.append($0) } }   // the slot is handed over
+        if running < max { running += 1 } else { await withCheckedContinuation { queue.append($0) } }   // the slot is handed over
+        started += 1
         let result = await Task.detached(priority: .userInitiated) { await work() }.value
-        if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
+        if queue.isEmpty { running -= 1 } else { queue.removeFirst().resume() }
         return result
     }
 }

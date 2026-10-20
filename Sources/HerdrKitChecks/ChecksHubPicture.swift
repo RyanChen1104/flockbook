@@ -232,4 +232,65 @@ func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: St
         let gone = await ask(s2, "c4", item: userID, index: 0)
         check(code(gone) == .unauthorized && parts(gone).isEmpty && s2.closed, "picture: device removed while encoding -> unauthorized, closed")
     }
+
+    // Work per device: a request that waits for an encoding slot is not encoded once its connection ends; at most
+    // `maxPictureJobs` waiting or running per device over its connections, the next one rateLimited.
+    devices.add(token: "tok-two", device: HubDevice(id: "d-two", name: "Tablet", level: .read), paired: Date())
+    func joinedSession(_ b: FakeHubBackend, _ slots: HubWorkSlots, _ uploads: HubUploadLimiter) async -> HubSession {
+        let s = HubSession(backend: b, devices: devices, uploads: uploads, pictureSlots: slots)
+        _ = await s.receive(msg(#"{"v":1,"type":"hello","id":"h","token":"tok-two","client":"test","clientVersion":"1"}"#))
+        _ = await s.receive(msg(#"{"v":1,"type":"watch","id":"w","pane":"w1:p1"}"#))
+        return s
+    }
+    func until(_ ok: @MainActor () -> Bool) async { for _ in 0..<1000 where !ok() { await Task.yield() } }
+    do {
+        let b = world(), slots = HubWorkSlots(max: 1), uploads = HubUploadLimiter()
+        let hold = Task { await slots.run { () -> Int in try? await Task.sleep(nanoseconds: 300_000_000); return 0 } }
+        await until { slots.started == 1 }
+        let s = await joinedSession(b, slots, uploads)
+        let asked = Task { await ask(s, "q1", item: userID, index: 0) }
+        await until { slots.waiting == 1 }
+        s.end()
+        let out = await asked.value
+        _ = await hold.value
+        check(slots.waiting == 0 && slots.started == 1 && parts(out).isEmpty, "picture: connection ended while waiting for a slot -> not encoded (started \(slots.started))")
+
+        let hold2 = Task { await slots.run { () -> Int in try? await Task.sleep(nanoseconds: 300_000_000); return 0 } }
+        await until { slots.started == 2 }
+        let a = await joinedSession(b, slots, uploads), c = await joinedSession(b, slots, uploads), d = await joinedSession(b, slots, uploads)
+        let qa = Task { await ask(a, "q2", item: userID, index: 0) }, qc = Task { await ask(c, "q3", item: userID, index: 1) }
+        await until { slots.waiting == 2 }
+        let third = await ask(d, "q4", item: userID, index: 0)
+        check(code(third) == .rateLimited && parts(third).isEmpty, "picture: a third picture of one device at once -> rateLimited (\(String(describing: reply(third))))")
+        _ = await hold2.value
+        let ra = await qa.value, rc = await qc.value
+        check(reply(ra)?.ok == true && reply(rc)?.ok == true, "picture: the two waiting ones are sent")
+        check(reply(await ask(d, "q5", item: userID, index: 0))?.ok == true, "picture: done -> the device may ask again")
+    }
+
+    // Checked again before each part goes out (the server sends them one by one): the setting off or another session
+    // meanwhile -> the rest are not sent and the reply says why.
+    do {
+        let b = world(), slots = HubWorkSlots(max: 1)
+        let s = await joinedSession(b, slots, HubUploadLimiter())
+        func sendAll(_ out: [HubMessage], after first: () -> Void) -> [HubMessage] {
+            var sent: [HubMessage] = []
+            for m in out {
+                if let m = s.vet(m) { sent.append(m) }
+                if sent.count == 1 { first() }
+            }
+            return sent
+        }
+        let out = await ask(s, "v1", item: userID, index: 1, full: true)
+        check(parts(out).count > 1 && sendAll(out, after: {}) == out, "picture: nothing changed -> every part and ok go out")
+        let off = sendAll(await ask(s, "v2", item: userID, index: 1, full: true), after: { b.remotePictures = false })
+        check(parts(off).count == 1 && code(off) == .failed, "picture: setting off after the first part -> 1 part, failed (\(parts(off).count), \(String(describing: reply(off))))")
+        b.remotePictures = true
+        let moved = sendAll(await ask(s, "v3", item: userID, index: 1, full: true), after: { b.workspaces[0].tabs[0].panes[0].agent?.sessionId = "s2" })
+        check(parts(moved).count == 1 && code(moved) == .stale, "picture: another session after the first part -> 1 part, stale (\(String(describing: reply(moved))))")
+        b.workspaces[0].tabs[0].panes[0].agent?.sessionId = "s1"
+        let gone = sendAll(await ask(s, "v4", item: userID, index: 1, full: true), after: { devices.revoke(device: "d-two") })
+        check(parts(gone).count == 1 && code(gone) == .unauthorized && s.closed, "picture: device removed after the first part -> 1 part, unauthorized, closed")
+        check(s.vet(.reply(HubReply(re: "x", ok: true))) == .reply(HubReply(re: "x", ok: true)), "picture: other messages pass")
+    }
 }

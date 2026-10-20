@@ -129,9 +129,14 @@ extension Hub {
     /// Uploads held per connection.
     public static let maxHeld = 4
 
-    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "", uploads: HubUploadLimiter? = nil) {
+    /// Where pictures for devices are encoded (shared by the hub's connections).
+    private let pictureSlots: HubWorkSlots
+
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "", uploads: HubUploadLimiter? = nil,
+                pictureSlots: HubWorkSlots = .images) {
         self.backend = backend; self.devices = devices; self.pairing = pairing; self.source = source
         self.uploads = uploads ?? HubUploadLimiter()
+        self.pictureSlots = pictureSlots
     }
 
     /// Test hook: runs after an image is decoded, before it is held.
@@ -465,7 +470,7 @@ extension Hub {
         let gone = fail(re, .notFound, "The picture is no longer in the log.")
         guard let url = backend.logURL(session: session) else { return [gone] }
         let ref = refs[index]
-        let result = await HubWorkSlots.images.run { () -> Picture in
+        let result = await pictureSlots.run { () -> Picture in
             guard let data = LogImage.read(ref, from: url) else { return .gone }
             guard let e = full ? HubImage.full(data) : HubImage.preview(data) else { return .undecodable }
             return .encoded(e)
@@ -486,6 +491,9 @@ extension Hub {
             } + [ok(re)]
         }
     }
+
+    /// A message about to go out, checked again (stub).
+    public func vet(_ m: HubMessage) -> HubMessage? { m }
 
     // MARK: - Helpers
 
