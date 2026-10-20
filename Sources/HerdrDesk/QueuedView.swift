@@ -137,6 +137,13 @@ struct QueuedStrip: View {
     }
 
     var body: some View {
+        let width = ReadingWidth(rawValue: widthRaw) ?? .medium
+        ZeroWidthAs(width: size.column + 2 * width.sidePadding) { strip(width) }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Queued messages")
+    }
+
+    private func strip(_ width: ReadingWidth) -> some View {
         VStack(alignment: .trailing, spacing: 6) {
             ForEach(Array(queue.items.enumerated()), id: \.offset) { _, item in
                 HStack {
@@ -158,10 +165,8 @@ struct QueuedStrip: View {
             }
         }
         // The conversation's own column, so a queued bubble ends where the user's bubbles end.
-        .readingColumn(size, ReadingWidth(rawValue: widthRaw) ?? .medium, alignment: .trailing)
+        .readingColumn(size, width, alignment: .trailing)
         .padding(.top, 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Queued messages")
     }
 
     private func bubble(_ text: String?) -> some View {
@@ -179,5 +184,22 @@ struct QueuedStrip: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { QueueProbe.bubble?($0) }
         .frame(maxWidth: size.column * 0.8, alignment: .trailing)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// SwiftUI asks a pane's minimum height with a zero width (the split view's minimum). The strip's texts would wrap a
+/// letter per line there and push the composer off the window, so a zero width is measured at `width` (the reading
+/// column) instead. Every other proposal lays the strip out as it is.
+private struct ZeroWidthAs: Layout {
+    let width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let strip = subviews.first else { return .zero }
+        guard proposal.width == 0 else { return strip.sizeThatFits(proposal) }
+        return CGSize(width: 0, height: strip.sizeThatFits(ProposedViewSize(width: width, height: proposal.height)).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
