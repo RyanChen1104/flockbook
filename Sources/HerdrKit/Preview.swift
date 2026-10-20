@@ -20,6 +20,20 @@ extension HerdrStore {
         return s
     }
 
+    /// One workspace with `count` tabs named like real agents (lengths vary): for tab row overflow checks.
+    public static func previewManyTabs(_ count: Int) -> HerdrStore {
+        let names = ["orchard-main-orch", "docs-dev", "lighthouse-review-dev", "atlas-data-dev", "harbor-ops-sync", "meadow-notes",
+                     "orchard-web-dev", "api-dev", "studio-render-dev", "cli-dev", "harbor-deploy-dev", "web-rev"]
+        let sts: [AgentStatus] = [.working, .done, .done, .idle, .done, .idle, .working, .idle, .idle, .done, .blocked]
+        let tabs = (0..<count).map { i in
+            let name = names[i % names.count] + (i < names.count ? "" : "-\(i / names.count + 1)")
+            return PreviewData.tab("m\(i)", name, i + 1, sts[i % sts.count], [PreviewData.pane("m\(i)", PreviewData.agent(name, sts[i % sts.count]))])
+        }
+        let s = HerdrStore(session: .default())
+        s.setPreview(workspaces: [Workspace(id: "m", label: "Orchard · Many tabs", tabs: tabs), PreviewData.workspaces[2]], connected: true)
+        return s
+    }
+
     /// Same tree with no blocked agent: the "All clear" state.
     public static var previewQuiet: HerdrStore {
         let s = HerdrStore(session: .default())

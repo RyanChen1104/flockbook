@@ -11,7 +11,7 @@ extension EnvironmentValues {
 struct TopRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.islandHost) private var host
-    @State private var scrollID: String?
+    @State private var scroll = ScrollPosition(idType: String.self)
     /// Tabs currently (mostly) inside the strip. Written only when a tab enters or leaves, never per frame.
     @State private var visibleTabs: Set<String> = []
     /// Natural width of all tab pills; the island is this wide, up to `tabRowWidth`. Updated on change only.
@@ -75,12 +75,13 @@ struct TopRow: View {
         .onScrollGeometryChange(for: HiddenEnds.self) { g in
             HiddenEnds(leading: g.contentOffset.x > 1, trailing: g.contentOffset.x + g.containerSize.width < g.contentSize.width - 1)
         } action: { _, ends in hiddenEnds = ends }
-        .scrollPosition(id: $scrollID, anchor: .center)
+        .scrollPosition($scroll, anchor: .center)
         // Scroll the selected tab into view after the update pass, not inside it.
         .task(id: model.tab?.id) {
             // Debounced: rapid tab churn cancels earlier runs; no scroll when the tab is already in view.
             try? await Task.sleep(for: .milliseconds(200))
-            if !Task.isCancelled, let id = model.tab?.id, !visibleTabs.contains(id), scrollID != id { scrollID = id }
+            // scrollTo always scrolls: the strip forgets its offset when the workspace changes, a remembered id would not.
+            if !Task.isCancelled, let id = model.tab?.id, !visibleTabs.contains(id) { scroll.scrollTo(id: id, anchor: .center) }
         }
         // herdr's snapshot caught up with the drop (or anything else changed the tabs): show its order again.
         .onChange(of: tabs.map(\.id)) { _, _ in dropped = nil }
@@ -148,7 +149,7 @@ struct TopRow: View {
         } ?? []
         if let first = hidden.first, let last = hidden.last {
             Button {
-                scrollID = edge == .leading ? last.id : first.id
+                scroll.scrollTo(id: edge == .leading ? last.id : first.id, anchor: .center)
             } label: {
                 // Same look as the Needs-you count in the sidebar (BlockedBadge), with the direction to scroll.
                 HStack(spacing: 2) {
@@ -407,9 +408,12 @@ struct FullScreenTopRow: View {
         ZStack(alignment: .topLeading) {
             Color.clear
             if island.width > 0, actions.width > 0 {
-                // Centres at the toolbar's: the width follows the same rule in both copies, the centre is the toolbar's.
-                TopRow().position(x: island.midX, y: island.midY)
-                buttons.position(x: actions.midX, y: actions.midY)
+                // One group, centred on the toolbar's (the island and the buttons at the toolbar's places while its frames are
+                // current). At rest in real full screen the slid-away toolbar does not lay out again, so its frames can be an
+                // older, narrower island's: the island grows from the same centre and pushes the buttons along, never under them.
+                HStack(spacing: actions.minX - island.maxX) { TopRow(); buttons.frame(width: actions.width) }
+                    .fixedSize()
+                    .position(x: island.union(actions).midX, y: island.midY)
             } else {
                 HStack(spacing: 10) { TopRow(); buttons }
                     .frame(height: TopRow.height)

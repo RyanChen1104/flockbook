@@ -86,6 +86,7 @@ struct HerdrDeskApp: App {
         if args.contains("--test-newtab-live") { Task { @MainActor in await ChromeTests.runNewTabLiveTest() } }
         if args.contains("--test-settings-migration") { ChromeTests.runSettingsMigrationTest() }
         if args.contains("--test-island-height") { Task { @MainActor in await ChromeTests.runIslandHeightTest() } }
+        if args.contains("--test-tab-overflow") { Task { @MainActor in await ChromeTests.runTabOverflowTest() } }
         if args.contains("--test-root-width") { Task { @MainActor in await ChromeTests.runRootWidthTest() } }
         if args.contains("--test-settings-page") { Task { @MainActor in await ChromeTests.runSettingsPageTest() } }
         if args.contains("--test-sidebar") { Task { @MainActor in await ChromeTests.runSidebarTest() } }

@@ -12,7 +12,7 @@ public enum LaunchGuard {
         "--serve-remote", "--test-terminal", "--test-scroll", "--test-bottom", "--test-table", "--test-closetab",
         "--test-menus", "--test-tabdrag", "--test-chrome", "--test-sheet", "--test-panemenu", "--test-wheel",
         "--test-send-image", "--test-composer", "--fuzz", "--test-sidebar", "--test-sidebar-layout", "--test-root-width",
-        "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tabkeys", "--test-update",
+        "--test-newtab-live", "--test-settings-migration", "--test-island-height", "--test-tab-overflow", "--test-tabkeys", "--test-update",
         "--test-settings-page",
     ]
     /// Content-area checks (ContentTests), also headless.
