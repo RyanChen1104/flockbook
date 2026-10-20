@@ -8,7 +8,7 @@ public enum Hub {
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
     public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck", "picture"]
-    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled", "picture"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled", "picturePart"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
 
@@ -165,7 +165,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         /// after each hello.
         case pulledAck(pulled: String)
         /// The `index`th picture of a conversation item in a watched pane (remote-protocol.md 3.4): a preview, or the
-        /// full picture when `full`. Answered with `picture` parts, then the reply.
+        /// full picture when `full`. Answered with `picturePart` messages, then the reply.
         case picture(pane: String, item: String, index: Int, full: Bool)
 
         public var type: String {
@@ -347,7 +347,7 @@ public struct HubPulled: Codable, Hashable, Sendable {
     }
 }
 
-/// One part of a picture the device asked for (`picture`). The parts' `data` (standard base64) joined in `part` order
+/// One part of a picture the device asked for (`picture`), as a `picturePart` message. The parts' `data` (standard base64) joined in `part` order
 /// is one image of type `mime`, `width`x`height`. `re`: the request's id.
 public struct HubPicturePart: Codable, Hashable, Sendable {
     public var re: String
@@ -390,7 +390,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
     /// The answer to `pullQueued`: the text for the composer.
     case pulled(HubPulled)
     /// One part of a picture the device asked for.
-    case picture(HubPicturePart)
+    case picturePart(HubPicturePart)
 
     public var type: String {
         switch self {
@@ -406,7 +406,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .pong: "pong"
         case .queued: "queued"
         case .pulled: "pulled"
-        case .picture: "picture"
+        case .picturePart: "picturePart"
         }
     }
 
@@ -427,7 +427,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case "pong": self = .pong
         case "queued": self = .queued(try HubQueued(from: decoder))
         case "pulled": self = .pulled(try HubPulled(from: decoder))
-        case "picture": self = .picture(try HubPicturePart(from: decoder))
+        case "picturePart": self = .picturePart(try HubPicturePart(from: decoder))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -442,7 +442,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .attached(let a): try a.encode(to: encoder)
         case .queued(let q): try q.encode(to: encoder)
         case .pulled(let p): try p.encode(to: encoder)
-        case .picture(let p): try p.encode(to: encoder)
+        case .picturePart(let p): try p.encode(to: encoder)
         case .snapshot, .status, .screen, .pong: break
         }
         var c = encoder.container(keyedBy: K.self)
@@ -615,6 +615,8 @@ public struct HubItem: Codable, Hashable, Sendable {
         case .question(let q): self.init(id: item.id, kind: .question, time: t, question: HubQuestion(q))
         case .status(let s): self.init(id: item.id, kind: .status, time: t, text: s)
         }
+        let refs = pictures ? Hub.pictures(of: item) : []
+        if !refs.isEmpty { images = refs.map { HubPicture(width: $0.width, height: $0.height) } }
     }
 }
 

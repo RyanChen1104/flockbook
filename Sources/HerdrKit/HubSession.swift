@@ -316,8 +316,9 @@ extension Hub {
         case .pulledAck(let pulled):
             _ = backend.pulledTexts.take(id: pulled, device: device.id)
             return [ok(m.id)]
-        case .picture:
-            return [fail(m.id, .failed, "Not yet.")]
+        case .picture(let id, let item, let index, let full):
+            // Any level: a picture is part of the conversation the device already reads.
+            return await picture(m.id, device: device, pane: id, item: item, index: index, full: full)
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
@@ -445,6 +446,44 @@ extension Hub {
             guard uploads.hold(device: device.id) else { try? FileManager.default.removeItem(at: out.url); return [tooMany(re)] }
             held.append((name, out.url))
             return [.attached(HubAttached(upload: name, width: out.width, height: out.height, bytes: out.bytes)), ok(re)]
+        }
+    }
+
+    private enum Picture: Sendable { case gone, undecodable, encoded(HubImage.Encoded) }
+
+    /// One picture of a watched pane's conversation (remote-protocol.md 3.4), read back from the log (the ref's digest
+    /// checked) and re-encoded off the main thread. Checked again after encoding: the same device, still watching the
+    /// pane with the same session, the setting still on.
+    private func picture(_ re: String, device: HubDevice, pane id: String, item: String, index: Int, full: Bool) async -> [HubMessage] {
+        let off = fail(re, .failed, "Pictures are off on this hub.")
+        guard backend.remotePictures else { return [off] }
+        guard watched.contains(id) else { return [fail(re, .badRequest, "Watch the pane first.")] }
+        guard let session = pane(id)?.agent?.sessionId else { return [fail(re, .notFound, "No conversation in pane \(id).")] }
+        guard let found = backend.conversation(session: session).first(where: { $0.id == item }) else { return [fail(re, .notFound, "No item \(item).")] }
+        let refs = Hub.pictures(of: found)
+        guard refs.indices.contains(index) else { return [fail(re, .notFound, "No picture \(index) in item \(item).")] }
+        let gone = fail(re, .notFound, "The picture is no longer in the log.")
+        guard let url = backend.logURL(session: session) else { return [gone] }
+        let ref = refs[index]
+        let result = await HubWorkSlots.images.run { () -> Picture in
+            guard let data = LogImage.read(ref, from: url) else { return .gone }
+            guard let e = full ? HubImage.full(data) : HubImage.preview(data) else { return .undecodable }
+            return .encoded(e)
+        }
+        await afterEncode?()
+        guard !closed else { return [] }
+        guard self.device?.id == device.id else { closed = true; return [fail(re, .unauthorized, "This device was removed.")] }
+        guard backend.remotePictures else { return [off] }
+        guard watched.contains(id), pane(id)?.agent?.sessionId == session else { return [fail(re, .stale, "The pane changed. No picture was sent.")] }
+        switch result {
+        case .gone: return [gone]
+        case .undecodable: return [fail(re, .failed, "The picture could not be read.")]
+        case .encoded(let e):
+            let parts = HubImage.parts(e.data)
+            return parts.enumerated().map { i, d in
+                .picturePart(HubPicturePart(re: re, pane: id, item: item, index: index, full: full, part: i, parts: parts.count, mime: "image/jpeg",
+                                            width: e.width, height: e.height, data: d.base64EncodedString()))
+            } + [ok(re)]
         }
     }
 

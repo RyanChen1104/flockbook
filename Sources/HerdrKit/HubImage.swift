@@ -56,33 +56,9 @@ public enum HubImage {
     public static func reencode(_ data: Data, into dir: URL) throws -> Output {
         guard data.count <= maxBytes else { throw Failure.tooLarge }
         guard let kind = kind(data) else { throw Failure.notImage }
-        // A PNG's size is at fixed bytes (IHDR); ImageIO gives no size at all for a huge one.
-        if kind == .png, let (w, h) = pngSize(data), w > maxSide || h > maxSide || w * h > maxPixels { throw Failure.tooLarge }
-        let noCache = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let src = CGImageSourceCreateWithData(data as CFData, noCache),
-              let found = CGImageSourceGetType(src).flatMap({ UTType($0 as String) }), found.conforms(to: kind.type) || kind.type.conforms(to: found)
-        else { throw Failure.undecodable }
-        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, noCache) as? [CFString: Any],
-              let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue, let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
-              w > 0, h > 0 else { throw Failure.undecodable }
-        guard w <= maxSide, h <= maxSide, w * h <= maxPixels else { throw Failure.tooLarge }
-
-        // The first frame, orientation applied, the long side capped.
-        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                                     kCGImageSourceThumbnailMaxPixelSize: min(outputSide, max(w, h)), kCGImageSourceShouldCacheImmediately: true]
-        guard CGImageSourceGetStatusAtIndex(src, 0) == .statusComplete,
-              let frame = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { throw Failure.undecodable }
-
-        // New pixels in a plain sRGB bitmap: nothing of the source file's structure is kept.
         let png = kind == .png
-        let ow = frame.width, oh = frame.height
-        guard let ctx = CGContext(data: nil, width: ow, height: oh, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                  bitmapInfo: png ? CGImageAlphaInfo.premultipliedLast.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue)
-        else { throw Failure.undecodable }
-        let rect = CGRect(x: 0, y: 0, width: ow, height: oh)
-        if !png { ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)); ctx.fill(rect) }
-        ctx.draw(frame, in: rect)
-        guard let image = ctx.makeImage() else { throw Failure.undecodable }
+        let f = try frame(data, type: kind.type, side: outputSide)
+        let image = try redraw(f, width: f.width, height: f.height, alpha: png)
         let out = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(out, (png ? UTType.png : UTType.jpeg).identifier as CFString, 1, nil) else { throw Failure.writeFailed }
         CGImageDestinationAddImage(dest, image, (png ? [:] : [kCGImageDestinationLossyCompressionQuality: 0.85]) as CFDictionary)
@@ -90,17 +66,100 @@ public enum HubImage {
 
         let url = dir.appendingPathComponent("remote-\(UUID().uuidString).\(png ? "png" : "jpg")")
         try write(out as Data, to: url, dir: dir)
-        return Output(url: url, width: ow, height: oh, bytes: out.length)
+        return Output(url: url, width: image.width, height: image.height, bytes: out.length)
     }
 
+    /// The first frame of `data`, an image of `type` by its first bytes: the size checked from the header before any
+    /// decoding (a decompression bomb is refused here), orientation applied, the long side at most `side`.
+    static func frame(_ data: Data, type: UTType, side: Int) throws -> CGImage {
+        // A PNG's size is at fixed bytes (IHDR); ImageIO gives no size at all for a huge one.
+        if type == .png, let (w, h) = pngSize(data), w > maxSide || h > maxSide || w * h > maxPixels { throw Failure.tooLarge }
+        let noCache = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let src = CGImageSourceCreateWithData(data as CFData, noCache),
+              let found = CGImageSourceGetType(src).flatMap({ UTType($0 as String) }), found.conforms(to: type) || type.conforms(to: found)
+        else { throw Failure.undecodable }
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, noCache) as? [CFString: Any],
+              let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue, let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              w > 0, h > 0 else { throw Failure.undecodable }
+        guard w <= maxSide, h <= maxSide, w * h <= maxPixels else { throw Failure.tooLarge }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceThumbnailMaxPixelSize: min(side, max(w, h)), kCGImageSourceShouldCacheImmediately: true]
+        guard CGImageSourceGetStatusAtIndex(src, 0) == .statusComplete,
+              let frame = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { throw Failure.undecodable }
+        return frame
+    }
+
+    /// New pixels in a plain sRGB bitmap, `width`x`height`: nothing of the source file's structure is kept. Without
+    /// `alpha`, white behind.
+    static func redraw(_ frame: CGImage, width: Int, height: Int, alpha: Bool) throws -> CGImage {
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: alpha ? CGImageAlphaInfo.premultipliedLast.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { throw Failure.undecodable }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        if !alpha { ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)); ctx.fill(rect) }
+        ctx.interpolationQuality = .high
+        ctx.draw(frame, in: rect)
+        guard let image = ctx.makeImage() else { throw Failure.undecodable }
+        return image
+    }
+
+    // MARK: Pictures for remote devices
+
+    /// A picture from a session log (`LogImage.read`) for a remote device (remote-protocol.md 3.4): a JPEG without
+    /// metadata. The preview is what the conversation shows; the full picture only when the device asks for it.
     public static let previewSide = 1_024, previewBytes = 256 * 1024
     public struct Encoded: Sendable, Hashable {
         public var data: Data
         public var width: Int, height: Int
     }
-    public static func preview(_ data: Data) -> Encoded? { nil }
-    public static func full(_ data: Data) -> Encoded? { nil }
-    public static func parts(_ data: Data) -> [Data] { [] }
+
+    /// The type of a log's picture by its header (PNG, JPEG, WebP, GIF).
+    private static func logType(_ data: Data) -> UTType? {
+        switch LogImage.header(data)?.format {
+        case .png: .png
+        case .jpeg: .jpeg
+        case .webp: .webP
+        case .gif: .gif
+        case nil: nil
+        }
+    }
+
+    private static func jpeg(_ image: CGImage, quality: Double) -> Data? {
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? out as Data : nil
+    }
+
+    /// Long side at most `previewSide`, at most `previewBytes`: lower quality first, then a smaller picture. Nil: not
+    /// a picture this takes, or too large to decode.
+    public static func preview(_ data: Data) -> Encoded? {
+        guard let type = logType(data), let f = try? frame(data, type: type, side: previewSide) else { return nil }
+        var w = f.width, h = f.height
+        while true {
+            guard let image = try? redraw(f, width: w, height: h, alpha: false) else { return nil }
+            for q in [0.8, 0.6, 0.45, 0.3] {
+                if let d = jpeg(image, quality: q), d.count <= previewBytes { return Encoded(data: d, width: w, height: h) }
+            }
+            guard max(w, h) > 64 else { return nil }
+            w = max(1, w * 3 / 4); h = max(1, h * 3 / 4)
+        }
+    }
+
+    /// Long side at most `outputSide`, at most `maxBytes` (`maxParts` parts). Nil: not a picture, or too large.
+    public static func full(_ data: Data) -> Encoded? {
+        guard let type = logType(data), let f = try? frame(data, type: type, side: outputSide),
+              let image = try? redraw(f, width: f.width, height: f.height, alpha: false) else { return nil }
+        for q in [0.85, 0.7, 0.5] {
+            if let d = jpeg(image, quality: q), d.count <= maxBytes { return Encoded(data: d, width: image.width, height: image.height) }
+        }
+        return nil
+    }
+
+    /// `data` in parts of at most `maxPartBytes`, in order.
+    public static func parts(_ data: Data) -> [Data] {
+        stride(from: 0, to: data.count, by: maxPartBytes).map { Data(data[data.startIndex + $0 ..< data.startIndex + min($0 + maxPartBytes, data.count)]) }
+    }
 
     /// Width and height from a PNG's IHDR chunk (bytes 16-23), when it is the first chunk.
     static func pngSize(_ d: Data) -> (Int, Int)? {

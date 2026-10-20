@@ -58,7 +58,7 @@ func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: St
     func msg(_ json: String) -> Data { Data(json.utf8) }
     func reply(_ ms: [HubMessage]) -> HubReply? { ms.last.flatMap { if case .reply(let r) = $0 { r } else { nil } } }
     func code(_ ms: [HubMessage]) -> HubError.Code? { reply(ms)?.error?.code }
-    func parts(_ ms: [HubMessage]) -> [HubPicturePart] { ms.compactMap { if case .picture(let p) = $0 { p } else { nil } } }
+    func parts(_ ms: [HubMessage]) -> [HubPicturePart] { ms.compactMap { if case .picturePart(let p) = $0 { p } else { nil } } }
     func joined(_ ps: [HubPicturePart]) -> Data { ps.reduce(into: Data()) { $0 += Data(base64Encoded: $1.data) ?? Data() } }
     func side(_ d: Data) -> (Int, Int)? { LogImage.header(d).map { ($0.width, $0.height) } }
 
@@ -68,14 +68,14 @@ func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: St
         check((try? Hub.decodeClient(Hub.encode(c))) == c, "picture: client message round trip")
         check((try? Hub.decodeClient(msg(#"{"v":1,"type":"picture","id":"c2","pane":"w1:p1","item":"i1","index":0}"#)))?.body
               == .picture(pane: "w1:p1", item: "i1", index: 0, full: false), "picture: full is false when absent")
-        check(Hub.clientTypes.contains("picture") && Hub.hubTypes.contains("picture"), "picture: a client and a hub type")
+        check(Hub.clientTypes.contains("picture") && Hub.hubTypes.contains("picturePart"), "picture: a client and a hub type")
         let part = HubPicturePart(re: "c1", pane: "w1:p1", item: "i1", index: 2, full: true, part: 0, parts: 3, mime: "image/jpeg",
                                   width: 800, height: 600, data: "AAEC")
-        let wire = (try? Hub.encode(HubMessage.picture(part))) ?? Data()
+        let wire = (try? Hub.encode(HubMessage.picturePart(part))) ?? Data()
         let obj = (try? JSONSerialization.jsonObject(with: wire)) as? [String: Any] ?? [:]
-        check(obj["type"] as? String == "picture" && obj["mime"] as? String == "image/jpeg" && obj["v"] as? Int == 1,
-              "picture: hub part has type picture and mime \(String(decoding: wire, as: UTF8.self))")
-        check((try? Hub.decodeHub(wire)) == .picture(part), "picture: hub part round trip")
+        check(obj["type"] as? String == "picturePart" && obj["mime"] as? String == "image/jpeg" && obj["v"] as? Int == 1,
+              "picture: hub part has type picturePart and mime \(String(decoding: wire, as: UTF8.self))")
+        check((try? Hub.decodeHub(wire)) == .picturePart(part), "picture: hub part round trip")
     }
 
     // Items carry each picture's size only, never bytes; the setting off: none.
