@@ -1496,6 +1496,8 @@ async function pictures() {
   check(await p.eval("document.querySelectorAll('button.picture img')[1].naturalWidth") === 1024, "pictures: the preview is at most 1024 px");
   check(await p.eval("caches.keys().then((k) => k.length)") === 0 && await p.eval("Object.keys(localStorage).join()") === "flockbook.token",
     "pictures: nothing in a cache or in storage");
+  // Stills at pixel ratio 2: at 3 the headless shell's screenshot never returns with both large pictures in view.
+  if (shots) await p.scale(2);
   await p.shot("pictures");
   await p.shot("pictures", true);
   // A tap opens the full picture over the page; closing lets it go.
@@ -1504,6 +1506,8 @@ async function pictures() {
   check(await p.eval("window.__pics.some((m) => m.full === true && m.index === 1)") === true, "pictures: the full picture is asked for on the tap only");
   check(await p.eval(noScroll), "pictures: viewer, no sideways scroll");
   await p.shot("picture-viewer");
+  await p.shot("picture-viewer", true);
+  if (shots) await p.scale(3);
   const full = await p.eval("document.querySelector('.viewer img').src");
   await p.click(".viewer-close");
   check(await p.eval(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(full)})`) === true, "pictures: closing the viewer lets the full picture go");
