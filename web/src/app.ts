@@ -690,6 +690,8 @@ function openViewer(b: HTMLElement, w: number, ht: number): void {
  *  second finger it does nothing (a second finger mid-drag springs it back). Reduced motion: no slide, no spring. */
 function dragToClose(node: HTMLElement, img: HTMLElement, mine: NonNullable<typeof viewer>): void {
   let start: { x: number; y: number } | null = null, dragging = false, dy = 0, trail: { t: number; y: number }[] = [];
+  // Each slide (spring back or close) and each new drag starts a round; a slide's end from an older round does nothing.
+  let round = 0;
   const zoomed = () => img.classList.contains("zoomed") || Math.abs((window.visualViewport?.scale ?? 1) - 1) > 0.01;
   const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
   const place = (y: number) => {
@@ -699,7 +701,8 @@ function dragToClose(node: HTMLElement, img: HTMLElement, mine: NonNullable<type
   // Waits for the slide, with a timer in case no transitionend comes (nothing moved, or the tab was hidden).
   const settle = (done: () => void) => {
     let over = false;
-    const end = () => { if (over) return; over = true; img.removeEventListener("transitionend", end); done(); };
+    const mine = ++round;
+    const end = () => { if (over) return; over = true; img.removeEventListener("transitionend", end); if (round === mine) done(); };
     img.addEventListener("transitionend", end);
     setTimeout(end, 350);
   };
@@ -708,7 +711,7 @@ function dragToClose(node: HTMLElement, img: HTMLElement, mine: NonNullable<type
     if (still()) { place(0); node.classList.remove("moving"); return; }
     node.classList.add("settling");
     place(0);
-    settle(() => { if (!dragging) node.classList.remove("settling", "moving"); });
+    settle(() => node.classList.remove("settling", "moving"));
   };
   const close = (down: boolean) => {
     dragging = false; start = null;
@@ -728,17 +731,19 @@ function dragToClose(node: HTMLElement, img: HTMLElement, mine: NonNullable<type
   node.addEventListener("touchmove", (e) => {
     if (!start) return;
     if (e.touches.length !== 1) { if (dragging) back(); start = null; return; }
-    // Not zoomed, the picture fits: one finger has nothing to pan, so the page under it does not move either.
-    e.preventDefault();
     const t = e.touches[0], dx = t.clientX - start.x;
     dy = t.clientY - start.y;
     if (!dragging) {
+      // Under the threshold it may still be a tap: cancelling the move would drop its click.
       if (Math.hypot(dx, dy) < 10) return;
       if (Math.abs(dy) <= Math.abs(dx)) { start = null; return; }
       dragging = true;
+      round++;
       node.classList.remove("settling");
       node.classList.add("moving");
     }
+    // A drag: the page under the picture does not move with it.
+    e.preventDefault();
     place(dy);
     trail.push({ t: e.timeStamp, y: t.clientY });
     while (trail.length > 2 && e.timeStamp - trail[0].t > 150) trail.shift();
