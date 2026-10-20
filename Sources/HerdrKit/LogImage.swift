@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Pictures stored in session logs (base64 in the JSON). Items keep only a `Ref`; the bytes are read back from the log on demand.
@@ -21,7 +22,11 @@ public enum LogImage {
     }
 
     /// A picture's identity: the first 8 bytes of the SHA-256 of its base64 text.
-    public static func fingerprint(base64: String) -> UInt64 { 0 }
+    public static func fingerprint(base64: String) -> UInt64 {
+        var text = base64
+        let digest = text.withUTF8 { SHA256.hash(data: UnsafeRawBufferPointer($0)) }
+        return digest.prefix(8).reduce(0) { $0 << 8 | UInt64($1) }
+    }
 
     /// Longest line `read` takes (a tool output of several screenshots).
     static let maxLine = 64 * 1024 * 1024
@@ -143,14 +148,17 @@ public enum LogImage {
     public static func data(line: String, index: Int) -> Data? { data(lineData: Data(line.utf8), index: index) }
 
     static func data(lineData: Data, index: Int) -> Data? {
+        base64(lineData: lineData, index: index).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
+    }
+
+    static func base64(lineData: Data, index: Int) -> String? {
         guard let o = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { return nil }
         let f = found(in: o)
-        guard f.indices.contains(index) else { return nil }
-        return Data(base64Encoded: f[index].base64, options: .ignoreUnknownCharacters)
+        return f.indices.contains(index) ? f[index].base64 : nil
     }
 
     /// The picture `ref` points at in the log file. Nil unless `offset` starts a line and the picture there still has the
-    /// ref's format and size (a rewritten log does not show another picture).
+    /// ref's fingerprint, format and size (a rewritten log does not show another picture).
     public static func read(_ ref: Ref, from url: URL) -> Data? {
         guard let offset = ref.offset, let fh = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? fh.close() }
@@ -164,7 +172,8 @@ public enum LogImage {
                 if let nl = chunk.firstIndex(of: 0x0a) { line += chunk[chunk.startIndex..<nl]; break }
                 line += chunk
             }
-            guard let d = data(lineData: line, index: ref.index), let h = header(d),
+            guard let b64 = base64(lineData: line, index: ref.index), fingerprint(base64: b64) == ref.digest,
+                  let d = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), let h = header(d),
                   h.format == ref.format, h.width == ref.width, h.height == ref.height else { return nil }
             return d
         } catch { return nil }

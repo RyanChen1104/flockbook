@@ -107,8 +107,9 @@ extension ContentTests {
         try? await Task.sleep(for: .seconds(1))
         let c2 = centre("pictures-swap-2")
         swapWin.orderOut(nil)
-        step("a new picture at the same place replaces the old thumbnail (red \(c1.map { Int($0.redComponent * 255) } ?? -1) -> green \(c2.map { Int($0.greenComponent * 255) } ?? -1))",
-             (c1?.redComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) > 0.6 && (c2?.redComponent ?? 1) < 0.3)
+        func rgb(_ c: NSColor?) -> String { c.map { "\(Int($0.redComponent * 255)),\(Int($0.greenComponent * 255)),\(Int($0.blueComponent * 255))" } ?? "nil" }
+        step("a new picture at the same place replaces the old thumbnail (\(rgb(c1)) -> \(rgb(c2)))",
+             (c1?.redComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) - (c2?.redComponent ?? 1) > 0.4)
 
         // Bounded work: a strip draws at most 8 pictures, at most 2 reads run at once, and a picture scrolled out of
         // view lets its thumbnail go.
@@ -125,8 +126,11 @@ extension ContentTests {
         let gref = pref(green, 800, 400)
         let (lazyWin, lazyView) = offscreen(LazyPictures(ref: gref).environment(\.logURL, swapFile), NSSize(width: 300, height: 300))
         try? await Task.sleep(for: .seconds(1))
-        weak var held = PictureCache.shared.cached(url: swapFile, ref: gref,
-                                                   maxPixel: LogPicture.maxPixel(PictureLayout.thumb(gref), scale: lazyWin.backingScaleFactor))
+        weak var held: NSImage?
+        autoreleasepool {
+            held = PictureCache.shared.cached(url: swapFile, ref: gref,
+                                              maxPixel: LogPicture.maxPixel(PictureLayout.thumb(gref), scale: lazyWin.backingScaleFactor))
+        }
         let loadedLazy = held != nil
         PictureCache.shared.removeAll()
         func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
@@ -134,6 +138,7 @@ extension ContentTests {
             doc.scroll(NSPoint(x: 0, y: doc.isFlipped ? doc.bounds.height - 300 : 0))
         }
         try? await Task.sleep(for: .seconds(1))
+        capture(lazyWin, to: "\(Self.dir)/pictures-scrolled.png")
         let releasedLazy = held == nil
         lazyWin.orderOut(nil)
         step("a picture scrolled out of view lets its thumbnail go (loaded \(loadedLazy), released \(releasedLazy))", loadedLazy && releasedLazy)

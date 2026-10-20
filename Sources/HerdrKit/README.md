@@ -103,8 +103,9 @@ If no log is found, `items()` yields `[]` once and keeps polling for the file.
 
 ### Pictures in the log
 Logs keep pictures as base64 inside the JSON line. Items never hold the bytes. They hold a `LogImage.Ref`: the byte
-offset of the line, the picture's index in that line (log order), and the format and size read from the picture's
-header (PNG, JPEG, WebP, GIF). A picture whose header cannot be read gets no ref, but still counts for `index`.
+offset of the line, the picture's index in that line (log order), the format and size read from the picture's
+header (PNG, JPEG, WebP, GIF), and `digest`: `LogImage.fingerprint(base64:)`, the first 8 bytes of the SHA-256 of the
+picture's base64 text. A picture whose header cannot be read gets no ref, but still counts for `index`.
 - Claude Code: `image` blocks in a user message go on its `userText` item (a message with only pictures makes a
   `userText("")`). `image` blocks inside a `tool_result` go on the matching `ToolCall`.
 - Codex: `input_image` data URLs in a message (its `userText`) or in a tool's output (its `ToolCall`).
@@ -112,8 +113,8 @@ header (PNG, JPEG, WebP, GIF). A picture whose header cannot be read gets no ref
 - A picture given as a web URL is never fetched. Cursor: not covered.
 
 `LogImage.read(ref, from: logURL)` reads the line at `offset` and decodes picture `index`. It returns nil unless
-`offset` starts a line and the picture there still has the ref's format and size, so a rewritten log never shows
-another picture. Reading is file I/O: call it off the main thread.
+`offset` starts a line and the picture there still has the ref's fingerprint, format and size, so a rewritten log
+never shows another picture. Reading is file I/O: call it off the main thread.
 
 ### User text (Claude Code, Codex)
 A user message that starts with a tag is injected context (`<system-reminder>`, `<command-name>`, `<local-command-*>`,
