@@ -250,9 +250,7 @@ struct ConversationView: View {
                     }
                 }
                 .coordinateSpace(.named(Self.rowSpace))
-                .frame(maxWidth: size.column, alignment: .leading)
-                .padding(.horizontal, (ReadingWidth(rawValue: widthRaw) ?? .medium).sidePadding).padding(.vertical, Self.listPadding)
-                .frame(maxWidth: .infinity)
+                .readingColumn(size, ReadingWidth(rawValue: widthRaw) ?? .medium, vertical: Self.listPadding)
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition($position)

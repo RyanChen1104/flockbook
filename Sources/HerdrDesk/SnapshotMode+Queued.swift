@@ -52,6 +52,19 @@ extension SnapshotRunner {
                  await shot(queue: q, draft: nil, agent: "claude", dark: dark, notice: tooLong, path: "\(dir)/queued-refused-\(dark ? "dark" : "light").png"))
         }
 
+        // A queued bubble ends where the user's bubbles end, at every reading width, text size and pane width.
+        for width in ReadingWidth.allCases {
+            for size in ReadingSize.allCases {
+                for pane in [CGFloat(700), 1400] {
+                    let e = await edges(width: width, size: size, pane: pane)
+                    step("aligned: \(width.rawValue) \(size.rawValue) in \(Int(pane)): queued, composer and approval card end at the user's bubble (\(e.user) vs \(e.queued), \(e.composer), \(e.card)), off every screen",
+                         e.user > 0 && [e.queued, e.composer, e.card].allSatisfy { abs($0 - e.user) < 0.5 } && e.away)
+                }
+            }
+        }
+        AppDefaults.store.set(ReadingWidth.medium.rawValue, forKey: ReadingWidth.key)
+        AppDefaults.store.set(ReadingSize.m.rawValue, forKey: ReadingSize.key)
+
         let model = AppModel(store: store)
         QueueProbe.injected = [idle.id: QueuedInput(agent: "claude", items: two, pullable: true)]
         model.queued[idle.id] = QueuedInput(agent: "claude", items: two, pullable: true)
@@ -107,12 +120,53 @@ extension SnapshotRunner {
         exit(failures == 0 ? 0 : 1)
     }
 
+    /// The right edges (global x) of a user bubble in the conversation's reading column and of what goes under it (a queued
+    /// bubble, the composer, an approval card in the composer's place), in a pane `pane` wide, and whether the window
+    /// touched no screen. Draws nothing to disk.
+    @MainActor private static func edges(width: ReadingWidth, size: ReadingSize, pane: CGFloat) async
+        -> (user: CGFloat, queued: CGFloat, composer: CGFloat, card: CGFloat, away: Bool) {
+        AppDefaults.store.set(width.rawValue, forKey: ReadingWidth.key)
+        AppDefaults.store.set(size.rawValue, forKey: ReadingSize.key)
+        var user = CGFloat(0), queued = CGFloat(0), composer = CGFloat(0), card = CGFloat(0)
+        QueueProbe.bubble = { queued = $0.maxX }
+        defer { QueueProbe.bubble = nil }
+        let view = VStack(spacing: 0) {
+            Spacer()
+            HStack {
+                Spacer(minLength: min(size.column * 0.2, 120))
+                UserBubble(text: "The build fails on main. Please fix it.", size: size)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { user = $0.maxX }
+            }
+            .readingColumn(size, width)
+            QueuedStrip(queue: QueuedInput(agent: "claude", items: ["Also run the lint step."], pullable: true), canPull: true, pulling: false, onPull: {})
+            ComposerView(agentName: "claude", draft: ComposerDraft(), onSend: { _ in })
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composer = $0.maxX }
+                .inputColumn()
+            ApprovalCard(request: PermissionRequest(title: "claude wants to run a build", command: "swift build", toolUseId: "toolu_a"),
+                         agentName: "claude", canRespond: true, onAllow: {}, onDeny: {}, onOpen: {})
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { card = $0.maxX }
+                .inputColumn()
+        }
+        .environment(\.flatGlass, true)
+        .frame(width: pane, height: 900)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: pane, height: 900)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        var away = true
+        func check() { away = away && !NSScreen.screens.contains(where: { $0.frame.intersects(win.frame) }) }
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless(); check()
+        for _ in 0..<3 { try? await Task.sleep(for: .milliseconds(100)); host.layoutSubtreeIfNeeded(); check() }
+        win.orderOut(nil)
+        func half(_ x: CGFloat) -> CGFloat { (x * 2).rounded() / 2 }
+        return (half(user), half(queued), half(composer), half(card), away)
+    }
+
     /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not
     /// a nested run loop: the composer sizes itself in a main-queue block that a nested run loop would never run.
     @MainActor private static func shot(queue: QueuedInput?, draft: ComposerDraft?, agent: String, dark: Bool, notice: String? = nil, path: String) async -> Bool {
         let size = NSSize(width: 900, height: 420)
         // The bottom of a pane: the last reply, the queue strip and the composer. (The conversation's scroll view does
-        // not draw in an offscreen capture, so the reply is a plain bubble here.)
+        // not draw in an offscreen capture, so the reply is a plain bubble here, in the reading column as the conversation lays it out.)
         let view = ZStack(alignment: .bottom) {
             Color(nsColor: .textBackgroundColor)
             VStack(spacing: 0) {
@@ -121,10 +175,10 @@ extension SnapshotRunner {
                     Spacer(minLength: 120)
                     UserBubble(text: "The build fails on main. Please fix it.", size: .m)
                 }
-                .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 14)
+                .readingColumn(.m, .medium).padding(.bottom, 14)
                 if let queue { QueuedStrip(queue: queue, canPull: true, pulling: false, onPull: {}) }
                 ComposerView(agentName: agent, draft: draft ?? ComposerDraft(), onSend: { _ in })
-                    .frame(maxWidth: 780).padding(.horizontal, 24).padding(.bottom, 12).padding(.top, 6)
+                    .inputColumn()
             }
         }
         .overlay(alignment: .top) { if let notice { NoticeCapsule(text: notice).padding(.top, 16).padding(.horizontal, 24) } }
