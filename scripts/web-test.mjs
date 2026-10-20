@@ -1518,14 +1518,18 @@ async function pictures() {
     await p.click("button.picture[data-index='1']");
     return await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true;
   };
+  // Each touch carries its own time (`after` ms past the one before), so the page sees the intended speed however
+  // slow the browser is to take them.
+  let clock;
+  const touch = async (type, touchPoints, after) => {
+    clock = type === "touchStart" ? Date.now() / 1000 : clock + after / 1000;
+    await p.cdp("Input.dispatchTouchEvent", { type, touchPoints, timestamp: clock });
+  };
   const swipe = async (path, { ms = 30, lift = true, second } = {}) => {
     const at = (i) => [{ id: 1, x: path[i][0], y: path[i][1] }, ...(second ? [{ id: 2, x: second[i][0], y: second[i][1] }] : [])];
-    await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(0) });
-    for (let i = 1; i < path.length; i++) {
-      await new Promise((r) => setTimeout(r, ms));
-      await p.cdp("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: at(i) });
-    }
-    if (lift) { await new Promise((r) => setTimeout(r, 120)); await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); }
+    await touch("touchStart", at(0), 0);
+    for (let i = 1; i < path.length; i++) await touch("touchMove", at(i), ms);
+    if (lift) await touch("touchEnd", [], 120);
   };
   const line = (x0, y0, x1, y1, n) => Array.from({ length: n + 1 }, (_, i) => [x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n]);
   const shift = "(() => { const m = getComputedStyle(document.querySelector('.viewer img')).transform; return m === 'none' ? 0 : Math.round(new DOMMatrix(m).m42); })()";
@@ -1540,8 +1544,7 @@ async function pictures() {
   await p.shot("picture-viewer-drag");
   await p.shot("picture-viewer-drag", true);
   if (shots) await p.scale(3);
-  await new Promise((r) => setTimeout(r, 120));
-  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await touch("touchEnd", [], 120);
   const sprung = await p.until(`${shift} === 0`, 2000);
   check(sprung === undefined ? false : !(await p.eval(viewerGone)), `pictures: a short drag springs back and the viewer stays (${await p.eval(shift)} px)`);
   await swipe(line(195, 300, 195, 300 + 844 / 4 + 40, 16));
@@ -1550,7 +1553,7 @@ async function pictures() {
   check(await p.eval("document.activeElement?.matches(\"button.picture[data-index='1']\")") === true, "pictures: after a drag closes it, focus is back on the picture");
   check(await opened(), "pictures: the viewer opens for a flick");
   await swipe(line(195, 500, 195, 410, 3), { ms: 16, lift: false });
-  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await touch("touchEnd", [], 16);
   check(await p.until(viewerGone, 2000) === true, "pictures: a quick flick up closes the viewer though it is short");
   check(await opened(), "pictures: the viewer opens for a sideways drag");
   await swipe(line(60, 420, 330, 440, 16));
