@@ -242,6 +242,13 @@ import ImageIO
                 } } }
                 b.workspaces = ws
             }
+            // `nosession <pane>`: the agent there has no session now (it ended); no new conversation is sent.
+            if w.count == 2, w[0] == "nosession" {
+                for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {
+                    ws[wi].tabs[ti].panes[pi].agent?.sessionId = nil
+                } } }
+                b.workspaces = ws
+            }
             // `rich <session> <rows>`: that many older rows in front, of a real reply's weight (paragraphs, lists, code).
             if w.count == 3, w[0] == "rich", let n = Int(w[2]) {
                 b.items[w[1]] = (0..<n).map { i in

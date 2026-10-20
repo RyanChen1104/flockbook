@@ -1466,8 +1466,9 @@ async function pictures() {
     const make = URL.createObjectURL, revoke = URL.revokeObjectURL; window.__urls = []; window.__revoked = [];
     URL.createObjectURL = (b) => { const u = make(b); window.__urls.push(u); return u; };
     URL.revokeObjectURL = (u) => { window.__revoked.push(u); revoke(u); };
-    window.__observed = new Set(); const watch = IntersectionObserver.prototype.observe, unwatch = IntersectionObserver.prototype.unobserve;
-    IntersectionObserver.prototype.observe = function (t) { if (t.matches?.("button.picture")) window.__observed.add(t); return watch.call(this, t); };
+    const IO = IntersectionObserver; window.IntersectionObserver = class extends IO { constructor(cb, o) { super(cb, o); this.__cb = cb; } };
+    window.__observed = new Set(); const watch = IO.prototype.observe, unwatch = IO.prototype.unobserve;
+    IO.prototype.observe = function (t) { if (t.matches?.("button.picture")) { window.__observed.add(t); window.__pictureIO = this; } return watch.call(this, t); };
     IntersectionObserver.prototype.unobserve = function (t) { window.__observed.delete(t); return unwatch.call(this, t); }; }`);
   hub.stdin.write("pictures w2:p2 s20\n");
   await p.goto(origin + "/");
@@ -1512,14 +1513,30 @@ async function pictures() {
   check(await p.until(`!document.querySelector('button.picture img') && ${JSON.stringify(previews)}.every((u) => window.__revoked.includes(u))`, 4000) === true,
     "pictures: let go when they leave the view");
   // Another pane while they are far from the view: the boxes that left the page are not watched any more.
+  await p.eval(`window.__oldBox = ${boxes}[0]`);
   await p.eval("location.hash = '#pane=w2%3Ap1'");
   await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w2:p1'", 8000);
   const stale = "[...window.__observed].filter((b) => !b.isConnected).length";
   check(await p.until(`${stale} === 0`, 2000) === true, `pictures: boxes out of the page are not watched (${await p.eval(stale)})`);
+  // An entry the observer had queued before the box left comes late: the box is not asked for or kept.
+  const before = await p.eval("window.__pics.length");
+  await p.eval("window.__pictureIO.__cb([{ target: window.__oldBox, isIntersecting: true }], window.__pictureIO)");
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval("window.__pics.length") === before, `pictures: a late entry for a box out of the page -> not asked for (${before} -> ${await p.eval("window.__pics.length")})`);
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   check(await p.until(`${boxes}.length === 3`, 8000) === true, "pictures: back to the pane");
-  // The pane gets another session while the full picture is open: the viewer closes and lets it go.
+  // The agent's session ends while the full picture is open (no new conversation comes): the viewer closes and lets it go.
   await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[1].scrollIntoView({ block: 'start' })`);
+  await p.click("button.picture[data-index='1']");
+  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens");
+  const ended = await p.eval("document.querySelector('.viewer img').src");
+  hub.stdin.write("nosession w2:p2\n");
+  check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(ended)})`, 8000) === true,
+    "pictures: the session ends -> the viewer closes and lets the full picture go");
+  hub.stdin.write("session w2:p2 s20\n");
+  // The pane gets another session while the full picture is open: the viewer closes and lets it go.
+  await p.until(`${boxes}.length === 3`, 8000);
+  await p.eval(`${boxes}[1].scrollIntoView({ block: 'start' })`);
   await p.click("button.picture[data-index='1']");
   check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens again");
   const again = await p.eval("document.querySelector('.viewer img').src");
