@@ -213,6 +213,8 @@ enum HubLiveTest {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkserve-\(UUID().uuidString)")
         AppDefaults.store.set("127.0.0.1", forKey: RemoteHub.hostKey)
         AppDefaults.store.set(0, forKey: RemoteHub.portKey)
+        // Direct mode: its own port, so a running Flockbook with remote access on (Tailscale's local port) is no clash.
+        AppDefaults.store.set(RemoteHub.Mode.direct.rawValue, forKey: RemoteHub.modeKey)
         let store = FileDeviceStore(url: dir.appendingPathComponent("devices.json"))
         let token = HubToken.random()
         store.add(token: token, device: HubDevice(id: "live-read", name: "Live read test", level: .read), paired: Date())
