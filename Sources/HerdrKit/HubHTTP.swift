@@ -151,7 +151,7 @@ public enum HubWeb {
     }
     /// Sent with every file. `connect-src 'self'` covers the hub's own wss:// origin.
     public static let headers: [(String, String)] = [
-        ("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
+        ("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
         ("X-Content-Type-Options", "nosniff"),
         ("Referrer-Policy", "no-referrer"),
         ("Cache-Control", "no-cache"),

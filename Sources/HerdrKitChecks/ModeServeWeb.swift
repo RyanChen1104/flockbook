@@ -6,7 +6,8 @@ import ImageIO
 /// TLS with a throwaway self-signed certificate, 127.0.0.1 only, never herdr. Prints one JSON line
 /// (port, cert path, tokens), then serves until stdin closes. Input changes the fake state the way an agent would.
 /// Lines on stdin change it too: `grow <session> <n>` appends n long replies (an agent writing while the page is open);
-/// `session <pane> <session> [rows]` puts another session in a pane (40 rows unless given).
+/// `session <pane> <session> [rows]` puts another session in a pane (40 rows unless given); `pictures <pane> <session>`
+/// puts a session whose log has pictures in a pane (the owner's message with two, a Read result with one, 40 lines after).
 @MainActor func modeServeWeb() async throws {
     guard CommandLine.arguments.contains("--serve-web") else { return }
     let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkweb-\(UUID().uuidString)")
@@ -224,8 +225,15 @@ import ImageIO
         try? await Task.sleep(for: .milliseconds(100))
         for line in stdinLines() {
             let w = line.split(separator: " ").map(String.init)
+            if w.count == 3, w[0] == "pictures", b.items[w[2]] == nil {
+                let file = dir.appendingPathComponent("\(w[2]).jsonl")
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let user = [noisyImage(.jpeg, w: 120, h: 80, seed: 3), noisyImage(.png, w: 1600, h: 1200, seed: 4)].compactMap { $0 }
+                let tool = [noisyImage(.png, w: 900, h: 600, seed: 5)].compactMap { $0 }
+                if let items = try? pictureLog(file, user: user, tool: tool, tail: 40) { b.items[w[2]] = items; b.logURLs[w[2]] = file }
+            }
             // `session <pane> <session> [rows]`: a new agent session in that pane (40 rows of its own unless given).
-            if w.count == 3 || w.count == 4, w[0] == "session" {
+            if w.count == 3 || w.count == 4, w[0] == "session" || w[0] == "pictures" {
                 if b.items[w[2]] == nil {
                     b.items[w[2]] = (0..<(w.count == 4 ? Int(w[3]) ?? 40 : 40)).map { ConversationItem(id: "\(w[2])-\($0)", kind: .assistantText("New session reply \($0). " + String(repeating: "Text to wrap. ", count: 6))) }
                 }

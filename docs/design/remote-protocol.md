@@ -46,6 +46,7 @@ The client sends **intent only**. There is no message that carries raw keys or t
 | `attach` | `upload`, `part`, `parts`, `data` | One part of an image for a later `send`. See 3.3. Needs level `input`. |
 | `approve` | `pane`, `prompt`, `allow` | Answer the open permission prompt. `prompt` is the id from the last `prompt` push. Needs level `input`. |
 | `answer` | `pane`, `question`, `answers` | Answer the open question. `answers`: one per question, `{picks: [int], other?: string}` (0-based option indexes). Needs level `input`. |
+| `picture` | `pane`, `item`, `index`, `full?` | One picture of a conversation item, sent as `picturePart` pushes. `index`: 0-based in the item's `images`. `full`: the full picture instead of the preview (default false). See 3.4. Any level. |
 | `ping` | – | The hub sends `pong`. |
 | `pushSubscribe` | `endpoint`, `p256dh`, `auth` | Web Push for this device: the browser's `PushSubscription` (keys base64url), made with `pushKey` from `welcome`. One per device: a new one replaces the old. `endpoint` must be https on a known push service (FCM, Apple, Mozilla, Windows); else `badRequest`. `failed` when the hub has no push key. Any level. |
 | `pushUnsubscribe` | `endpoint` | Remove this device's subscription with that endpoint. |
@@ -146,6 +147,31 @@ connection is closed (1008). A level change or a revoke on the hub closes the de
 client says `hello` again to learn its level. A `send` that names an unknown upload replies `badRequest` and sends nothing; uploads stay
 until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be repeated.
 
+### 3.4 Pictures: picture
+
+The hub does not push pictures with the conversation. An item with pictures names them in `images` (`[{width, height}]`,
+the size in the log), so the client can keep their place. The client asks for one picture when it comes into view,
+and for the full picture only when the person opens it.
+
+The hub reads the picture back from the session log (the digest is checked) and writes a **new** JPEG without metadata:
+
+| | Long side | Size | Parts |
+|---|---|---|---|
+| Preview (`full` false) | at most 1,024 px | at most 256 KiB (lower quality first, then smaller) | 1 |
+| Full (`full` true) | at most 4,096 px | at most 10 MiB | at most 16, each at most 640 KiB |
+
+It pushes the parts in order (`picturePart`, `mime` `image/jpeg`, `width`/`height` of the new JPEG), then replies `ok`.
+
+Rules:
+- Only for a pane this connection watches (`badRequest` otherwise). Any level.
+- An unknown pane, item or index, or a picture no longer in the log: `notFound`. A picture that does not decode: `failed`.
+- The hub checks again after the encoding: a removed device gets `unauthorized` and a close; a pane no longer watched,
+  or one that now shows another session, gets `stale` and no parts.
+- The setting "Show pictures on remote devices" (default on). Off: items have no `images`, and `picture` replies
+  `failed`. A change sends the items again.
+- At most 2 pictures are encoded at once on the hub (shared with `attach`).
+- The client keeps pictures in memory only (no cache, no storage) and lets them go when they leave the view.
+
 ## 4. Hub to client
 
 | `type` | Fields | When |
@@ -159,6 +185,7 @@ until a `send` with them succeeds, so a refused `send` (`promptOpen`) can be rep
 | `screen` | `pane`, `text` | The visible screen text of a watched pane, when it changes. |
 | `prompt` | `pane`, `approval?`, `question?` | The open prompt of a watched pane. Both absent = no prompt open. |
 | `attached` | `upload`, `width`, `height`, `bytes` | The last `attach` part was taken: the size of the re-encoded image. Before that part's `reply`. |
+| `picturePart` | `re`, `pane`, `item`, `index`, `full`, `part`, `parts`, `mime`, `width`, `height`, `data` | One part of a picture for the `picture` message `re`. `data`: standard base64. All parts come before that message's `reply`. See 3.4. |
 | `pong` | – | Answer to `ping`. |
 
 Error codes: `unauthorized`, `readOnly`, `stale`, `promptOpen`, `notFound`, `badRequest`, `rateLimited`, `unsupportedVersion`, `failed`. A client treats an unknown code as `failed`.
@@ -173,9 +200,9 @@ Order: the pushes a message causes come first, then its `reply` (for `hello`: `w
 
 | `kind` | Fields |
 |---|---|
-| `user` | `text` |
+| `user` | `text`, `images?` |
 | `assistant` | `text` (markdown) |
-| `tools` | `tools: [{symbol, text, calls: [{id, tool, summary, done, error}]}]` |
+| `tools` | `tools: [{symbol, text, calls: [{id, tool, summary, done, error}]}]`, `images?` |
 | `approval` | `approval` (below) |
 | `question` | `question` (below) |
 | `status` | `text` |
