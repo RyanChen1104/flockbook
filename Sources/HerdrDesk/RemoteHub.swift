@@ -228,6 +228,14 @@ final class RemoteHub {
     }
     static let pushDoneKey = "remote.push.done", pushAwayKey = "remote.push.onlyAway"
 
+    /// Settings: a watching device loads the pictures of the conversation from this Mac (default on). Off: items name
+    /// no pictures and `picture` requests are refused.
+    var pictures: Bool {
+        get { access(keyPath: \.pictures); return AppDefaults.store.object(forKey: Self.picturesKey) as? Bool ?? true }
+        set { withMutation(keyPath: \.pictures) { AppDefaults.store.set(newValue, forKey: Self.picturesKey) } }
+    }
+    static let picturesKey = "remote.pictures"
+
     /// Every poll: status changes become pushes (needs you, done) when the policy allows; held pushes go out.
     private func pushTick() {
         guard let model else { return }

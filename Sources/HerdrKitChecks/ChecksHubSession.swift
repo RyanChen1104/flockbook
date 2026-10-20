@@ -24,6 +24,10 @@ import Foundation
     func pushSubscribe(_ s: PushSubscription) -> Bool { pushes.add(s) }
     func pushUnsubscribe(device: String, endpoint: String) { pushes.remove(device: device, endpoint: endpoint) }
     func pushSubscribed(device: String) -> Bool { pushes.all.contains { $0.device == device } }
+    var remotePictures = true
+    /// The log file per agent session (pictures are read back from it).
+    var logURLs: [String: URL] = [:]
+    func logURL(session: String) -> URL? { logURLs[session] }
 
     func conversation(session: String) -> [ConversationItem] { items[session] ?? [] }
     func hasEarlier(session: String) -> Bool { earlier[session] != nil }

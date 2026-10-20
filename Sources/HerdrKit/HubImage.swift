@@ -93,6 +93,15 @@ public enum HubImage {
         return Output(url: url, width: ow, height: oh, bytes: out.length)
     }
 
+    public static let previewSide = 1_024, previewBytes = 256 * 1024
+    public struct Encoded: Sendable, Hashable {
+        public var data: Data
+        public var width: Int, height: Int
+    }
+    public static func preview(_ data: Data) -> Encoded? { nil }
+    public static func full(_ data: Data) -> Encoded? { nil }
+    public static func parts(_ data: Data) -> [Data] { [] }
+
     /// Width and height from a PNG's IHDR chunk (bytes 16-23), when it is the first chunk.
     static func pngSize(_ d: Data) -> (Int, Int)? {
         let b = [UInt8](d.prefix(24))

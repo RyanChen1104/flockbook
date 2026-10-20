@@ -48,6 +48,10 @@ import CryptoKit
     func pushUnsubscribe(device: String, endpoint: String)
     /// The device has a subscription.
     func pushSubscribed(device: String) -> Bool
+    /// "Show pictures on remote devices": items name their pictures, and a watching device may ask for them.
+    var remotePictures: Bool { get }
+    /// The log file of an agent session, where its pictures are read back (`LogImage.read`).
+    func logURL(session: String) -> URL?
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -132,6 +136,8 @@ extension Hub {
 
     /// Test hook: runs after an image is decoded, before it is held.
     var afterDecode: (@MainActor () -> Void)?
+    /// Test hook: runs after a picture for a device is encoded, before it is checked again and sent.
+    var afterEncode: (@MainActor () async -> Void)?
     /// The level at hello, and the device whose connection slot this connection holds.
     private var helloLevel: HubLevel?
     private var slot: String?
@@ -310,6 +316,8 @@ extension Hub {
         case .pulledAck(let pulled):
             _ = backend.pulledTexts.take(id: pulled, device: device.id)
             return [ok(m.id)]
+        case .picture:
+            return [fail(m.id, .failed, "Not yet.")]
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
@@ -442,6 +450,8 @@ extension Hub {
 
     // MARK: - Helpers
 
+    /// A conversation item as devices get it: its pictures named only while the setting is on (a change sends the items again).
+    private func hubItem(_ item: ConversationItem) -> HubItem { HubItem(item, pictures: backend.remotePictures) }
     private func snapshot() -> [HubWorkspace] { backend.workspaces.map(HubWorkspace.init) }
     private func pane(_ id: String) -> Pane? { backend.workspaces.lazy.flatMap(\.tabs).flatMap(\.panes).first { $0.id == id } }
     private func ok(_ re: String) -> HubMessage { .reply(HubReply(re: re, ok: true)) }
@@ -506,7 +516,7 @@ extension Hub {
         let items = backend.conversation(session: session)
         let old = force ? nil : sent[p.id]
         if let old, let first = old.first, let start = items.firstIndex(where: { $0.id == first.id }) {
-            let cur = items[start...].map(HubItem.init)
+            let cur = items[start...].map(hubItem)
             if cur.count >= old.count, zip(old, cur).allSatisfy({ $0.id == $1.id }) {
                 sent[p.id] = cur
                 let delta = zip(old, cur).filter { $0 != $1 }.map(\.1) + cur[old.count...]
@@ -516,7 +526,7 @@ extension Hub {
             }
         }
         if let old, old.isEmpty, items.isEmpty { return nil }
-        let tail = Array(items.suffix(Self.window).map(HubItem.init))
+        let tail = Array(items.suffix(Self.window).map(hubItem))
         if let old, old == tail { return nil }
         sent[p.id] = tail
         return .conversation(HubConversation(pane: p.id, session: session, mode: .replace, items: tail,
@@ -536,7 +546,7 @@ extension Hub {
             idx = items.firstIndex { $0.id == before } ?? idx
         }
         let lo = max(0, idx - Self.window)
-        let older = items[lo..<idx].map(HubItem.init)
+        let older = items[lo..<idx].map(hubItem)
         if let held = sent[p.id], held.first?.id == before { sent[p.id] = older + held }
         return [.conversation(HubConversation(pane: p.id, session: session, mode: .prepend, items: older, hasEarlier: lo > 0 || more)), ok(re)]
     }

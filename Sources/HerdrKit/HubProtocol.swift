@@ -7,8 +7,8 @@ public enum Hub {
     public static let version = 1
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
-    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck"]
-    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled"]
+    public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck", "picture"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled", "picture"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
 
@@ -164,6 +164,9 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         /// The composer has the `pulled` text with this id: the hub forgets it. Until then the hub sends it again
         /// after each hello.
         case pulledAck(pulled: String)
+        /// The `index`th picture of a conversation item in a watched pane (remote-protocol.md 3.4): a preview, or the
+        /// full picture when `full`. Answered with `picture` parts, then the reply.
+        case picture(pane: String, item: String, index: Int, full: Bool)
 
         public var type: String {
             switch self {
@@ -181,6 +184,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             case .pushUnsubscribe: "pushUnsubscribe"
             case .pullQueued: "pullQueued"
             case .pulledAck: "pulledAck"
+            case .picture: "picture"
             }
         }
     }
@@ -188,7 +192,7 @@ public struct ClientMessage: Codable, Hashable, Sendable {
     public var body: Body
     public init(id: String, body: Body) { self.id = id; self.body = body }
 
-    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth, pulled }
+    private enum K: String, CodingKey { case v, type, id, secret, name, token, client, clientVersion, pane, session, before, text, attachments, upload, part, parts, data, prompt, allow, question, answers, endpoint, p256dh, auth, pulled, item, index, full }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -209,6 +213,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
         case "pushUnsubscribe": body = .pushUnsubscribe(endpoint: try s(.endpoint))
         case "pullQueued": body = .pullQueued(pane: try s(.pane))
         case "pulledAck": body = .pulledAck(pulled: try s(.pulled))
+        case "picture": body = .picture(pane: try s(.pane), item: try s(.item), index: try c.decode(Int.self, forKey: .index),
+                                        full: try c.decodeIfPresent(Bool.self, forKey: .full) ?? false)
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -244,6 +250,8 @@ public struct ClientMessage: Codable, Hashable, Sendable {
             try c.encode(endpoint, forKey: .endpoint)
         case .pulledAck(let pulled):
             try c.encode(pulled, forKey: .pulled)
+        case .picture(let pane, let item, let index, let full):
+            try c.encode(pane, forKey: .pane); try c.encode(item, forKey: .item); try c.encode(index, forKey: .index); try c.encode(full, forKey: .full)
         }
     }
 }
@@ -339,6 +347,24 @@ public struct HubPulled: Codable, Hashable, Sendable {
     }
 }
 
+/// One part of a picture the device asked for (`picture`). The parts' `data` (standard base64) joined in `part` order
+/// is one image of type `mime`, `width`x`height`. `re`: the request's id.
+public struct HubPicturePart: Codable, Hashable, Sendable {
+    public var re: String
+    public var pane: String
+    public var item: String
+    public var index: Int
+    public var full: Bool
+    public var part: Int, parts: Int
+    public var mime: String
+    public var width: Int, height: Int
+    public var data: String
+    public init(re: String, pane: String, item: String, index: Int, full: Bool, part: Int, parts: Int, mime: String, width: Int, height: Int, data: String) {
+        self.re = re; self.pane = pane; self.item = item; self.index = index; self.full = full
+        self.part = part; self.parts = parts; self.mime = mime; self.width = width; self.height = height; self.data = data
+    }
+}
+
 /// The last `attach` part was taken: the re-encoded image's size.
 public struct HubAttached: Codable, Hashable, Sendable {
     public var upload: String
@@ -363,6 +389,8 @@ public enum HubMessage: Codable, Hashable, Sendable {
     case queued(HubQueued)
     /// The answer to `pullQueued`: the text for the composer.
     case pulled(HubPulled)
+    /// One part of a picture the device asked for.
+    case picture(HubPicturePart)
 
     public var type: String {
         switch self {
@@ -378,6 +406,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .pong: "pong"
         case .queued: "queued"
         case .pulled: "pulled"
+        case .picture: "picture"
         }
     }
 
@@ -398,6 +427,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case "pong": self = .pong
         case "queued": self = .queued(try HubQueued(from: decoder))
         case "pulled": self = .pulled(try HubPulled(from: decoder))
+        case "picture": self = .picture(try HubPicturePart(from: decoder))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -412,6 +442,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .attached(let a): try a.encode(to: encoder)
         case .queued(let q): try q.encode(to: encoder)
         case .pulled(let p): try p.encode(to: encoder)
+        case .picture(let p): try p.encode(to: encoder)
         case .snapshot, .status, .screen, .pong: break
         }
         var c = encoder.container(keyedBy: K.self)
@@ -540,6 +571,24 @@ public struct HubQuestion: Codable, Hashable, Sendable {
     }
 }
 
+/// A picture in a conversation item: its size only. The device asks for the bytes (`picture`) when it shows it.
+public struct HubPicture: Codable, Hashable, Sendable {
+    public var width: Int, height: Int
+    public init(width: Int, height: Int) { self.width = width; self.height = height }
+}
+
+extension Hub {
+    /// The pictures of an item, in the order a `picture` request's `index` counts: the owner's for a user item, every
+    /// call's result pictures in call order for a tool group.
+    public static func pictures(of item: ConversationItem) -> [LogImage.Ref] {
+        switch item.kind {
+        case .userText: item.images
+        case .toolChips(let chips): chips.flatMap(\.calls).flatMap(\.images)
+        default: []
+        }
+    }
+}
+
 public struct HubItem: Codable, Hashable, Sendable {
     public enum Kind: String, Codable, Hashable, Sendable { case user, assistant, tools, approval, question, status }
     public var id: String
@@ -549,10 +598,14 @@ public struct HubItem: Codable, Hashable, Sendable {
     public var tools: [HubTool]?
     public var approval: HubApproval?
     public var question: HubQuestion?
-    public init(id: String, kind: Kind, time: String? = nil, text: String? = nil, tools: [HubTool]? = nil, approval: HubApproval? = nil, question: HubQuestion? = nil) {
-        self.id = id; self.kind = kind; self.time = time; self.text = text; self.tools = tools; self.approval = approval; self.question = question
+    /// The item's pictures (`Hub.pictures(of:)`); nil when none, or when the hub shows no pictures.
+    public var images: [HubPicture]?
+    public init(id: String, kind: Kind, time: String? = nil, text: String? = nil, tools: [HubTool]? = nil, approval: HubApproval? = nil, question: HubQuestion? = nil,
+                images: [HubPicture]? = nil) {
+        self.id = id; self.kind = kind; self.time = time; self.text = text; self.tools = tools; self.approval = approval; self.question = question; self.images = images
     }
-    public init(_ item: ConversationItem) {
+    /// `pictures`: the hub's "Show pictures on remote devices" setting.
+    public init(_ item: ConversationItem, pictures: Bool = true) {
         let t = Hub.time(item.timestamp)
         switch item.kind {
         case .userText(let s): self.init(id: item.id, kind: .user, time: t, text: s)

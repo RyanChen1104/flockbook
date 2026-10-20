@@ -94,6 +94,9 @@ import Foundation
     func pushSubscribe(_ s: PushSubscription) -> Bool { vapid != nil && pushes?.add(s) == true }
     func pushUnsubscribe(device: String, endpoint: String) { pushes?.remove(device: device, endpoint: endpoint) }
     func pushSubscribed(device: String) -> Bool { pushes?.all.contains { $0.device == device } == true }
+    /// Settings > Remote: "Show pictures on remote devices" (`RemoteHub.pictures`).
+    var remotePictures: Bool { AppDefaults.store.object(forKey: RemoteHub.picturesKey) as? Bool ?? true }
+    func logURL(session: String) -> URL? { store.logURL(for: session) }
 
     /// The question card's path. Questions not read yet are read first (moves Claude's picker, navigation only);
     /// the answers must then cover every question, else nothing is sent. Every key is gated: the agent from the
