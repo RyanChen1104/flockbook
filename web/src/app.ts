@@ -610,6 +610,7 @@ const shownURLs = new Map<HTMLElement, string>();
 const seen = new IntersectionObserver((entries) => {
   for (const e of entries) {
     const b = e.target as HTMLElement;
+    if (!observed.has(b) || !b.isConnected) continue;   // an entry queued before the box left the page
     if (e.isIntersecting) { near.add(b); showPicture(b); } else { near.delete(b); hidePicture(b); }
   }
 }, { rootMargin: "600px 0px" });
@@ -649,13 +650,15 @@ function hidePicture(b: HTMLElement): void {
   URL.revokeObjectURL(url);
 }
 /** After a render: pictures out of the page let go of their URLs and are not watched (a row put back watches them again).
- *  The viewer closes when its picture left the conversation: another pane or session, or the item without it. */
+ *  The viewer closes when its picture left the conversation: another pane or session (in the conversation or in the
+ *  snapshot: an ended session or a removed pane sends no new conversation), or the item without it. */
 function dropPictures(): void {
   for (const b of observed) if (!b.isConnected) { observed.delete(b); near.delete(b); hidePicture(b); seen.unobserve(b); }
   if (!viewer) return;
   const v = view(viewer.pane), it = v.items.find((i) => i.id === viewer!.item);
   const images = it && "images" in it ? it.images : undefined;
-  if (state.watching !== viewer.pane || v.session !== viewer.session || (images?.length ?? 0) <= viewer.index) closeViewer();
+  const now = find(viewer.pane)?.p.agent?.session;
+  if (state.watching !== viewer.pane || v.session !== viewer.session || now !== viewer.session || (images?.length ?? 0) <= viewer.index) closeViewer();
 }
 
 /** The full picture over the page. It shows the preview until the full one comes; tap it for its own size. */

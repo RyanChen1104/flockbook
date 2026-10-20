@@ -1525,7 +1525,17 @@ async function pictures() {
   check(await p.eval("window.__pics.length") === before, `pictures: a late entry for a box out of the page -> not asked for (${before} -> ${await p.eval("window.__pics.length")})`);
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   check(await p.until(`${boxes}.length === 3`, 8000) === true, "pictures: back to the pane");
+  // The pane gets another session while the full picture is open: the viewer closes and lets it go.
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[1].scrollIntoView({ block: 'start' })`);
+  await p.click("button.picture[data-index='1']");
+  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens again");
+  const again = await p.eval("document.querySelector('.viewer img').src");
+  hub.stdin.write("session w2:p2 s21\n");
+  check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(again)})`, 8000) === true,
+    "pictures: another session in the pane closes the viewer and lets the full picture go");
   // The agent's session ends while the full picture is open (no new conversation comes): the viewer closes and lets it go.
+  hub.stdin.write("session w2:p2 s20\n");   // the pictures again (a new conversation and snapshot)
+  check(await p.until(`${boxes}.length === 3`, 8000) === true, "pictures: back to the session with pictures");
   await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[1].scrollIntoView({ block: 'start' })`);
   await p.click("button.picture[data-index='1']");
   check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens");
@@ -1533,16 +1543,6 @@ async function pictures() {
   hub.stdin.write("nosession w2:p2\n");
   check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(ended)})`, 8000) === true,
     "pictures: the session ends -> the viewer closes and lets the full picture go");
-  hub.stdin.write("session w2:p2 s20\n");
-  // The pane gets another session while the full picture is open: the viewer closes and lets it go.
-  await p.until(`${boxes}.length === 3`, 8000);
-  await p.eval(`${boxes}[1].scrollIntoView({ block: 'start' })`);
-  await p.click("button.picture[data-index='1']");
-  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens again");
-  const again = await p.eval("document.querySelector('.viewer img').src");
-  hub.stdin.write("session w2:p2 s21\n");
-  check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(again)})`, 8000) === true,
-    "pictures: another session in the pane closes the viewer and lets the full picture go");
   await p.close();
   pages.splice(pages.indexOf(p), 1);
   check(p.errors.length === 0, `pictures: no errors or CSP violations (${p.errors.join(" | ")})`);
