@@ -36,6 +36,10 @@ struct RemoteAccessSection: View {
                     Text("Devices")
                     Text(hub.deviceList.isEmpty ? "None paired." : "\(hub.deviceList.count) paired, \(hub.deviceList.filter { $0.device.level == .input }.count) with input.")
                 }
+                Toggle(isOn: $hub.pictures) {
+                    Text("Show pictures on remote devices")
+                    Text("Phones load each picture from this Mac when it scrolls into view. Nothing is stored on the phone.")
+                }
                 LabeledContent {
                     Button("Notifications…") { showPushes = true }
                 } label: {

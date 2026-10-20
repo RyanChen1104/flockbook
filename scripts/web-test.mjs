@@ -1451,6 +1451,105 @@ async function fakeRun() {
   await p.eval(`delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))`);
   check(await p.until(atEnd, 2000) === true, `newest: back from the background -> at the bottom (gap ${await p.eval(bottomGap)})`);
 
+  await pictures();
+
   for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
+}
+
+/** Pictures (remote-protocol.md 3.4): each keeps its place, is asked for only near the view, stays in memory only, and
+ *  the full picture comes on a tap. */
+async function pictures() {
+  const p = await page(await context());
+  pages.push(p);
+  await p.onEveryLoad(`{ window.__pics = []; const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (m.type === "picture") window.__pics.push(m); } catch {} return send.call(this, d); };
+    const make = URL.createObjectURL, revoke = URL.revokeObjectURL; window.__urls = []; window.__revoked = [];
+    URL.createObjectURL = (b) => { const u = make(b); window.__urls.push(u); return u; };
+    URL.revokeObjectURL = (u) => { window.__revoked.push(u); revoke(u); };
+    const IO = IntersectionObserver; window.IntersectionObserver = class extends IO { constructor(cb, o) { super(cb, o); this.__cb = cb; } };
+    window.__observed = new Set(); const watch = IO.prototype.observe, unwatch = IO.prototype.unobserve;
+    IO.prototype.observe = function (t) { if (t.matches?.("button.picture")) { window.__observed.add(t); window.__pictureIO = this; } return watch.call(this, t); };
+    IntersectionObserver.prototype.unobserve = function (t) { window.__observed.delete(t); return unwatch.call(this, t); }; }`);
+  hub.stdin.write("pictures w2:p2 s20\n");
+  await p.goto(origin + "/");
+  await p.eval("localStorage.setItem('flockbook.token', 'input-token')");
+  await p.reload();
+  await p.until("!!document.querySelector('.list')", 8000);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  const boxes = "document.querySelectorAll('button.picture')";
+  check(await p.until(`${boxes}.length === 3 && document.body.innerText.includes('Line 40.')`, 8000) === true,
+    `pictures: three picture boxes in the conversation (${await p.eval(`${boxes}.length`)}: ${await p.eval("document.body.innerText.slice(0, 160)")})`);
+  // Each box has the picture's shape before anything loads (120x80, 1600x1200 in the bubble; 900x600 under the tool group).
+  const shapes = await p.eval(`[...${boxes}].map((b) => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })`);
+  const ratio = ([w, h], want) => h > 0 && Math.abs(w / h - want) < 0.03;
+  check(ratio(shapes[0], 1.5) && shapes[0][0] === 120 && ratio(shapes[1], 4 / 3) && shapes[1][0] > 200 && ratio(shapes[2], 1.5) && shapes[2][0] > 300,
+    `pictures: each box keeps the picture's place (${JSON.stringify(shapes)})`);
+  check(await p.eval(noScroll), "pictures: no sideways scroll");
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval("window.__pics.length") === 0, `pictures: none asked for while far above the view (${await p.eval("window.__pics.length")})`);
+  // Scrolled into view: each is asked for once as a preview and shows from memory.
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[0].scrollIntoView({ block: 'start' })`);
+  const shown = "[...document.querySelectorAll('button.picture img')].filter((i) => i.src.startsWith('blob:') && i.complete && i.naturalWidth > 0).length";
+  check(await p.until(`${shown} === 3`, 8000) === true, `pictures: shown when scrolled into view (${await p.eval(shown)})`);
+  const asked = await p.eval("window.__pics");
+  check(asked.length === 3 && asked.every((m) => m.full === false && m.pane === "w2:p2"), `pictures: three preview requests (${JSON.stringify(asked)})`);
+  check(await p.eval("document.querySelectorAll('button.picture img')[1].naturalWidth") === 1024, "pictures: the preview is at most 1024 px");
+  check(await p.eval("caches.keys().then((k) => k.length)") === 0 && await p.eval("Object.keys(localStorage).join()") === "flockbook.token",
+    "pictures: nothing in a cache or in storage");
+  // Stills at pixel ratio 2: at 3 the headless shell's screenshot never returns with both large pictures in view.
+  if (shots) await p.scale(2);
+  await p.shot("pictures");
+  await p.shot("pictures", true);
+  // A tap opens the full picture over the page; closing lets it go.
+  await p.click("button.picture[data-index='1']");
+  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: a tap opens the full picture");
+  check(await p.eval("window.__pics.some((m) => m.full === true && m.index === 1)") === true, "pictures: the full picture is asked for on the tap only");
+  check(await p.eval(noScroll), "pictures: viewer, no sideways scroll");
+  await p.shot("picture-viewer");
+  await p.shot("picture-viewer", true);
+  if (shots) await p.scale(3);
+  const full = await p.eval("document.querySelector('.viewer img').src");
+  await p.click(".viewer-close");
+  check(await p.eval(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(full)})`) === true, "pictures: closing the viewer lets the full picture go");
+  // Scrolled far away: the previews are let go.
+  const previews = await p.eval("[...document.querySelectorAll('button.picture img')].map((i) => i.src)");
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 })); window.scrollTo(0, document.documentElement.scrollHeight)");
+  check(await p.until(`!document.querySelector('button.picture img') && ${JSON.stringify(previews)}.every((u) => window.__revoked.includes(u))`, 4000) === true,
+    "pictures: let go when they leave the view");
+  // Another pane while they are far from the view: the boxes that left the page are not watched any more.
+  await p.eval(`window.__oldBox = ${boxes}[0]`);
+  await p.eval("location.hash = '#pane=w2%3Ap1'");
+  await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w2:p1'", 8000);
+  const stale = "[...window.__observed].filter((b) => !b.isConnected).length";
+  check(await p.until(`${stale} === 0`, 2000) === true, `pictures: boxes out of the page are not watched (${await p.eval(stale)})`);
+  // An entry the observer had queued before the box left comes late: the box is not asked for or kept.
+  const before = await p.eval("window.__pics.length");
+  await p.eval("window.__pictureIO.__cb([{ target: window.__oldBox, isIntersecting: true }], window.__pictureIO)");
+  await new Promise((r) => setTimeout(r, 500));
+  check(await p.eval("window.__pics.length") === before, `pictures: a late entry for a box out of the page -> not asked for (${before} -> ${await p.eval("window.__pics.length")})`);
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  check(await p.until(`${boxes}.length === 3`, 8000) === true, "pictures: back to the pane");
+  // The pane gets another session while the full picture is open: the viewer closes and lets it go.
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[1].scrollIntoView({ block: 'start' })`);
+  await p.click("button.picture[data-index='1']");
+  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens again");
+  const again = await p.eval("document.querySelector('.viewer img').src");
+  hub.stdin.write("session w2:p2 s21\n");
+  check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(again)})`, 8000) === true,
+    "pictures: another session in the pane closes the viewer and lets the full picture go");
+  // The agent's session ends while the full picture is open (no new conversation comes): the viewer closes and lets it go.
+  hub.stdin.write("session w2:p2 s20\n");   // the pictures again (a new conversation and snapshot)
+  check(await p.until(`${boxes}.length === 3`, 8000) === true, "pictures: back to the session with pictures");
+  await p.eval(`window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })); ${boxes}[1].scrollIntoView({ block: 'start' })`);
+  await p.click("button.picture[data-index='1']");
+  check(await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true, "pictures: the viewer opens");
+  const ended = await p.eval("document.querySelector('.viewer img').src");
+  hub.stdin.write("nosession w2:p2\n");
+  check(await p.until(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(ended)})`, 8000) === true,
+    "pictures: the session ends -> the viewer closes and lets the full picture go");
+  await p.close();
+  pages.splice(pages.indexOf(p), 1);
+  check(p.errors.length === 0, `pictures: no errors or CSP violations (${p.errors.join(" | ")})`);
+  hub.stdin.write("session w2:p2 s4\n");
 }
 

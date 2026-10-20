@@ -1,6 +1,6 @@
 // Flockbook PWA: pair, agent list (Needs you first), conversation, approval and question cards, composer (input only).
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
-import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
+import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token";
@@ -130,10 +130,9 @@ function ack(id: string): void {
   void request({ type: "pulledAck", pulled: id });
 }
 
-function request(msg: Record<string, unknown>): Promise<{ ok: boolean; code?: string; message?: string }> {
+function request(msg: Record<string, unknown>, id = `c${nextId++}`): Promise<{ ok: boolean; code?: string; message?: string }> {
   return new Promise((resolve) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) { resolve({ ok: false, code: "failed", message: "Not connected." }); return; }
-    const id = `c${nextId++}`;
     waiting.set(id, (ok, code, message) => resolve({ ok, code, message }));
     ws.send(JSON.stringify({ v: 1, id, ...msg }));
   });
@@ -149,6 +148,8 @@ async function hello(): Promise<void> {
     return;
   }
   if (r.ok && state.watching) await request({ type: "watch", pane: state.watching });
+  // Pictures in view that did not come while the connection was down.
+  if (r.ok) for (const b of near) showPicture(b);
 }
 
 function view(pane: string): PaneView {
@@ -220,6 +221,14 @@ function receive(m: HubMessage): void {
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
       break;
+    case "picturePart": {
+      const p = pictureParts.get(m.re);
+      if (!p || m.part < 0 || m.part >= m.parts || (p.parts.length && p.parts.length !== m.parts)) return;
+      if (!p.parts.length) { p.parts = new Array<string>(m.parts); p.mime = m.mime; }
+      if (p.parts[m.part] === undefined) p.got++;
+      p.parts[m.part] = m.data;
+      return;
+    }
     case "pulled": {
       if (m.id && state.placed.has(m.id)) { ack(m.id); break; }
       const f = state.fills[m.pane] ??= [];
@@ -574,8 +583,120 @@ function render(): void {
       reader.from += moved; reader.last += moved; reader.endTop += moved;
     }
   }
+  dropPictures();
   toBottom();
 }
+
+// --- Pictures (remote-protocol.md 3.4). The hub sends none with the conversation: a picture is asked for when it comes
+// near the view and let go when it leaves. Kept in memory only (blob URLs), never in a cache or storage.
+const PICTURE_HEIGHT = 420;
+/** Parts of the `picture` requests on the way, by request id. */
+const pictureParts = new Map<string, { parts: string[]; got: number; mime: string }>();
+function requestPicture(pane: string, item: string, index: number, full: boolean): Promise<Blob | null> {
+  const id = `c${nextId++}`;
+  pictureParts.set(id, { parts: [], got: 0, mime: "" });
+  return request({ type: "picture", pane, item, index, full }, id).then((r) => {
+    const p = pictureParts.get(id);
+    pictureParts.delete(id);
+    if (!r.ok || !p || !p.parts.length || p.got !== p.parts.length) return null;
+    try { return new Blob(p.parts.map((x) => Uint8Array.from(atob(x), (c) => c.charCodeAt(0))), { type: p.mime }); } catch { return null; }
+  });
+}
+
+/** Picture boxes watched for the view, those near it, and the blob URL each one shows. */
+const observed = new Set<HTMLElement>();
+const near = new Set<HTMLElement>();
+const shownURLs = new Map<HTMLElement, string>();
+const seen = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const b = e.target as HTMLElement;
+    if (!observed.has(b) || !b.isConnected) continue;   // an entry queued before the box left the page
+    if (e.isIntersecting) { near.add(b); showPicture(b); } else { near.delete(b); hidePicture(b); }
+  }
+}, { rootMargin: "600px 0px" });
+function observePicture(b: HTMLElement): void { observed.add(b); seen.observe(b); }
+
+/** The pictures of an item: each keeps its place (its size in the log, at most the column wide and `PICTURE_HEIGHT` high). */
+function picturesView(pane: string, item: string, list: Picture[]): HTMLElement {
+  return h("div", { class: "pictures" }, ...list.map((p, index) => {
+    const w = Math.max(1, p.width), ht = Math.max(1, p.height);
+    const b = h("button", { type: "button", class: "picture", "aria-label": `Picture ${index + 1}, open`, onclick: () => openViewer(b, w, ht) });
+    Object.assign(b.dataset, { pane, item, index: String(index) });
+    // CSSOM, not a style attribute (the page's CSP has no inline styles).
+    b.style.aspectRatio = `${w} / ${ht}`;
+    b.style.width = `min(${w}px, 100%, ${Math.round((PICTURE_HEIGHT * w) / ht)}px)`;
+    observePicture(b);
+    return b;
+  }));
+}
+
+function showPicture(b: HTMLElement): void {
+  if (shownURLs.has(b) || b.dataset.loading) return;
+  b.dataset.loading = "1";
+  void requestPicture(b.dataset.pane!, b.dataset.item!, Number(b.dataset.index), false).then((blob) => {
+    delete b.dataset.loading;
+    // Left the view (or the page) meanwhile: not shown; it is asked for again when it comes back.
+    if (!blob || !near.has(b) || !b.isConnected || shownURLs.has(b)) return;
+    const url = URL.createObjectURL(blob);
+    shownURLs.set(b, url);
+    b.replaceChildren(h("img", { src: url, alt: "" }));
+  });
+}
+function hidePicture(b: HTMLElement): void {
+  const url = shownURLs.get(b);
+  if (url === undefined) return;
+  shownURLs.delete(b);
+  b.replaceChildren();
+  URL.revokeObjectURL(url);
+}
+/** After a render: pictures out of the page let go of their URLs and are not watched (a row put back watches them again).
+ *  The viewer closes when its picture left the conversation: another pane or session (in the conversation or in the
+ *  snapshot: an ended session or a removed pane sends no new conversation), or the item without it. */
+function dropPictures(): void {
+  for (const b of observed) if (!b.isConnected) { observed.delete(b); near.delete(b); hidePicture(b); seen.unobserve(b); }
+  if (!viewer) return;
+  const v = view(viewer.pane), it = v.items.find((i) => i.id === viewer!.item);
+  const images = it && "images" in it ? it.images : undefined;
+  const now = find(viewer.pane)?.p.agent?.session;
+  if (state.watching !== viewer.pane || v.session !== viewer.session || now !== viewer.session || (images?.length ?? 0) <= viewer.index) closeViewer();
+}
+
+/** The full picture over the page. It shows the preview until the full one comes; tap it for its own size. */
+let viewer: { node: HTMLElement; url: string | null; from: HTMLElement; pane: string; session?: string; item: string; index: number } | null = null;
+function openViewer(b: HTMLElement, w: number, ht: number): void {
+  closeViewer();
+  const img = h("img", { alt: "", width: w, height: ht, onclick: () => img.classList.toggle("zoomed") });
+  const preview = shownURLs.get(b);
+  if (preview) img.src = preview;
+  const status = h("p", { class: "viewer-status", role: "status" }, "Loading…");
+  const node = h("div", { class: "viewer", role: "dialog", "aria-modal": "true", "aria-label": "Picture" },
+    h("button", { type: "button", class: "viewer-close glass-float", onclick: closeViewer }, "Close"), status, img);
+  const pane = b.dataset.pane!, item = b.dataset.item!, index = Number(b.dataset.index);
+  const mine = { node, url: null as string | null, from: b, pane, session: view(pane).session, item, index };
+  viewer = mine;
+  document.body.append(node);
+  (node.querySelector(".viewer-close") as HTMLElement).focus();
+  void requestPicture(pane, item, index, true).then((blob) => {
+    if (viewer !== mine) return;
+    if (!blob) { status.textContent = preview ? "Could not load the full picture." : "Could not load the picture."; return; }
+    mine.url = URL.createObjectURL(blob);
+    img.src = mine.url;
+    status.remove();
+  });
+}
+function closeViewer(): void {
+  if (!viewer) return;
+  viewer.node.remove();
+  if (viewer.url) URL.revokeObjectURL(viewer.url);
+  // Back to the box it opened from, or the box that shows the same picture now (rows are built again on changes).
+  const v = viewer;
+  const from = v.from.isConnected ? v.from
+    : [...document.querySelectorAll<HTMLElement>("button.picture")].find((b) => b.dataset.pane === v.pane && b.dataset.item === v.item && b.dataset.index === String(v.index));
+  from?.focus({ preventScroll: true });
+  viewer = null;
+}
+addEventListener("keydown", (e) => { if (e.key === "Escape" && viewer) closeViewer(); });
+addEventListener("hashchange", closeViewer);
 
 // --- Older rows. The reader scrolling near the top loads them; "Load earlier" stays for a keyboard or screen reader,
 // and to try again after a failure. Auto-loading stops at `AUTO_ITEMS` rows in a pane (the button still loads more).
@@ -667,8 +788,10 @@ function rowsFor(pane: string, list: Item[]): HTMLElement[] {
   return list.map((it) => {
     const item = JSON.stringify(it);
     const had = old.get(it.id);
-    const node = had && had.item === item ? had.node : itemView(it);
+    const node = had && had.item === item ? had.node : itemView(it, pane);
     node.dataset.id = it.id;
+    // A kept row that was out of the page (another screen) watches its pictures again.
+    for (const b of node.querySelectorAll<HTMLElement>("button.picture")) observePicture(b);
     rowNodes.set(it.id, { item, node });
     return node;
   });
@@ -839,16 +962,18 @@ function conversationScreen(pane: string): HTMLElement {
   return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, composer(pane, !!card, where?.p.agent?.name));
 }
 
-function itemView(it: Item): HTMLElement {
+function itemView(it: Item, pane: string): HTMLElement {
+  const images = "images" in it ? it.images : undefined;
+  const pictures = images?.length ? picturesView(pane, it.id, images) : null;
   switch (it.kind) {
-    case "user": return h("div", { class: "msg user" }, h("p", {}, it.text));
+    case "user": return h("div", { class: "msg user" }, it.text ? h("p", {}, it.text) : null, pictures);
     case "assistant": return h("div", { class: "msg assistant" }, markdown(it.text));
     case "status": return h("p", { class: "status-line" }, it.text);
     case "tools":
       return h("div", { class: "tools" }, ...it.tools.map((c) => h("details", { class: "chip" },
         h("summary", {}, c.text),
         h("ul", {}, ...c.calls.map((call) => h("li", { class: call.error ? "error" : call.done ? "" : "running" },
-          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary)))))));
+          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary)))))), pictures);
     case "approval": {
       const a = it.approval;
       return h("div", { class: `logged ${a.state}` }, h("span", { class: "muted" }, a.state === "pending" ? "Asks: " : "Asked: "), a.title, " ", h("code", {}, a.command));

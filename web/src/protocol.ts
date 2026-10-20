@@ -20,9 +20,12 @@ export interface QuestionRequest {
 export interface ToolCall { id: string; tool: string; summary: string; done: boolean; error: boolean }
 export interface ToolChip { symbol: string; text: string; calls: ToolCall[] }
 
+/** A picture of an item: its size in the log. The client asks for it with `picture` when it comes into view. */
+export interface Picture { width: number; height: number }
+
 export type Item =
-  | { id: string; time?: string; kind: "user" | "assistant" | "status"; text: string }
-  | { id: string; time?: string; kind: "tools"; tools: ToolChip[] }
+  | { id: string; time?: string; kind: "user" | "assistant" | "status"; text: string; images?: Picture[] }
+  | { id: string; time?: string; kind: "tools"; tools: ToolChip[]; images?: Picture[] }
   | { id: string; time?: string; kind: "approval"; approval: Approval }
   | { id: string; time?: string; kind: "question"; question: QuestionRequest };
 
@@ -42,6 +45,9 @@ export type HubMessage =
   /** `id`: the hub keeps the text until `pulledAck` with it, and sends it again after each hello. `note`: the pull
    *  stopped before the agent's input box was empty (why). */
   | { type: "pulled"; id?: string; pane: string; text: string; interrupted: boolean; note?: string }
+  /** One part of a picture for the `picture` message `re`; all parts come before its reply. */
+  | { type: "picturePart"; re: string; pane: string; item: string; index: number; full: boolean; part: number; parts: number;
+      mime: string; width: number; height: number; data: string }
   | { type: "pong" };
 
 /** The agent's own queue: messages typed while it works, not taken yet. A null item: its text is not readable yet. */

@@ -48,6 +48,10 @@ import CryptoKit
     func pushUnsubscribe(device: String, endpoint: String)
     /// The device has a subscription.
     func pushSubscribed(device: String) -> Bool
+    /// "Show pictures on remote devices": items name their pictures, and a watching device may ask for them.
+    var remotePictures: Bool { get }
+    /// The log file of an agent session, where its pictures are read back (`LogImage.read`).
+    func logURL(session: String) -> URL?
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -125,13 +129,20 @@ extension Hub {
     /// Uploads held per connection.
     public static let maxHeld = 4
 
-    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "", uploads: HubUploadLimiter? = nil) {
+    /// Where pictures for devices are encoded (shared by the hub's connections).
+    private let pictureSlots: HubWorkSlots
+
+    public init(backend: HubBackend, devices: HubDeviceStore, pairing: HubPairing? = nil, source: String = "", uploads: HubUploadLimiter? = nil,
+                pictureSlots: HubWorkSlots = .images) {
         self.backend = backend; self.devices = devices; self.pairing = pairing; self.source = source
         self.uploads = uploads ?? HubUploadLimiter()
+        self.pictureSlots = pictureSlots
     }
 
     /// Test hook: runs after an image is decoded, before it is held.
     var afterDecode: (@MainActor () -> Void)?
+    /// Test hook: runs after a picture for a device is encoded, before it is checked again and sent.
+    var afterEncode: (@MainActor () async -> Void)?
     /// The level at hello, and the device whose connection slot this connection holds.
     private var helloLevel: HubLevel?
     private var slot: String?
@@ -310,6 +321,9 @@ extension Hub {
         case .pulledAck(let pulled):
             _ = backend.pulledTexts.take(id: pulled, device: device.id)
             return [ok(m.id)]
+        case .picture(let id, let item, let index, let full):
+            // Any level: a picture is part of the conversation the device already reads.
+            return await picture(m.id, device: device, pane: id, item: item, index: index, full: full)
         case .approve(let id, let prompt, let allow):
             guard canInput else { return [readOnly(m.id)] }
             guard let p = pane(id) else { return [fail(m.id, .notFound, "No pane \(id).")] }
@@ -440,8 +454,85 @@ extension Hub {
         }
     }
 
+    private enum Picture: Sendable { case gone, undecodable, encoded(HubImage.Encoded) }
+
+    /// One picture of a watched pane's conversation (remote-protocol.md 3.4), read back from the log (the ref's digest
+    /// checked) and re-encoded off the main thread. At most `HubUploadLimiter.maxPictureJobs` per device at once; not
+    /// encoded when no longer wanted once a slot is free. Checked again after encoding and before each part (`vet`).
+    private func picture(_ re: String, device: HubDevice, pane id: String, item: String, index: Int, full: Bool) async -> [HubMessage] {
+        let off = fail(re, .failed, "Pictures are off on this hub.")
+        guard backend.remotePictures else { return [off] }
+        guard watched.contains(id) else { return [fail(re, .badRequest, "Watch the pane first.")] }
+        guard let session = pane(id)?.agent?.sessionId else { return [fail(re, .notFound, "No conversation in pane \(id).")] }
+        guard let found = backend.conversation(session: session).first(where: { $0.id == item }) else { return [fail(re, .notFound, "No item \(item).")] }
+        let refs = Hub.pictures(of: found)
+        guard refs.indices.contains(index) else { return [fail(re, .notFound, "No picture \(index) in item \(item).")] }
+        let gone = fail(re, .notFound, "The picture is no longer in the log.")
+        guard let url = backend.logURL(session: session) else { return [gone] }
+        let ref = refs[index]
+        // Taken until the job ends, also when the connection ends meanwhile.
+        guard uploads.beginPicture(device: device.id) else { return [fail(re, .rateLimited, "Too many pictures at once. Try again soon.")] }
+        defer { uploads.endPicture(device: device.id) }
+        let result = await pictureSlots.run(if: { !self.closed && self.pictureChanged(re, device: device.id, pane: id, session: session) == nil }) { () -> Picture in
+            guard let data = LogImage.read(ref, from: url) else { return .gone }
+            guard let e = full ? HubImage.full(data) : HubImage.preview(data) else { return .undecodable }
+            return .encoded(e)
+        }
+        await afterEncode?()
+        guard !closed else { return [] }
+        if let why = pictureChanged(re, device: device.id, pane: id, session: session) { return [why] }
+        guard let result else { return [fail(re, .stale, "The pane changed. No picture was sent.")] }
+        switch result {
+        case .gone: return [gone]
+        case .undecodable: return [fail(re, .failed, "The picture could not be read.")]
+        case .encoded(let e):
+            let parts = HubImage.parts(e.data)
+            sending[re] = (device.id, id, session)
+            return parts.enumerated().map { i, d in
+                .picturePart(HubPicturePart(re: re, pane: id, item: item, index: index, full: full, part: i, parts: parts.count, mime: "image/jpeg",
+                                            width: e.width, height: e.height, data: d.base64EncodedString()))
+            } + [ok(re)]
+        }
+    }
+
+    /// The reply when a picture is no longer wanted: the device removed (and the connection closed), the setting off,
+    /// the pane not watched or showing another session. Nil while it is.
+    private func pictureChanged(_ re: String, device: String, pane id: String, session: String) -> HubMessage? {
+        guard self.device?.id == device else { closed = true; return fail(re, .unauthorized, "This device was removed.") }
+        guard backend.remotePictures else { return fail(re, .failed, "Pictures are off on this hub.") }
+        guard watched.contains(id), pane(id)?.agent?.sessionId == session else { return fail(re, .stale, "The pane changed. No picture was sent.") }
+        return nil
+    }
+
+    /// Pictures whose parts are on their way, by request (device, pane, session); requests stopped part way, by the
+    /// reply that replaces their `ok`.
+    private var sending: [String: (device: String, pane: String, session: String)] = [:]
+    private var stopped: [String: HubMessage] = [:]
+
+    /// A message about to go out, checked again (the server sends a step's messages one by one): a picture part no
+    /// longer wanted is not sent, nor the rest of its picture, and its reply says why.
+    public func vet(_ m: HubMessage) -> HubMessage? {
+        switch m {
+        case .picturePart(let p):
+            if closed || stopped[p.re] != nil { return nil }
+            guard let s = sending[p.re] else { return m }
+            if let why = pictureChanged(p.re, device: s.device, pane: s.pane, session: s.session) {
+                sending[p.re] = nil
+                stopped[p.re] = why
+                return nil
+            }
+            return m
+        case .reply(let r):
+            sending[r.re] = nil
+            return stopped.removeValue(forKey: r.re) ?? m
+        default: return m
+        }
+    }
+
     // MARK: - Helpers
 
+    /// A conversation item as devices get it: its pictures named only while the setting is on (a change sends the items again).
+    private func hubItem(_ item: ConversationItem) -> HubItem { HubItem(item, pictures: backend.remotePictures) }
     private func snapshot() -> [HubWorkspace] { backend.workspaces.map(HubWorkspace.init) }
     private func pane(_ id: String) -> Pane? { backend.workspaces.lazy.flatMap(\.tabs).flatMap(\.panes).first { $0.id == id } }
     private func ok(_ re: String) -> HubMessage { .reply(HubReply(re: re, ok: true)) }
@@ -506,7 +597,7 @@ extension Hub {
         let items = backend.conversation(session: session)
         let old = force ? nil : sent[p.id]
         if let old, let first = old.first, let start = items.firstIndex(where: { $0.id == first.id }) {
-            let cur = items[start...].map(HubItem.init)
+            let cur = items[start...].map(hubItem)
             if cur.count >= old.count, zip(old, cur).allSatisfy({ $0.id == $1.id }) {
                 sent[p.id] = cur
                 let delta = zip(old, cur).filter { $0 != $1 }.map(\.1) + cur[old.count...]
@@ -516,7 +607,7 @@ extension Hub {
             }
         }
         if let old, old.isEmpty, items.isEmpty { return nil }
-        let tail = Array(items.suffix(Self.window).map(HubItem.init))
+        let tail = Array(items.suffix(Self.window).map(hubItem))
         if let old, old == tail { return nil }
         sent[p.id] = tail
         return .conversation(HubConversation(pane: p.id, session: session, mode: .replace, items: tail,
@@ -536,7 +627,7 @@ extension Hub {
             idx = items.firstIndex { $0.id == before } ?? idx
         }
         let lo = max(0, idx - Self.window)
-        let older = items[lo..<idx].map(HubItem.init)
+        let older = items[lo..<idx].map(hubItem)
         if let held = sent[p.id], held.first?.id == before { sent[p.id] = older + held }
         return [.conversation(HubConversation(pane: p.id, session: session, mode: .prepend, items: older, hasEarlier: lo > 0 || more)), ok(re)]
     }
