@@ -72,7 +72,7 @@ final class PictureCache: @unchecked Sendable {
 enum PictureFiles {
     static let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("flockbook-pictures", isDirectory: true)
 
-    static func write(_ data: Data, format: LogImage.Format) -> URL? {
+    static func write(_ data: Data, format: LogImage.Format, in dir: URL = dir) -> URL? {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -84,10 +84,35 @@ enum PictureFiles {
         return fm.createFile(atPath: file.path, contents: data, attributes: [.posixPermissions: 0o600]) ? file : nil
     }
 
-    static func remove(_ url: URL) {
+    static func remove(_ url: URL, in dir: URL = dir) {
         guard url.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL else { return }
         try? FileManager.default.removeItem(at: url)
     }
+}
+
+/// At most `limit` picture reads at a time (each reads and parses its whole log line).
+actor PictureGate {
+    static let shared = PictureGate(limit: 2)
+    let limit: Int
+    init(limit: Int) { self.limit = limit }
+    func run<T: Sendable>(_ work: @Sendable () async -> T) async -> T { await work() }
+}
+
+/// The Quick Look copy of one picture.
+@MainActor @Observable final class PreviewOpener {
+    let dir: URL
+    var preview: URL? { didSet { if let oldValue, oldValue != preview { PictureFiles.remove(oldValue, in: dir) } } }
+    init(dir: URL = PictureFiles.dir) { self.dir = dir }
+
+    func open(_ ref: LogImage.Ref, from url: URL) {
+        let dir = dir
+        Task {
+            let data = await Task.detached(priority: .userInitiated) { LogImage.read(ref, from: url) }.value
+            if let data, let file = PictureFiles.write(data, format: ref.format, in: dir) { preview = file }
+        }
+    }
+
+    func close() { preview = nil }
 }
 
 /// One picture at a fixed size: a placeholder until the thumbnail loads. Click: Quick Look.
@@ -100,12 +125,15 @@ struct LogPicture: View {
     @State private var preview: URL?
     @State private var hover = false
 
-    private var maxPixel: Int {
+    /// Pixels on the long side for a picture drawn at `size` points.
+    static func maxPixel(_ size: CGSize, scale: CGFloat) -> Int {
         let side: CGFloat = Swift.max(size.width, size.height) * Swift.max(scale, 1)
         return Int(side.rounded(.up))
     }
+    private var maxPixel: Int { Self.maxPixel(size, scale: scale) }
 
-    private var task: String { "\(url?.path ?? "")|\(ref.offset ?? 0)|\(ref.index)|\(maxPixel)" }
+    static func taskID(url: URL?, ref: LogImage.Ref, maxPixel: Int) -> String { "\(url?.path ?? "")|\(ref.offset ?? 0)|\(ref.index)|\(maxPixel)" }
+    private var task: String { Self.taskID(url: url, ref: ref, maxPixel: maxPixel) }
 
     var body: some View {
         picture
@@ -157,6 +185,11 @@ struct LogPicture: View {
 /// The pictures of one message or tool group. A tool's lone picture fits `single` (its width cap); several, or the
 /// owner's pictures, are a strip of thumbnails.
 struct PictureStrip: View {
+    /// The most pictures one strip draws; the rest are counted on a "+N" tile.
+    static let maxShown = 8
+    static func split(_ refs: [LogImage.Ref]) -> (shown: [LogImage.Ref], more: Int) {
+        (refs.filter { $0.width > 0 && $0.height > 0 }, 0)
+    }
     let refs: [LogImage.Ref]
     var single: CGFloat? = nil
     var maxWidth: CGFloat = 480

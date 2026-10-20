@@ -7,16 +7,21 @@ import Foundation
 public enum LogImage {
     public enum Format: String, Sendable, Hashable { case png, jpeg, webp, gif }
 
-    /// Where a picture is: the nth picture (`index`, log order) of the line at byte `offset`. Size from the file header.
+    /// Where a picture is: the nth picture (`index`, log order) of the line at byte `offset`. Size from the file header;
+    /// `digest` is the `fingerprint` of its base64, so a rewritten log with another picture of the same size reads nothing.
     public struct Ref: Sendable, Hashable {
         public var format: Format
         public var width: Int, height: Int
         public var offset: UInt64?
         public var index: Int
-        public init(format: Format, width: Int, height: Int, offset: UInt64?, index: Int) {
-            self.format = format; self.width = width; self.height = height; self.offset = offset; self.index = index
+        public var digest: UInt64
+        public init(format: Format, width: Int, height: Int, offset: UInt64?, index: Int, digest: UInt64) {
+            self.format = format; self.width = width; self.height = height; self.offset = offset; self.index = index; self.digest = digest
         }
     }
+
+    /// A picture's identity: the first 8 bytes of the SHA-256 of its base64 text.
+    public static func fingerprint(base64: String) -> UInt64 { 0 }
 
     /// Longest line `read` takes (a tool output of several screenshots).
     static let maxLine = 64 * 1024 * 1024
@@ -128,7 +133,7 @@ public enum LogImage {
     /// Refs for the pictures whose header can be read; `index` still counts the others, as `data` does.
     static func refs(_ found: [Found], offset: UInt64?) -> [(call: String?, ref: Ref)] {
         found.enumerated().compactMap { i, f in
-            header(base64: f.base64).map { (f.call, Ref(format: $0.format, width: $0.width, height: $0.height, offset: offset, index: i)) }
+            header(base64: f.base64).map { (f.call, Ref(format: $0.format, width: $0.width, height: $0.height, offset: offset, index: i, digest: fingerprint(base64: f.base64))) }
         }
     }
 

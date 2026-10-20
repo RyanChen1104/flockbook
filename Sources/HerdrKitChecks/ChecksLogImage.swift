@@ -165,11 +165,30 @@ private func json(_ o: Any) -> String { String(decoding: try! JSONSerialization.
         let file = dir.appendingPathComponent("s.jsonl")
         let head = #"{"type":"user","uuid":"h","message":{"content":"hi"}}"#
         try Data((head + "\n" + line + "\n").utf8).write(to: file)
-        let ref = LogImage.Ref(format: .jpeg, width: 640, height: 480, offset: UInt64(head.utf8.count + 1), index: 1)
+        let ref = LogImage.Ref(format: .jpeg, width: 640, height: 480, offset: UInt64(head.utf8.count + 1), index: 1,
+                               digest: LogImage.fingerprint(base64: shotB))
         check(LogImage.read(ref, from: file) == jpeg(640, 480), "image read back: from the log file at the line's offset")
-        check(LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: 3, index: 0), from: file) == nil
-              && LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: nil, index: 0), from: file) == nil,
+        check(LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: 3, index: 0, digest: 0), from: file) == nil
+              && LogImage.read(LogImage.Ref(format: .png, width: 1, height: 1, offset: nil, index: 0, digest: 0), from: file) == nil,
               "image read back: an offset mid-line or none reads nothing")
+
+        // The ref carries the picture's fingerprint: a rewritten log with another picture of the same format and size at
+        // the same line and index reads nothing.
+        var pf = ConversationParser()
+        pf.feed(line: line, offset: 0)
+        let fref = pf.items().flatMap(\.images).first
+        let otherA = (png(1440, 900) + Data([1, 2, 3])).base64EncodedString()
+        check(fref?.digest == LogImage.fingerprint(base64: shotA) && fref?.digest != 0
+              && LogImage.fingerprint(base64: shotA) != LogImage.fingerprint(base64: otherA)
+              && LogImage.fingerprint(base64: shotA) == LogImage.fingerprint(base64: String(shotA)),
+              "image fingerprint: on the ref, differs for other bytes \(String(describing: fref))")
+        let refA = LogImage.Ref(format: .png, width: 1440, height: 900, offset: UInt64(head.utf8.count + 1), index: 0,
+                                digest: LogImage.fingerprint(base64: shotA))
+        let before = LogImage.read(refA, from: file)
+        try Data((head + "\n" + line.replacingOccurrences(of: shotA, with: otherA) + "\n").utf8).write(to: file)
+        check(before == png(1440, 900) && LogImage.read(refA, from: file) == nil,
+              "image fingerprint: a same-size picture rewritten at the same place reads nothing")
+        try Data((head + "\n" + line + "\n").utf8).write(to: file)
 
         // The tailer's refs read back from the file it found (the view gets the file from the store).
         let log = SessionLog(sessionId: file.path)

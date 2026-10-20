@@ -23,7 +23,7 @@ extension ContentTests {
         // Sizes: the bubble's thumbnails are at most 120 pt high, a lone tool picture at most 480 pt (or the column) wide,
         // and neither is drawn larger than its pixels.
         func s(_ c: CGSize) -> String { "\(Int(c.width))x\(Int(c.height))" }
-        func ref(_ w: Int, _ h: Int) -> LogImage.Ref { LogImage.Ref(format: .png, width: w, height: h, offset: 0, index: 0) }
+        func ref(_ w: Int, _ h: Int) -> LogImage.Ref { LogImage.Ref(format: .png, width: w, height: h, offset: 0, index: 0, digest: 0) }
         step("thumb 400x200 -> 240x120 (\(s(PictureLayout.thumb(ref(400, 200)))))", s(PictureLayout.thumb(ref(400, 200))) == "240x120")
         step("thumb 2880x1800 -> 192x120", s(PictureLayout.thumb(ref(2880, 1800))) == "192x120")
         step("thumb 100x50 stays 100x50", s(PictureLayout.thumb(ref(100, 50))) == "100x50")
@@ -76,8 +76,67 @@ extension ContentTests {
         let thumb = await PictureCache.shared.load(url: url, ref: userRef, maxPixel: 240)
         step("thumbnail decodes (\(String(describing: thumb?.size)))", thumb != nil)
         step("second ask is a cache hit", PictureCache.shared.cached(url: url, ref: userRef, maxPixel: 240) != nil)
-        let wrong = LogImage.Ref(format: .png, width: 9, height: 9, offset: userRef.offset, index: 0)
+        let wrong = LogImage.Ref(format: .png, width: 9, height: 9, offset: userRef.offset, index: 0, digest: userRef.digest)
         step("a stale ref loads nothing", await PictureCache.shared.load(url: url, ref: wrong, maxPixel: 240) == nil)
+        var otherDigest = userRef; otherDigest.digest &+= 1
+        step("the cache key has the fingerprint", PictureCache.shared.cached(url: url, ref: otherDigest, maxPixel: 240) == nil)
+        var otherSize = userRef; otherSize.width = 800; otherSize.height = 400
+        let ids = Set([userRef, otherSize, otherDigest].map { LogPicture.taskID(url: url, ref: $0, maxPixel: 240) })
+        step("the load's id changes with the ref's size and fingerprint (\(ids.count) of 3)", ids.count == 3)
+
+        // The same place in the log now holds another picture: the view shows the new one, not the old thumbnail.
+        let swapFile = dir.appendingPathComponent("swap.jsonl")
+        func one(_ d: Data) -> Data { Data((json(["type": "user", "uuid": "s", "message": ["role": "user", "content": [image(d)]]] as [String: Any]) + "\n").utf8) }
+        func pref(_ d: Data, _ w: Int, _ h: Int) -> LogImage.Ref {
+            LogImage.Ref(format: .png, width: w, height: h, offset: 0, index: 0, digest: LogImage.fingerprint(base64: d.base64EncodedString()))
+        }
+        let green = solid(800, 400, .green)
+        try? one(red).write(to: swapFile)
+        let box = RefBox(pref(red, 400, 200))
+        let (swapWin, _) = offscreen(SwapPicture(box: box).environment(\.logURL, swapFile), NSSize(width: 240, height: 120))
+        func centre(_ name: String) -> NSColor? {
+            let path = "\(Self.dir)/\(name).png"
+            capture(swapWin, to: path)
+            guard let rep = NSBitmapImageRep(data: (try? Data(contentsOf: URL(fileURLWithPath: path))) ?? Data()) else { return nil }
+            return rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+        }
+        try? await Task.sleep(for: .seconds(1))
+        let c1 = centre("pictures-swap-1")
+        try? one(green).write(to: swapFile)
+        box.ref = pref(green, 800, 400)
+        try? await Task.sleep(for: .seconds(1))
+        let c2 = centre("pictures-swap-2")
+        swapWin.orderOut(nil)
+        step("a new picture at the same place replaces the old thumbnail (red \(c1.map { Int($0.redComponent * 255) } ?? -1) -> green \(c2.map { Int($0.greenComponent * 255) } ?? -1))",
+             (c1?.redComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) > 0.6 && (c2?.redComponent ?? 1) < 0.3)
+
+        // Bounded work: a strip draws at most 8 pictures, at most 2 reads run at once, and a picture scrolled out of
+        // view lets its thumbnail go.
+        let many = Array(repeating: ref(100, 50), count: 30) + [ref(10, 0)]
+        let sp = PictureStrip.split(many)
+        step("a strip of 30 draws 8 and counts 22 (\(sp.shown.count), +\(sp.more))", sp.shown.count == 8 && sp.more == 22)
+        let gate = PictureGate(limit: 2), meter = ConcurrencyMeter()
+        await withTaskGroup(of: Void.self) { g in
+            for _ in 0..<10 { g.addTask { await gate.run { await meter.enter(); try? await Task.sleep(for: .milliseconds(40)); await meter.leave() } } }
+        }
+        let (peak, done) = await meter.result()
+        step("at most 2 reads at once (\(peak) of 10, \(done) done)", peak <= 2 && done == 10)
+        PictureCache.shared.removeAll()
+        let gref = pref(green, 800, 400)
+        let (lazyWin, lazyView) = offscreen(LazyPictures(ref: gref).environment(\.logURL, swapFile), NSSize(width: 300, height: 300))
+        try? await Task.sleep(for: .seconds(1))
+        weak var held = PictureCache.shared.cached(url: swapFile, ref: gref,
+                                                   maxPixel: LogPicture.maxPixel(PictureLayout.thumb(gref), scale: lazyWin.backingScaleFactor))
+        let loadedLazy = held != nil
+        PictureCache.shared.removeAll()
+        func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
+        if let sv = scrollViews(lazyView).first, let doc = sv.documentView {
+            doc.scroll(NSPoint(x: 0, y: doc.isFlipped ? doc.bounds.height - 300 : 0))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        let releasedLazy = held == nil
+        lazyWin.orderOut(nil)
+        step("a picture scrolled out of view lets its thumbnail go (loaded \(loadedLazy), released \(releasedLazy))", loadedLazy && releasedLazy)
 
         // On screen: the red thumbnail right of centre, the blue picture 480 pt wide on the left.
         let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: "claude", hasLog: true) }
@@ -111,6 +170,36 @@ extension ContentTests {
         step("opening another removes the first", a.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
         if let b { PictureFiles.remove(b) }
         step("closing removes it", b.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
+
+        // The folder is never a symlink: a link to another folder is refused, and nothing in that folder is removed.
+        let fm = FileManager.default
+        let target = dir.appendingPathComponent("target", isDirectory: true), link = dir.appendingPathComponent("link")
+        try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try? Data("keep".utf8).write(to: target.appendingPathComponent("keep.txt"))
+        try? fm.createSymbolicLink(at: link, withDestinationURL: target)
+        let viaLink = PictureFiles.write(data, format: .png, in: link)
+        PictureFiles.remove(link.appendingPathComponent("keep.txt"), in: link)
+        let left = (try? fm.contentsOfDirectory(atPath: target.path)) ?? []
+        step("a symlinked folder is refused, its files kept (\(viaLink?.lastPathComponent ?? "nil"), \(left))", viaLink == nil && left == ["keep.txt"])
+        let plain = dir.appendingPathComponent("plain")
+        try? Data().write(to: plain)
+        step("a file in the folder's place is refused", PictureFiles.write(data, format: .png, in: plain) == nil)
+
+        // Quick Look work that finishes after the picture went away leaves no file.
+        let qdir = dir.appendingPathComponent("ql", isDirectory: true)
+        let late = PreviewOpener(dir: qdir)
+        late.open(userRef, from: url)
+        late.close()
+        try? await Task.sleep(for: .milliseconds(600))
+        let lateFiles = (try? fm.contentsOfDirectory(atPath: qdir.path)) ?? []
+        step("a preview closed before it was written leaves no file (\(lateFiles.count))", late.preview == nil && lateFiles.isEmpty)
+        let shown = PreviewOpener(dir: qdir)
+        shown.open(userRef, from: url)
+        try? await Task.sleep(for: .milliseconds(600))
+        let opened = shown.preview.map { fm.fileExists(atPath: $0.path) } == true
+        let openedURL = shown.preview
+        shown.close()
+        step("an opened preview has its file; closing removes it", opened && openedURL.map { !fm.fileExists(atPath: $0.path) } == true)
         print("pictures-test: picture \(shot)")
         finish(failures)
     }
@@ -119,4 +208,35 @@ extension ContentTests {
         print("pictures-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }
+}
+
+/// The picture a swap check changes in place.
+@MainActor @Observable private final class RefBox {
+    var ref: LogImage.Ref
+    init(_ ref: LogImage.Ref) { self.ref = ref }
+}
+
+private struct SwapPicture: View {
+    let box: RefBox
+    var body: some View { LogPicture(ref: box.ref, size: PictureLayout.thumb(box.ref)) }
+}
+
+/// One picture on top of a long lazy list, for the scrolled-away check.
+private struct LazyPictures: View {
+    let ref: LogImage.Ref
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                LogPicture(ref: ref, size: PictureLayout.thumb(ref))
+                ForEach(0..<200, id: \.self) { i in Text("row \(i)").frame(height: 40) }
+            }
+        }
+    }
+}
+
+private actor ConcurrencyMeter {
+    private var now = 0, peak = 0, done = 0
+    func enter() { now += 1; peak = max(peak, now) }
+    func leave() { now -= 1; done += 1 }
+    func result() -> (Int, Int) { (peak, done) }
 }
