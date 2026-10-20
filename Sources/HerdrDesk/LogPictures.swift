@@ -176,6 +176,7 @@ struct LogPicture: View {
     @State private var thumb = Thumbnail()
     @State private var opener = PreviewOpener()
     @State private var hover = false
+    @State private var near = false
 
     /// Pixels on the long side for a picture drawn at `size` points.
     static func maxPixel(_ size: CGSize, scale: CGFloat) -> Int {
@@ -190,6 +191,14 @@ struct LogPicture: View {
     }
     private var task: String { Self.taskID(url: url, ref: ref, maxPixel: maxPixel) }
 
+    /// Within a screen of the scroll view's visible part (or in no scroll view). The conversation list is a plain stack
+    /// whose rows never disappear, so this, not `onDisappear`, says when a picture loads and when its thumbnail goes.
+    nonisolated static func near(_ proxy: GeometryProxy) -> Bool {
+        guard let seen = proxy.bounds(of: .scrollView) else { return true }
+        let me = CGRect(origin: .zero, size: proxy.size)
+        return me.maxY >= seen.minY - seen.height && me.minY <= seen.maxY + seen.height
+    }
+
     var body: some View {
         picture
             .contentShape(Rectangle())
@@ -200,7 +209,8 @@ struct LogPicture: View {
             .accessibilityLabel("Picture, \(ref.width) by \(ref.height) pixels")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { open() }
-            .task(id: task) { await load() }
+            .onGeometryChange(for: Bool.self, of: Self.near) { near = $0 }
+            .task(id: near ? task : nil) { await load() }
             .quickLookPreview(Binding(get: { opener.preview }, set: { opener.preview = $0 }))
             .onDisappear { thumb.clear(); opener.close() }
     }
@@ -222,7 +232,7 @@ struct LogPicture: View {
 
     private func load() async {
         let id = task
-        guard let url else { thumb.clear(); return }
+        guard near, let url else { thumb.clear(); return }
         if let hit = PictureCache.shared.cached(url: url, ref: ref, maxPixel: maxPixel) { thumb.set(hit, for: id); return }
         let img = await PictureCache.shared.load(url: url, ref: ref, maxPixel: maxPixel)
         guard !Task.isCancelled, let img else { return }
