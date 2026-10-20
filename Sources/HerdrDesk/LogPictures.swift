@@ -241,9 +241,11 @@ struct LogPicture: View {
     private(set) var id: String?
     @ObservationIgnored private(set) var image: NSImage?
     @ObservationIgnored weak var layerView: ThumbnailLayer.LayerView?
+    /// Every thumbnail drawn and still alive anywhere (weak): the checks see that one scrolled away is gone.
+    static let shown = NSHashTable<NSImage>.weakObjects()
 
     func shows(_ task: String) -> Bool { id == task }
-    func set(_ image: NSImage, for task: String) { self.image = image; id = task; layerView?.show(image) }
+    func set(_ image: NSImage, for task: String) { self.image = image; id = task; layerView?.show(image); Self.shown.add(image) }
     func clear() { image = nil; id = nil; layerView?.show(nil) }
 }
 

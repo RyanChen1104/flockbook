@@ -143,6 +143,43 @@ extension ContentTests {
         lazyWin.orderOut(nil)
         step("a picture scrolled out of view lets its thumbnail go (loaded \(loadedLazy), released \(releasedLazy))", loadedLazy && releasedLazy)
 
+        // The real conversation list (a plain VStack: no row ever disappears): a picture loads only near the visible part
+        // and its thumbnail goes when it is scrolled far away.
+        let longFile = dir.appendingPathComponent("long.jsonl")
+        var longLines = [lines[0]]
+        for i in 0..<80 {
+            longLines.append(json(["type": "assistant", "uuid": "t\(i)", "message": ["role": "assistant", "content": [["type": "text", "text": "Reply \(i): the layout is fine here."]]]] as [String: Any]))
+        }
+        try? Data((longLines.joined(separator: "\n") + "\n").utf8).write(to: longFile)
+        let longLog = SessionLog(sessionId: longFile.path)
+        var lit = longLog.snapshots(pollInterval: .milliseconds(20)).makeAsyncIterator()
+        var longItems: [ConversationItem] = []
+        for _ in 0..<20 where longItems.isEmpty { if let s = await lit.next(), s.load == .ready { longItems = s.items } }
+        PictureCache.shared.removeAll()
+        Thumbnail.shown.removeAllObjects()
+        func liveThumbs() -> Int { autoreleasepool { Thumbnail.shown.allObjects.count } }
+        let longView = ConversationView(items: longItems, agentName: "claude", hasLog: true).environment(\.logURL, longLog.url)
+        let (longWin, longHost) = offscreen(longView, NSSize(width: 700, height: 500))
+        try? await Task.sleep(for: .seconds(1.5))
+        let atBottom = liveThumbs()
+        func scroll(top: Bool) async {
+            guard let sv = scrollViews(longHost).first, let doc = sv.documentView else { return }
+            let end = max(0, doc.bounds.height - sv.contentView.bounds.height)
+            sv.contentView.scroll(to: NSPoint(x: 0, y: top == doc.isFlipped ? 0 : end))
+            sv.reflectScrolledClipView(sv.contentView)
+            try? await Task.sleep(for: .seconds(1))
+        }
+        await scroll(top: true)
+        capture(longWin, to: "\(Self.dir)/pictures-long-top.png")
+        let atTop = liveThumbs()
+        await scroll(top: false)
+        PictureCache.shared.removeAll()
+        try? await Task.sleep(for: .milliseconds(500))
+        let gone = liveThumbs()
+        longWin.orderOut(nil)
+        step("conversation list: a picture far out of view does not load (\(atBottom) at the bottom), loads at the top (\(atTop)), and goes when scrolled away (\(gone))",
+             atBottom == 0 && atTop >= 1 && gone == 0)
+
         // On screen: the red thumbnail right of centre, the blue picture 480 pt wide on the left.
         let view = ZStack { Color(nsColor: .textBackgroundColor); ConversationView(items: items, agentName: "claude", hasLog: true) }
             .environment(\.logURL, url).environment(\.flatGlass, true)
