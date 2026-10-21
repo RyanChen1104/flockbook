@@ -171,11 +171,41 @@ import Foundation
           "teammate: a lead with a first message line over the head limit is found")
 
     // The scan reads only what a log added since the last pass, and finds a name cut by a chunk edge.
+    func append(_ p: String, _ text: String) { if let fh = FileHandle(forWritingAtPath: p) { fh.seekToEndOfFile(); fh.write(Data(text.utf8)); fh.closeFile() } }
+    func size(_ p: String) -> UInt64 { (try? fm.attributesOfItem(atPath: p))?[.size] as? UInt64 ?? 0 }
     var small = R.LeadScan(chunk: 7)
     let grow = log(home + "/grow", "grow1", lead, made: t0, modified: t0)
-    check(!small.mentions(grow, "team-g"), "teammate: a log without the team name does not name it")
-    if let fh = FileHandle(forWritingAtPath: grow) { fh.seekToEndOfFile(); fh.write(Data((leadLine("team-g") + "\n").utf8)); fh.closeFile() }
-    check(small.mentions(grow, "team-g") && small.offset(grow, "team-g") > 0, "teammate: a name added later is found, read from the old end on")
+    check(small.mentions(grow, "team-g") == false && small.bytesRead == size(grow), "teammate: a log without the team name does not name it")
+    _ = small.mentions(grow, "team-g")
+    check(small.bytesRead == size(grow), "teammate: an unchanged log is not read again")
+    let before = size(grow)
+    append(grow, leadLine("team-g") + "\n")
+    check(small.mentions(grow, "team-g") == true && small.bytesRead == size(grow), "teammate: only the bytes added since are read, and a name in them is found")
+    fm.createFile(atPath: grow, contents: Data((lead + "\n").utf8))
+    check(small.mentions(grow, "team-g") == false, "teammate: a log cut shorter is read again from the start")
+    let fresh = grow + ".new"
+    fm.createFile(atPath: fresh, contents: Data(("team-g " + String(repeating: "y", count: Int(before)) + "\n").utf8))
+    _ = try? fm.replaceItemAt(URL(fileURLWithPath: grow), withItemAt: URL(fileURLWithPath: fresh))
+    check(small.mentions(grow, "team-g") == true, "teammate: a log replaced by another file is read again from the start")
+
+    // Each pass reads at most a byte budget; a log not read to its end gives no lead this pass, and the next goes on.
+    var budget = R.LeadScan(chunk: 64, budget: 256)
+    let slow = home + "/slow"
+    let slowLead = log(slow, "lead6", lead + "\n" + leadLine("team-s"), made: t0, modified: t0.addingTimeInterval(60))
+    _ = log(slow, "big6", lead + "\n" + String(repeating: "z", count: 1000), made: t0, modified: t0.addingTimeInterval(60))
+    check(R.leadLog(projectsDir: projects, cwd: slow, home: home, team: "team-s", since: t0, claimed: [], scan: &budget) == nil && budget.bytesRead <= 256 + 64,
+          "teammate: a pass stops at its byte budget and gives no lead before every log is read")
+    var passes = 1, got: String?
+    while got == nil, passes < 10 { budget.endPass(); got = R.leadLog(projectsDir: projects, cwd: slow, home: home, team: "team-s", since: t0, claimed: [], scan: &budget); passes += 1 }
+    check(got == slowLead && passes > 1, "teammate: later passes go on where the last stopped and find the lead")
+
+    // A log whose first message line is not yet whole, with teamName already written, is not a lead candidate.
+    let part = home + "/part"
+    let partLead = log(part, "lead7", lead + "\n" + leadLine("team-p"), made: t0, modified: t0.addingTimeInterval(60))
+    let partMate = log(part, "mate7", lead, made: t0, modified: t0.addingTimeInterval(60))
+    fm.createFile(atPath: partMate, contents: Data((meta + "\n" + #"{"parentUuid":null,"isSidechain":false,"teamName":"team-p""#).utf8))
+    check(R.leadLog(projectsDir: projects, cwd: part, home: home, team: "team-p", since: .distantPast, claimed: [], scan: &scan) == partLead,
+          "teammate: an undecided log is never a lead candidate")
 
     // The resolver: two teammate panes on one cwd, teammates begun at different times, each gets its own lead.
     let r = R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home)
@@ -223,4 +253,6 @@ import Foundation
           "teammate: the store shows no log when there is no lead")
     check(agent(HerdrStore.withFallbacks(ws("lead2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)]))?.sessionId == "lead2",
           "teammate: once herdr names another log, the old swap does nothing")
+    check(HerdrStore.claims(ws("mate1"), resolved: ["w9:p1": "/x/found.jsonl"]) == ["mate1", "/x/found.jsonl"],
+          "teammate: logs the resolver found for other panes are claimed too")
 }

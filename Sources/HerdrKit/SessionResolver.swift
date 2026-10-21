@@ -147,7 +147,7 @@ public actor SessionResolver {
             for f in ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted() where f.hasSuffix(".jsonl") {
                 let p = folder + "/" + f
                 guard !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
-                      at >= since, !scan.isTeammate(p), scan.mentions(p, team) else { continue }
+                      at >= since, !scan.isTeammate(p), scan.mentions(p, team) == true else { continue }
                 hits.append(p)
             }
             dir = (dir as NSString).deletingLastPathComponent
@@ -163,10 +163,12 @@ public actor SessionResolver {
         private var mates: [String: Bool] = [:]
         private var touched: Set<String> = []
         private let chunk: Int
-        public init(chunk: Int = 4 << 20) { self.chunk = chunk }
+        public init(chunk: Int = 4 << 20, budget: Int = 16 << 20) { self.chunk = chunk }
+        public var bytesRead: UInt64 { 0 }
+        public mutating func endPass() { prune() }
 
         /// Whether the log at `path` contains `team` (bytes, no JSON parsing).
-        public mutating func mentions(_ path: String, _ team: String) -> Bool {
+        public mutating func mentions(_ path: String, _ team: String) -> Bool? {
             let key = team + "\n" + path
             touched.insert(path)
             var s = seen[key] ?? Seen()

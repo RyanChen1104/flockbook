@@ -105,6 +105,8 @@ public final class HerdrStore {
         return ws
     }
 
+    static func claims(_ ws: [Workspace], resolved: [String: String]) -> Set<String> { [] }
+
     /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
     /// a teammate's log. The snapshot never waits for it.
     private func resolveMissing(_ raw: [Workspace]) {
