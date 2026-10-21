@@ -254,4 +254,26 @@ import Foundation
           "teammate: a found teammate log gives way to the pane's last lead")
     check(HerdrStore.claims(ws("mate1"), resolved: ["w9:p1": "/x/found.jsonl"]) == ["mate1", "/x/found.jsonl"],
           "teammate: logs the resolver found for other panes are claimed too")
+
+    // The pane says which: the lead's last known log in place of a teammate's, or no lead log yet.
+    check(agent(lifted)?.team == .lastLead, "teammate: a pane showing the last lead in place of a teammate's log says so")
+    check(agent(HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)], leads: []))?.team == .waitingForLead,
+          "teammate: a pane with no lead log waits for it")
+    check(agent(HerdrStore.withFallbacks(ws(nil), resolved: ["w1:p1": "/x/found.jsonl"], swaps: ["w1:p1": LeadSwap(teammate: "/x/found.jsonl", lead: nil)], leads: []))?.team == .waitingForLead,
+          "teammate: a found teammate log with no lead waits too")
+    check(agent(HerdrStore.withFallbacks(ws("lead2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: lead1)], leads: ["lead2"]))?.team == nil,
+          "teammate: herdr's own lead log carries no note")
+    check(agent(HerdrStore.withFallbacks(ws("mate2"), resolved: [:], swaps: [:], leads: ["lead1"]))?.team == nil,
+          "teammate: a log not judged yet carries no note (judging is quick; no flash of the waiting copy)")
+    func wire(_ a: Agent) -> String { String(decoding: (try? JSONEncoder().encode(HubAgent(a))) ?? Data(), as: UTF8.self) }
+    if let a = agent(lifted) {
+        check(wire(a).contains("\"team\":\"lastLead\""), "teammate: the phone gets the note (team lastLead)")
+    } else { check(false, "teammate: the phone gets the note (no agent)") }
+    if let a = agent(ws("lead2")) {
+        check(!wire(a).contains("team"), "teammate: no note, no team field")
+    } else { check(false, "teammate: no note, no team field (no agent)") }
+    check(TeamNote.waitingTitle == "Waiting for the lead's log"
+          && TeamNote.waitingDetail == "Herdr points this pane at an agent-team teammate. The lead's conversation shows here once Herdr reports it. The terminal shows what it is doing."
+          && TeamNote.lastLeadLine == "Agent team: showing the lead's last known session.",
+          "teammate: the notes' words")
 }
