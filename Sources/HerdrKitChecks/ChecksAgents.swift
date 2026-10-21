@@ -168,7 +168,37 @@ import Foundation
           "teammate: no lead found: no log rather than the teammate's")
     check(await r.leads([R.LeadAsk(paneId: "w1:p3", sessionId: "unknown1", cwd: cwd)], claimed: []).isEmpty,
           "teammate: a log not found yet is kept")
+
+    // A lead that cannot be told apart is no lead: two candidates, two teammate panes on one folder, an undecided log.
+    _ = log(home + "/two", "a2", lead, made: t0, modified: t0.addingTimeInterval(60))
+    _ = log(home + "/two", "b2", lead, made: t0, modified: t0.addingTimeInterval(70))
+    check(R.leadLog(projectsDir: projects, cwd: home + "/two", home: home, since: t0, claimed: []) == nil,
+          "teammate: two lead candidates in a folder: no lead")
+    _ = log(home + "/new", "fresh3", #"{"type":"mode","sessionId":"s"}"#, made: t0, modified: t0.addingTimeInterval(60))
+    check(R.leadLog(projectsDir: projects, cwd: home + "/new", home: home, since: t0, claimed: []) == nil,
+          "teammate: a log without a message line yet is not a lead candidate")
+    _ = log(home + "/pair", "lead4", lead, made: t0, modified: t0.addingTimeInterval(60))
+    let pair = await R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home).leads(
+        [R.LeadAsk(paneId: "w2:p1", sessionId: "mate1", cwd: home + "/pair"), R.LeadAsk(paneId: "w2:p2", sessionId: "mate1", cwd: home + "/pair")],
+        claimed: [])
+    check(pair == ["w2:p1": LeadSwap(teammate: "mate1", lead: nil), "w2:p2": LeadSwap(teammate: "mate1", lead: nil)],
+          "teammate: two teammate panes search one folder: neither gets a lead")
+    let r5 = R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home)
+    let ask5 = R.LeadAsk(paneId: "w3:p1", sessionId: "mate1", cwd: home + "/pair")
+    let first5 = await r5.leads([ask5], claimed: [])
+    let lead4 = projects + "/" + R.claudeFolder(home + "/pair") + "/lead4.jsonl"
+    check(first5 == ["w3:p1": LeadSwap(teammate: "mate1", lead: lead4)], "teammate: one teammate pane, one candidate: the lead")
+    check(await r5.leads([ask5], claimed: ["lead4"]) == ["w3:p1": LeadSwap(teammate: "mate1", lead: nil)],
+          "teammate: a found lead that another pane now claims is dropped at once, not after the cache time")
     try? fm.removeItem(atPath: root)
+
+    // A first message line cut off by the read limit still shows its team keys, which come before the message.
+    func cut(_ s: String) -> Data { Data((meta + "\n" + s).utf8) }
+    let big = String(repeating: "x", count: 4096)
+    check(R.teammateVerdict(cut(#"{"parentUuid":null,"isSidechain":false,"teamName":"team-1","agentName":"helper","type":"user","message":{"role":"user","content":""# + big)) == true,
+          "teammate: a cut first message line with teamName and agentName marks a teammate log")
+    check(R.teammateVerdict(cut(#"{"parentUuid":null,"type":"user","message":{"role":"user","content":"say \"teamName\":\"t\",\"agentName\":\"a\" "# + big)) == nil,
+          "teammate: a cut first message line without the keys is not decided (quoted keys in the text do not count)")
 
     // The store puts the swap in the pane while herdr still names that teammate log.
     func ws(_ sid: String?) -> [Workspace] {
