@@ -188,6 +188,41 @@ import Foundation
     if let fh = FileHandle(forWritingAtPath: shrink) { try? fh.truncate(atOffset: 0); fh.write(data(meta, mate)); try? fh.close() }
     check(await r.leads([ask("w3:p1", "shrink1")], claimed: ["shrink1"]).swaps["w3:p1"]?.teammate == "shrink1",
           "teammate: a log rewritten shorter is judged again")
+
+    // The last lead is judged again before it stands in: one replaced by a teammate's log is not shown.
+    let back = log("back1", meta, lead)
+    _ = await r.leads([ask("w5:p1", "back1")], claimed: ["back1"])
+    let backNew = back + ".new"
+    fm.createFile(atPath: backNew, contents: data(meta, mate))
+    _ = try? fm.replaceItemAt(URL(fileURLWithPath: back), withItemAt: URL(fileURLWithPath: backNew))
+    check(await r.leads([ask("w5:p1", "mate1")], claimed: ["mate1"]).swaps["w5:p1"]?.lead == nil,
+          "teammate: a last lead that is now a teammate's log is not shown")
+
+    // A verdict keeps the size it was last seen at: grown, then cut back shorter (but longer than at first), is judged again.
+    let grown = log("grown1", meta, lead)
+    _ = await r.leads([ask("w6:p1", "grown1")], claimed: ["grown1"])
+    if let fh = FileHandle(forWritingAtPath: grown) { fh.seekToEndOfFile(); fh.write(Data(String(repeating: " ", count: 10_000).utf8)); try? fh.close() }
+    _ = await r.leads([ask("w6:p1", "grown1")], claimed: ["grown1"])
+    if let fh = FileHandle(forWritingAtPath: grown) { try? fh.truncate(atOffset: 0); fh.write(data(meta, mate) + Data(String(repeating: " ", count: 1000).utf8)); try? fh.close() }
+    check(await r.leads([ask("w6:p1", "grown1")], claimed: ["grown1"]).swaps["w6:p1"]?.teammate == "grown1",
+          "teammate: a log cut shorter than when last seen is judged again")
+
+    // An undecided log is read again only when it changes; one undecided after the read limit stays so.
+    let rc = R(socketPath: "/nonexistent.sock", projectsDir: projects, verdictCap: 1024)
+    let waiting = log("wait1", meta)
+    _ = await rc.leads([ask("w7:p1", "wait1")], claimed: [])
+    _ = await rc.leads([ask("w7:p1", "wait1")], claimed: [])
+    check(await rc.verdictReads == 1, "teammate: an unchanged undecided log is not read again")
+    if let fh = FileHandle(forWritingAtPath: waiting) { fh.seekToEndOfFile(); fh.write(Data((lead + "\n").utf8)); try? fh.close() }
+    check(await rc.leads([ask("w7:p1", "wait1")], claimed: []).leads == ["wait1"], "teammate: an undecided log that grew is read again")
+    let longPre = log("long1", meta, #"{"type":"api-request-shape","shape":""# + String(repeating: "q", count: 4000) + #""}"#)
+    _ = await rc.leads([ask("w7:p2", "long1")], claimed: [])
+    let readsBefore = await rc.verdictReads
+    if let fh = FileHandle(forWritingAtPath: longPre) { fh.seekToEndOfFile(); fh.write(Data((lead + "\n").utf8)); try? fh.close() }
+    let longPass = await rc.leads([ask("w7:p2", "long1")], claimed: [])
+    let readsAfter = await rc.verdictReads
+    check(longPass.swaps["w7:p2"] == LeadSwap(teammate: "long1", lead: nil) && longPass.leads.isEmpty && readsAfter == readsBefore,
+          "teammate: a log undecided after the read limit stays undecided and is not read again")
     try? fm.removeItem(atPath: root)
 
     // The store: a swap stands in while herdr still names that log; a Claude log not judged yet is held back.
@@ -209,6 +244,14 @@ import Foundation
           "teammate: other agents' logs are not held back")
     check(agent(HerdrStore.withFallbacks(ws("mate2"), resolved: [:], swaps: [:], leads: nil))?.sessionId == "mate2",
           "teammate: without a resolver (preview) nothing is held back")
+    check(HerdrStore.leadAsks(ws(nil), found: ["w1:p1": "/x/found.jsonl"]) == [R.LeadAsk(paneId: "w1:p1", sessionId: "/x/found.jsonl")],
+          "teammate: a log the resolver found for a Claude pane is judged too")
+    check(agent(HerdrStore.withFallbacks(ws(nil), resolved: ["w1:p1": "/x/found.jsonl"], swaps: [:], leads: []))?.sessionId == nil,
+          "teammate: a found log not judged a lead's is not shown")
+    check(agent(HerdrStore.withFallbacks(ws(nil), resolved: ["w1:p1": "/x/found.jsonl"], swaps: [:], leads: ["/x/found.jsonl"]))?.sessionId == "/x/found.jsonl",
+          "teammate: a found log judged a lead's is shown")
+    check(agent(HerdrStore.withFallbacks(ws(nil), resolved: ["w1:p1": "/x/found.jsonl"], swaps: ["w1:p1": LeadSwap(teammate: "/x/found.jsonl", lead: lead1)], leads: []))?.sessionId == lead1,
+          "teammate: a found teammate log gives way to the pane's last lead")
     check(HerdrStore.claims(ws("mate1"), resolved: ["w9:p1": "/x/found.jsonl"]) == ["mate1", "/x/found.jsonl"],
           "teammate: logs the resolver found for other panes are claimed too")
 }

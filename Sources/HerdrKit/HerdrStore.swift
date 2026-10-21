@@ -117,6 +117,8 @@ public final class HerdrStore {
         Set(ws.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.sessionId }).union(resolved.values)
     }
 
+    static func leadAsks(_ raw: [Workspace], found: [String: String]) -> [SessionResolver.LeadAsk] { [] }
+
     /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
     /// a teammate's log. The snapshot never waits for it.
     private func resolveMissing(_ raw: [Workspace]) {

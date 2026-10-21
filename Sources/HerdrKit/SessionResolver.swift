@@ -38,14 +38,18 @@ public actor SessionResolver {
     private let socketPath: String
     private let codexDir: String
     private let projectsDir: String
+    /// The most bytes read of one log to judge it.
+    private let verdictCap: Int
+    /// How many times a log was read to judge it.
+    public private(set) var verdictReads = 0
     /// Unresolved panes are tried again after this; resolved ones are re-checked (pid still the same) after `recheck`.
     private let retry: TimeInterval
     private let recheck: TimeInterval
 
     public init(socketPath: String, codexDir: String = SessionLog.defaultDir(agent: "codex"),
                 projectsDir: String = SessionLog.defaultDir(agent: "claude"),
-                retry: TimeInterval = 5, recheck: TimeInterval = 30) {
-        self.socketPath = socketPath; self.codexDir = codexDir; self.projectsDir = projectsDir
+                retry: TimeInterval = 5, recheck: TimeInterval = 30, verdictCap: Int = 8 << 20) {
+        self.socketPath = socketPath; self.codexDir = codexDir; self.projectsDir = projectsDir; self.verdictCap = verdictCap
         self.retry = retry; self.recheck = recheck
     }
 
