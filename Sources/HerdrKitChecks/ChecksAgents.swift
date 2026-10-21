@@ -167,6 +167,15 @@ import Foundation
     check(await r.leads([ask("w1:p1", "mate1"), ask("w1:p2", "lead2")], claimed: ["mate1", root + "/projects/./-w-proj/lead1.jsonl"]).swaps["w1:p1"]?.lead == nil,
           "teammate: the last lead, now another pane's (by a path written another way), is not shown twice")
 
+    // Long lines before the first message line (Claude Code logs request shapes there) are skipped, not undecided.
+    let shape = #"{"type":"api-request-shape","sessionId":"s","shape":""# + String(repeating: "q", count: 100_000) + #""}"#
+    _ = log("longhead1", meta, shape, lead)
+    check(await r.leads([ask("w4:p1", "longhead1")], claimed: ["longhead1"]).leads == ["longhead1"],
+          "teammate: a lead log with long lines before its first message line is judged a lead's")
+    _ = log("longmate1", meta, shape, mate)
+    check(await r.leads([ask("w4:p1", "longmate1")], claimed: ["longmate1"]).swaps["w4:p1"]?.teammate == "longmate1",
+          "teammate: a teammate log with long lines before its first message line is judged a teammate's")
+
     // A verdict holds for one file: a log replaced, or rewritten shorter, is judged again.
     _ = await r.leads([ask("w2:p1", "lead2")], claimed: ["lead2"])
     let swapFile = lead2 + ".new"
