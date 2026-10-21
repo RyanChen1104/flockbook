@@ -10,6 +10,12 @@ import Foundation
 ///    Exactly one unclaimed match, or none. It never guesses between two.
 ///
 /// The result is cached per pane and kept while the agent pid stays the same.
+public struct LeadSwap: Sendable, Hashable {
+    public var teammate: String
+    public var lead: String?
+    public init(teammate: String, lead: String?) { self.teammate = teammate; self.lead = lead }
+}
+
 public actor SessionResolver {
     public struct Proc: Sendable, Hashable {
         public var pid: Int32
@@ -30,14 +36,35 @@ public actor SessionResolver {
     private var cache: [String: Entry] = [:]
     private let socketPath: String
     private let codexDir: String
+    private let projectsDir: String
+    private let home: String
     /// Unresolved panes are tried again after this; resolved ones are re-checked (pid still the same) after `recheck`.
     private let retry: TimeInterval
     private let recheck: TimeInterval
 
     public init(socketPath: String, codexDir: String = SessionLog.defaultDir(agent: "codex"),
+                projectsDir: String = SessionLog.defaultDir(agent: "claude"), home: String = NSHomeDirectory(),
                 retry: TimeInterval = 5, recheck: TimeInterval = 30) {
-        self.socketPath = socketPath; self.codexDir = codexDir; self.retry = retry; self.recheck = recheck
+        self.socketPath = socketPath; self.codexDir = codexDir; self.projectsDir = projectsDir; self.home = home
+        self.retry = retry; self.recheck = recheck
     }
+
+    // MARK: - Teammates
+
+    public struct LeadAsk: Sendable, Hashable {
+        public var paneId: String
+        public var sessionId: String
+        public var cwd: String
+        public init(paneId: String, sessionId: String, cwd: String) { self.paneId = paneId; self.sessionId = sessionId; self.cwd = cwd }
+    }
+
+    public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> [String: LeadSwap] { [:] }
+
+    public static func teammateVerdict(_ data: Data) -> Bool? { nil }
+
+    public static func claudeFolder(_ cwd: String) -> String { cwd }
+
+    public static func leadLog(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> String? { nil }
 
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.

@@ -80,6 +80,8 @@ public final class HerdrStore {
     @ObservationIgnored private var resolved: [String: String] = [:]
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
 
+    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap]) -> [Workspace] { ws }
+
     /// Fills `agent.sessionId` from `resolved` where herdr gave none.
     private func withResolved(_ ws: [Workspace]) -> [Workspace] {
         guard !resolved.isEmpty else { return ws }

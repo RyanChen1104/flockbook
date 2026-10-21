@@ -115,3 +115,72 @@ import Foundation
         try? FileManager.default.removeItem(atPath: root)
     }
 }
+
+// A teammate of a Claude Code agent team runs with the lead's HERDR_* env, so herdr can name the teammate's log as the
+// pane's session. The pane shows the lead's log instead, or no log; never the teammate's. Synthetic logs only.
+@MainActor func checksTeammateSession() async throws {
+    typealias R = SessionResolver
+    let meta = #"{"type":"agent-setting","sessionId":"s"}"#
+    let mate = #"{"type":"user","sessionId":"s","teamName":"team-1","agentName":"helper","message":{"role":"user","content":"hi"}}"#
+    let lead = #"{"type":"user","sessionId":"s","message":{"role":"user","content":"hi"}}"#
+    func data(_ ls: String...) -> Data { Data((ls.joined(separator: "\n") + "\n").utf8) }
+    check(R.teammateVerdict(data(meta, mate)) == true, "teammate: a message line with teamName and agentName marks a teammate log")
+    check(R.teammateVerdict(data(meta, lead, mate)) == false, "teammate: the first message line decides (a lead log)")
+    check(R.teammateVerdict(data(meta)) == nil && R.teammateVerdict(Data()) == nil, "teammate: no message line yet: not decided")
+    check(R.claudeFolder("/w/my.app/sub_dir") == "-w-my-app-sub-dir", "teammate: Claude project folder of a cwd")
+
+    let fm = FileManager.default
+    let root = NSTemporaryDirectory() + "hkmate-\(UUID().uuidString)"
+    let home = root + "/home", projects = root + "/projects", cwd = home + "/proj"
+    let t0 = Date(timeIntervalSince1970: 1_791_000_000)
+    func log(_ cwd: String, _ id: String, _ line: String, made: Date, modified: Date) -> String {
+        let dir = projects + "/" + R.claudeFolder(cwd)
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let p = dir + "/" + id + ".jsonl"
+        fm.createFile(atPath: p, contents: data(meta, line))
+        try? fm.setAttributes([.creationDate: made, .modificationDate: modified], ofItemAtPath: p)
+        return p
+    }
+    _ = log(cwd + "/web", "mate1", mate, made: t0, modified: t0.addingTimeInterval(120))
+    let leadPath = log(cwd, "lead1", lead, made: t0.addingTimeInterval(-3600), modified: t0.addingTimeInterval(60))
+    _ = log(cwd, "old1", lead, made: t0.addingTimeInterval(-7200), modified: t0.addingTimeInterval(-3000))
+    _ = log(cwd, "busy1", lead, made: t0.addingTimeInterval(-60), modified: t0.addingTimeInterval(90))
+    _ = log(home, "home1", lead, made: t0, modified: t0.addingTimeInterval(300))
+    check(R.leadLog(projectsDir: projects, cwd: cwd, home: home, since: t0, claimed: ["busy1"]) == leadPath,
+          "teammate: the lead is the newest unclaimed non-teammate log of the pane's cwd written since the teammate began")
+    check(R.leadLog(projectsDir: projects, cwd: cwd + "/web/src", home: home, since: t0, claimed: ["busy1"]) == leadPath,
+          "teammate: ancestor folders are searched, teammate logs skipped")
+    check(R.leadLog(projectsDir: projects, cwd: cwd, home: home, since: t0.addingTimeInterval(100), claimed: ["busy1"]) == nil,
+          "teammate: a log not written since the teammate began is not the lead")
+    check(R.leadLog(projectsDir: projects, cwd: home + "/elsewhere", home: home, since: t0, claimed: []) == nil,
+          "teammate: the home folder is not searched")
+
+    // The resolver: the lead's id that herdr gave earlier comes first, then the search, then none.
+    let r = R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home)
+    let mateAsk = R.LeadAsk(paneId: "w1:p1", sessionId: "mate1", cwd: cwd)
+    check(await r.leads([mateAsk], claimed: ["busy1"]) == ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)],
+          "teammate: herdr names a teammate log: the pane gets the lead's log")
+    check(await r.leads([R.LeadAsk(paneId: "w1:p1", sessionId: "old1", cwd: cwd)], claimed: []).isEmpty,
+          "teammate: a lead log herdr names is kept")
+    check(await r.leads([mateAsk], claimed: ["busy1"]) == ["w1:p1": LeadSwap(teammate: "mate1", lead: "old1")],
+          "teammate: the lead id herdr gave last time comes before the search")
+    check(await r.leads([R.LeadAsk(paneId: "w1:p2", sessionId: "mate1", cwd: home + "/elsewhere")], claimed: []) == ["w1:p2": LeadSwap(teammate: "mate1", lead: nil)],
+          "teammate: no lead found: no log rather than the teammate's")
+    check(await r.leads([R.LeadAsk(paneId: "w1:p3", sessionId: "unknown1", cwd: cwd)], claimed: []).isEmpty,
+          "teammate: a log not found yet is kept")
+    try? fm.removeItem(atPath: root)
+
+    // The store puts the swap in the pane while herdr still names that teammate log.
+    func ws(_ sid: String?) -> [Workspace] {
+        [Workspace(id: "w1", label: "w", tabs: [Tab(id: "t1", label: "t", number: 1, panes: [
+            Pane(id: "w1:p1", terminalId: "x", cwd: cwd, agent: Agent(name: "claude", kind: "claude", status: .working, sessionId: sid, title: "c"))
+        ], status: .working)])]
+    }
+    func agent(_ w: [Workspace]) -> Agent? { w[0].tabs[0].panes[0].agent }
+    let lifted = HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)])
+    check(agent(lifted)?.sessionId == leadPath && agent(lifted)?.sessionResolved == true, "teammate: the store shows the lead's log, marked as not herdr's")
+    check(agent(HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)]))?.sessionId == nil,
+          "teammate: the store shows no log when there is no lead")
+    check(agent(HerdrStore.withFallbacks(ws("lead2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)]))?.sessionId == "lead2",
+          "teammate: once herdr names another log, the old swap does nothing")
+}
