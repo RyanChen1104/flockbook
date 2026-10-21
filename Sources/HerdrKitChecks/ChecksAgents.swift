@@ -190,6 +190,11 @@ import Foundation
     check(first5 == ["w3:p1": LeadSwap(teammate: "mate1", lead: lead4)], "teammate: one teammate pane, one candidate: the lead")
     check(await r5.leads([ask5], claimed: ["lead4"]) == ["w3:p1": LeadSwap(teammate: "mate1", lead: nil)],
           "teammate: a found lead that another pane now claims is dropped at once, not after the cache time")
+    let r6 = R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home)
+    _ = await r6.leads([R.LeadAsk(paneId: "w4:p1", sessionId: "lead4", cwd: home + "/pair")], claimed: [])
+    let held = await r6.leads([R.LeadAsk(paneId: "w4:p1", sessionId: "mate1", cwd: home + "/pair"), R.LeadAsk(paneId: "w4:p2", sessionId: "mate1", cwd: home + "/pair/sub")], claimed: [])
+    check(held == ["w4:p1": LeadSwap(teammate: "mate1", lead: "lead4"), "w4:p2": LeadSwap(teammate: "mate1", lead: nil)],
+          "teammate: the lead herdr gave another pane is never found for this pane")
     try? fm.removeItem(atPath: root)
 
     // A first message line cut off by the read limit still shows its team keys, which come before the message.

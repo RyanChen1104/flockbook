@@ -59,7 +59,7 @@ public actor SessionResolver {
         public init(paneId: String, sessionId: String, cwd: String) { self.paneId = paneId; self.sessionId = sessionId; self.cwd = cwd }
     }
 
-    private struct Found { var teammate: String; var lead: String?; var checked: Date }
+    private struct Found { var teammate: String; var folder: String?; var lead: String?; var checked: Date }
     /// Session id → it is a teammate's log. Only decided logs (a message line was read) are kept.
     private var verdicts: [String: Bool] = [:]
     /// paneId → the last lead id herdr gave for the pane.
@@ -69,6 +69,7 @@ public actor SessionResolver {
 
     /// The panes whose herdr session is a teammate's log, each with the log to show instead (paneId → swap):
     /// the lead id herdr gave last for the pane, else `leadLog`, else none. Every other pane keeps herdr's session.
+    /// A search that cannot tell whose lead a log is gives none: two teammate panes on one folder both get none.
     public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> [String: LeadSwap] {
         let ids = Set(asks.map(\.paneId))
         lastLead = lastLead.filter { ids.contains($0.key) }
@@ -76,6 +77,7 @@ public actor SessionResolver {
         verdicts = verdicts.filter { v in asks.contains { $0.sessionId == v.key } }
         let now = Date()
         var out: [String: LeadSwap] = [:]
+        var searched: [LeadAsk] = []
         for a in asks {
             if verdicts[a.sessionId] == nil, let path = locate(a.sessionId), let v = Self.teammateVerdict(Self.head(path)) {
                 verdicts[a.sessionId] = v
@@ -86,17 +88,24 @@ public actor SessionResolver {
                 out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: l)
                 continue
             }
-            if let f = found[a.paneId], f.teammate == a.sessionId,
+            // Leads herdr gave other panes are theirs, though herdr names a teammate there now.
+            let held = claimed.union(lastLead.filter { $0.key != a.paneId }.values)
+            searched.append(a)
+            if let f = found[a.paneId], f.teammate == a.sessionId, f.lead.map({ !Self.isClaimed($0, held) }) ?? true,
                now.timeIntervalSince(f.checked) < (f.lead == nil ? retry : recheck) {
-                out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: f.lead)
                 continue
             }
-            var taken = claimed
-            for (p, f) in found where p != a.paneId { if let l = f.lead { taken.insert(l) } }
             let since = locate(a.sessionId).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.creationDate] as? Date } ?? .distantPast
-            let lead = Self.leadLog(projectsDir: projectsDir, cwd: a.cwd, home: home, since: since, claimed: taken)
-            found[a.paneId] = Found(teammate: a.sessionId, lead: lead, checked: now)
-            out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
+            let c = Self.leadCandidates(projectsDir: projectsDir, cwd: a.cwd, home: home, since: since, claimed: held)
+            found[a.paneId] = Found(teammate: a.sessionId, folder: c?.folder, lead: c?.paths.count == 1 ? c?.paths[0] : nil, checked: now)
+        }
+        var panes: [String: Int] = [:]
+        for a in searched { if let d = found[a.paneId]?.folder { panes[d, default: 0] += 1 } }
+        for a in searched {
+            guard let f = found[a.paneId] else { continue }
+            let shared = f.folder.map { panes[$0, default: 0] > 1 } ?? false
+            if shared { found[a.paneId]?.lead = nil }
+            out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: shared ? nil : f.lead)
         }
         return out
     }
@@ -104,13 +113,20 @@ public actor SessionResolver {
     private func locate(_ id: String) -> String? { SessionLog.locate(agent: "claude", sessionId: id, dir: projectsDir)?.path }
 
     /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and
-    /// `agentName`. Nil while the log has no message line yet.
+    /// `agentName`. Nil while the log has no message line yet, or when that line is cut off by the read limit and its
+    /// keys before `"message":` (where Claude Code writes `teamName`, `agentName` and `type`) do not show a teammate.
     public static func teammateVerdict(_ data: Data) -> Bool? {
         for line in data.split(separator: 0x0A) {
-            guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let type = o["type"] as? String, type == "user" || type == "assistant" else { continue }
-            func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
-            return named("teamName") && named("agentName")
+            if let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
+                guard let type = o["type"] as? String, type == "user" || type == "assistant" else { continue }
+                func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
+                return named("teamName") && named("agentName")
+            }
+            let s = String(decoding: line.prefix(64 << 10), as: UTF8.self)
+            let keys = s.range(of: #""message":"#).map { s[..<$0.lowerBound] } ?? s[...]
+            guard keys.contains(#""type":"user""#) || keys.contains(#""type":"assistant""#) else { return nil }
+            func named(_ k: String) -> Bool { keys.range(of: "\"\(k)\":\"[^\"]", options: .regularExpression) != nil }
+            return named("teamName") && named("agentName") ? true : nil
         }
         return nil
     }
@@ -121,23 +137,28 @@ public actor SessionResolver {
         String(cwd.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
     }
 
-    /// The lead's log for a pane whose herdr session is a teammate's: the newest log modified at or after `since`
-    /// (when the teammate's log began) that is not claimed and not a teammate's, in the folder of `cwd`, else of the
-    /// nearest ancestor that has one. Folders of `home` and above are not searched.
+    /// The lead's log for a pane whose herdr session is a teammate's: the one log modified at or after `since` (when
+    /// the teammate's log began) that is not claimed and is decided not a teammate's, in the folder of `cwd`, else of
+    /// the nearest ancestor that has such a log. Two or more there: none. Folders of `home` and above are not searched.
     public static func leadLog(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> String? {
+        guard let c = leadCandidates(projectsDir: projectsDir, cwd: cwd, home: home, since: since, claimed: claimed), c.paths.count == 1 else { return nil }
+        return c.paths[0]
+    }
+
+    /// The nearest folder (of `cwd` or an ancestor below `home`) with lead candidates, and those candidates.
+    static func leadCandidates(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> (folder: String, paths: [String])? {
         let fm = FileManager.default
         let top = (home as NSString).standardizingPath
         var dir = (cwd as NSString).standardizingPath
         while dir.hasPrefix(top + "/") {
             let folder = projectsDir + "/" + claudeFolder(dir)
-            var best: (path: String, at: Date)?
-            for f in (try? fm.contentsOfDirectory(atPath: folder)) ?? [] where f.hasSuffix(".jsonl") {
+            let paths = ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted().compactMap { f -> String? in
                 let p = folder + "/" + f
-                guard !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
-                      at >= since, best.map({ at > $0.at }) ?? true, teammateVerdict(head(p)) != true else { continue }
-                best = (p, at)
+                guard f.hasSuffix(".jsonl"), !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
+                      at >= since, teammateVerdict(head(p)) == false else { return nil }
+                return p
             }
-            if let best { return best.path }
+            if !paths.isEmpty { return (folder, paths) }
             dir = (dir as NSString).deletingLastPathComponent
         }
         return nil
