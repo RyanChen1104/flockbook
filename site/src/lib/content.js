@@ -53,7 +53,7 @@ export const features = [
 	{
 		id: 'phone',
 		title: 'Your agents on your phone',
-		body: 'Read, reply, answer and approve from your phone over your own Tailscale network. It is off until you turn it on.',
+		body: 'Read, reply, answer and approve from your phone over Tailscale or your local network. It is off until you turn it on.',
 		image: 'phone',
 		alt: 'Two phone screens: the list of agents that need you, and a conversation with pictures.'
 	},

@@ -126,8 +126,8 @@
 				<dd>
 					Runs locally. Reads agent session logs on your Mac and talks to Herdr through its local socket.
 					No telemetry. It goes on the network only for the daily update check (you can turn it off) and, when
-					you turn them on, for remote access over your Tailscale network and for notifications through your
-					phone’s push service.
+					you turn them on, for remote access over Tailscale or your local network and for notifications
+					through your phone’s push service.
 				</dd>
 			</div>
 		</dl>

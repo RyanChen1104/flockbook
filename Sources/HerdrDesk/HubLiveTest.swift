@@ -207,7 +207,9 @@ enum HubLiveTest {
 
     /// `--session <named> --serve-remote`: the app's RemoteHub on 127.0.0.1 (temp folder, new certificate) with one
     /// read-level test device, for the browser smoke run (`scripts/web-test.mjs --live`). Prints one JSON line, serves
-    /// until stdin closes. A read device cannot send input.
+    /// until stdin closes. A read device cannot send input. `SERVE_REMOTE_LEVEL=input` (the phone stills,
+    /// scripts/demo/phone-stills.mjs): an input device instead, only on a demo session; the stills send nothing.
+    /// The device is revoked before the hub stops.
     static func serve(model: AppModel) async {
         try? await Task.sleep(for: .seconds(2))
         let dir = URL(fileURLWithPath: NSTemporaryDirectory() + "hkserve-\(UUID().uuidString)")
@@ -217,7 +219,12 @@ enum HubLiveTest {
         AppDefaults.store.set(RemoteHub.Mode.direct.rawValue, forKey: RemoteHub.modeKey)
         let store = FileDeviceStore(url: dir.appendingPathComponent("devices.json"))
         let token = HubToken.random()
-        store.add(token: token, device: HubDevice(id: "live-read", name: "Live read test", level: .read), paired: Date())
+        let input = ProcessInfo.processInfo.environment["SERVE_REMOTE_LEVEL"] == "input"
+        guard !input || model.store.session.name?.contains("demo") == true else {
+            print("serve-remote: FAIL an input device only on a demo session"); NSApp.terminate(nil); return
+        }
+        let device = input ? HubDevice(id: "live-input", name: "Demo stills", level: .input) : HubDevice(id: "live-read", name: "Live read test", level: .read)
+        store.add(token: token, device: device, paired: Date())
         let hub = RemoteHub(model: model, devices: store, dir: dir)
         hub.enabled = true
         for _ in 0..<50 where !hub.running && hub.problem == nil { try? await Task.sleep(for: .milliseconds(100)) }
@@ -226,6 +233,8 @@ enum HubLiveTest {
         if let d = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]) { print(String(decoding: d, as: UTF8.self)) }
         fflush(stdout)
         await Task.detached { while FileHandle.standardInput.availableData.count > 0 {} }.value
+        store.revoke(device: device.id)
+        print("serve-remote: revoked \(device.id) (\(store.device(id: device.id) == nil ? "gone" : "still there"))"); fflush(stdout)
         hub.enabled = false
         try? await Task.sleep(for: .milliseconds(200))
         try? FileManager.default.removeItem(at: dir)
