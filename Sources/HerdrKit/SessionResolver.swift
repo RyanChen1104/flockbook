@@ -70,15 +70,17 @@ public actor SessionResolver {
         public init(swaps: [String: LeadSwap] = [:], leads: Set<String> = []) { self.swaps = swaps; self.leads = leads }
     }
 
-    private struct Verdict { var file: Int; var size: UInt64; var mate: Bool }
-    /// Standardized path → whether the log is a teammate's, while it is the same file and has not shrunk.
+    /// `mate` nil: undecided. `final`: decided, or undecided after `verdictCap` bytes; read again only if it shrinks.
+    private struct Verdict { var file: Int; var size: UInt64; var mate: Bool?; var final: Bool }
+    /// Standardized path → whether the log is a teammate's, while it is the same file and has not shrunk since last
+    /// seen. An undecided log that is not final is read again once its size changes.
     private var verdicts: [String: Verdict] = [:]
     /// paneId → the standardized path of the last lead log herdr gave for the pane.
     private var lastLead: [String: String] = [:]
 
     /// Judges the log herdr names for each Claude pane. A lead's log is shown as it is and becomes the pane's last
-    /// lead. A teammate's log, an undecided one or one not found is never shown: the pane gets its last lead (unless
-    /// another pane shows that log), else no log.
+    /// lead. A teammate's log, an undecided one or one not found is never shown: the pane gets its last lead (judged
+    /// again, and unless another pane shows that log), else no log.
     public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> LeadPass {
         let ids = Set(asks.map(\.paneId))
         lastLead = lastLead.filter { ids.contains($0.key) }
@@ -92,11 +94,14 @@ public actor SessionResolver {
                 pass.leads.insert(a.sessionId)
             }
         }
+        asked.formUnion(lastLead.values)
         verdicts = verdicts.filter { asked.contains($0.key) }
         located = located.filter { id in asks.contains { $0.sessionId == id.key } }
         let shown = Set(claimed.map { $0.hasPrefix("/") ? ($0 as NSString).standardizingPath : $0 })
         for a in asks where !pass.leads.contains(a.sessionId) {
-            let lead = lastLead[a.paneId].flatMap { l in Self.isClaimed(l, shown) || lastLead.contains { $0.key != a.paneId && $0.value == l } ? nil : l }
+            let lead = lastLead[a.paneId].flatMap { l in
+                judge(l) != false || Self.isClaimed(l, shown) || lastLead.contains { $0.key != a.paneId && $0.value == l } ? nil : l
+            }
             pass.swaps[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
         }
         return pass
@@ -107,10 +112,15 @@ public actor SessionResolver {
     private func judge(_ path: String) -> Bool? {
         let a = try? FileManager.default.attributesOfItem(atPath: path)
         guard let file = a?[.systemFileNumber] as? Int, let size = a?[.size] as? UInt64 else { return nil }
-        if let v = verdicts[path], v.file == file, size >= v.size { return v.mate }
-        guard let mate = Self.teammateVerdict(path: path) else { return nil }
-        verdicts[path] = Verdict(file: file, size: size, mate: mate)
-        return mate
+        if var v = verdicts[path], v.file == file, size >= v.size, v.final || size == v.size {
+            v.size = size
+            verdicts[path] = v
+            return v.mate
+        }
+        verdictReads += 1
+        let r = Self.teammateVerdict(path: path, cap: verdictCap)
+        verdicts[path] = Verdict(file: file, size: size, mate: r.mate, final: r.mate != nil || r.capped)
+        return r.mate
     }
 
     /// Session id → its log's standardized path, kept while the file is there.
@@ -137,28 +147,29 @@ public actor SessionResolver {
         return nil
     }
 
-    /// `teammateVerdict` of the log at `path`, read line by line: at most 64 KB of each line and 8 MB in all.
-    static func teammateVerdict(path: String) -> Bool? {
-        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+    /// `teammateVerdict` of the log at `path`, read line by line: at most 64 KB of each line and `cap` bytes in all.
+    /// `capped`: the read stopped at `cap`.
+    static func teammateVerdict(path: String, cap: Int) -> (mate: Bool?, capped: Bool) {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return (nil, false) }
         defer { try? fh.close() }
         let keep = 64 << 10
         var line = Data(), cut = false, read = 0
-        while read < 8 << 20, let d = try? fh.read(upToCount: 64 << 10), !d.isEmpty {
+        while read < cap, let d = try? fh.read(upToCount: min(64 << 10, cap - read)), !d.isEmpty {
             read += d.count
             var rest = d[...]
             while let nl = rest.firstIndex(of: 0x0A) {
                 if !cut { line.append(rest[..<nl].prefix(keep - line.count)) }
                 switch lineVerdict(line) {
                 case .skip: break
-                case .decided(let mate): return mate
-                case .undecided: return nil
+                case .decided(let mate): return (mate, false)
+                case .undecided: return (nil, false)
                 }
                 line = Data(); cut = false
                 rest = rest[rest.index(after: nl)...]
             }
             if !cut { line.append(rest.prefix(keep - line.count)); cut = line.count >= keep }
         }
-        return line.isEmpty ? nil : teammateVerdict(line)
+        return (line.isEmpty ? nil : teammateVerdict(line), read >= cap)
     }
 
     private enum LineVerdict { case skip, decided(Bool), undecided }

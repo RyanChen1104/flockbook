@@ -94,18 +94,21 @@ public final class HerdrStore {
         var ws = ws
         for w in ws.indices { for t in ws[w].tabs.indices { for p in ws[w].tabs[t].panes.indices {
             let pane = ws[w].tabs[t].panes[p]
+            // The log to show in place of `sid`, or nil to show `sid`.
+            func instead(_ sid: String) -> String?? {
+                if let s = swaps[pane.id], s.teammate == sid { return .some(s.lead) }
+                if let leads, pane.agent?.kind == "claude", !leads.contains(sid) { return .some(nil) }
+                return nil
+            }
             guard let sid = pane.agent?.sessionId else {
                 if pane.agent != nil, let path = resolved[pane.id] {
-                    ws[w].tabs[t].panes[p].agent?.sessionId = path
+                    ws[w].tabs[t].panes[p].agent?.sessionId = instead(path) ?? path
                     ws[w].tabs[t].panes[p].agent?.sessionResolved = true
                 }
                 continue
             }
-            if let s = swaps[pane.id], s.teammate == sid {
-                ws[w].tabs[t].panes[p].agent?.sessionId = s.lead
-                ws[w].tabs[t].panes[p].agent?.sessionResolved = true
-            } else if let leads, pane.agent?.kind == "claude", !leads.contains(sid) {
-                ws[w].tabs[t].panes[p].agent?.sessionId = nil
+            if let shown = instead(sid) {
+                ws[w].tabs[t].panes[p].agent?.sessionId = shown
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
@@ -117,7 +120,13 @@ public final class HerdrStore {
         Set(ws.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.sessionId }).union(resolved.values)
     }
 
-    static func leadAsks(_ raw: [Workspace], found: [String: String]) -> [SessionResolver.LeadAsk] { [] }
+    /// The Claude panes to judge: herdr's session, else the log the resolver found.
+    static func leadAsks(_ raw: [Workspace], found: [String: String]) -> [SessionResolver.LeadAsk] {
+        raw.flatMap(\.tabs).flatMap(\.panes).compactMap { p in
+            guard p.agent?.kind == "claude", let sid = p.agent?.sessionId ?? found[p.id] else { return nil }
+            return SessionResolver.LeadAsk(paneId: p.id, sessionId: sid)
+        }
+    }
 
     /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
     /// a teammate's log. The snapshot never waits for it.
@@ -127,16 +136,11 @@ public final class HerdrStore {
         let needs = panes.compactMap { p in
             p.agent.flatMap { $0.sessionId == nil ? SessionResolver.Need(paneId: p.id, kind: $0.kind, cwd: p.cwd) : nil }
         }
-        let asks = panes.compactMap { p in
-            p.agent.flatMap { a in
-                a.kind == "claude" ? a.sessionId.map { SessionResolver.LeadAsk(paneId: p.id, sessionId: $0) } : nil
-            }
-        }
-        if needs.isEmpty, resolved.isEmpty, asks.isEmpty, swaps.isEmpty, leads.isEmpty { return }
+        if needs.isEmpty, resolved.isEmpty, Self.leadAsks(raw, found: [:]).isEmpty, swaps.isEmpty, leads.isEmpty { return }
         let claimed = Set(panes.compactMap { $0.agent?.sessionId })
         resolveTask = Task { [weak self, resolver] in
             let found = await resolver.resolve(needs, claimed: claimed)
-            let pass = await resolver.leads(asks, claimed: claimed.union(found.values))
+            let pass = await resolver.leads(Self.leadAsks(raw, found: found), claimed: claimed.union(found.values))
             guard let self else { return }
             self.resolveTask = nil
             if found != self.resolved || pass.swaps != self.swaps || pass.leads != self.leads {
