@@ -674,6 +674,7 @@ function openViewer(b: HTMLElement, w: number, ht: number): void {
   const pane = b.dataset.pane!, item = b.dataset.item!, index = Number(b.dataset.index);
   const mine = { node, url: null as string | null, from: b, pane, session: view(pane).session, item, index };
   viewer = mine;
+  dragToClose(node, img, mine);
   document.body.append(node);
   (node.querySelector(".viewer-close") as HTMLElement).focus();
   void requestPicture(pane, item, index, true).then((blob) => {
@@ -683,6 +684,79 @@ function openViewer(b: HTMLElement, w: number, ht: number): void {
     img.src = mine.url;
     status.remove();
   });
+}
+/** Dragged up or down like Photos: the picture follows one finger and the page shows through. Let go past a quarter
+ *  of the screen, or flicked that way, it slides out and closes; else it springs back. Zoomed in, sideways or with a
+ *  second finger it does nothing (a second finger mid-drag springs it back). Reduced motion: no slide, no spring. */
+function dragToClose(node: HTMLElement, img: HTMLElement, mine: NonNullable<typeof viewer>): void {
+  let start: { x: number; y: number } | null = null, dragging = false, dy = 0, trail: { t: number; y: number }[] = [];
+  // Each slide (spring back or close) and each new drag starts a round; a slide's end from an older round does nothing.
+  let round = 0;
+  const zoomed = () => img.classList.contains("zoomed") || Math.abs((window.visualViewport?.scale ?? 1) - 1) > 0.01;
+  const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const place = (y: number) => {
+    img.style.transform = y ? `translateY(${y}px)` : "";
+    node.style.setProperty("--drag", String(Math.min(1, Math.abs(y) / (innerHeight / 2))));
+  };
+  // Waits for the slide, with a timer in case no transitionend comes (nothing moved, or the tab was hidden).
+  const settle = (done: () => void) => {
+    let over = false;
+    const mine = ++round;
+    const end = () => { if (over) return; over = true; img.removeEventListener("transitionend", end); if (round === mine) done(); };
+    img.addEventListener("transitionend", end);
+    setTimeout(end, 350);
+  };
+  const back = () => {
+    dragging = false; start = null;
+    if (still()) { place(0); node.classList.remove("moving"); return; }
+    node.classList.add("settling");
+    place(0);
+    settle(() => node.classList.remove("settling", "moving"));
+  };
+  const close = (down: boolean) => {
+    dragging = false; start = null;
+    if (still()) { closeViewer(); return; }
+    node.classList.add("settling", "closing");
+    img.style.transform = `translateY(${down ? innerHeight : -innerHeight}px)`;
+    node.style.setProperty("--drag", "1");
+    settle(() => { if (viewer === mine) closeViewer(); });
+  };
+  node.addEventListener("touchstart", (e) => {
+    if (node.classList.contains("closing")) return;
+    if (e.touches.length !== 1) { if (dragging) back(); start = null; return; }
+    if (zoomed()) return;
+    start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    trail = [{ t: e.timeStamp, y: start.y }];
+  }, { passive: true });
+  node.addEventListener("touchmove", (e) => {
+    if (!start) return;
+    if (e.touches.length !== 1) { if (dragging) back(); start = null; return; }
+    const t = e.touches[0], dx = t.clientX - start.x;
+    dy = t.clientY - start.y;
+    if (!dragging) {
+      // Under the threshold it may still be a tap: cancelling the move would drop its click.
+      if (Math.hypot(dx, dy) < 10) return;
+      if (Math.abs(dy) <= Math.abs(dx)) { start = null; return; }
+      dragging = true;
+      round++;
+      node.classList.remove("settling");
+      node.classList.add("moving");
+    }
+    // A drag: the page under the picture does not move with it.
+    e.preventDefault();
+    place(dy);
+    trail.push({ t: e.timeStamp, y: t.clientY });
+    while (trail.length > 2 && e.timeStamp - trail[0].t > 150) trail.shift();
+  }, { passive: false });
+  node.addEventListener("touchend", (e) => {
+    if (!dragging) { start = null; return; }
+    // Speed over the last 100 ms; a finger that stopped before lifting has none.
+    const from = trail.find((p) => e.timeStamp - p.t <= 100), last = trail[trail.length - 1];
+    const v = from && e.timeStamp > from.t ? (last.y - from.y) / (e.timeStamp - from.t) : 0;
+    if (Math.abs(dy) > innerHeight / 4 || (Math.abs(v) > 0.5 && Math.sign(v) === Math.sign(dy))) close(dy > 0);
+    else back();
+  });
+  node.addEventListener("touchcancel", () => { if (dragging) back(); start = null; });
 }
 function closeViewer(): void {
   if (!viewer) return;

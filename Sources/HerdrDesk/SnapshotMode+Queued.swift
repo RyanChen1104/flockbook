@@ -52,6 +52,18 @@ extension SnapshotRunner {
                  await shot(queue: q, draft: nil, agent: "claude", dark: dark, notice: tooLong, path: "\(dir)/queued-refused-\(dark ? "dark" : "light").png"))
         }
 
+        // SwiftUI asks a pane's minimum height with a zero width. The strip's texts must not wrap a letter per line there:
+        // two queued messages pushed the split view's minimum past the window and the composer off it.
+        for dark in [false, true] {
+            for (n, q) in [("claude", QueuedInput(agent: "claude", items: two, pullable: true)),
+                           ("codex", QueuedInput(agent: "codex", items: two, pullable: false))] {
+                let m = await minimum(queue: q, dark: dark, path: "\(dir)/queued-min-\(n)-\(dark ? "dark" : "light").png")
+                if !dark {
+                    step("min height: \(n) with two queued, the minimum is about its height at 900 wide (\(Int(m.zero)) vs \(Int(m.wide)) pt, without the strip \(Int(m.bare)))",
+                         m.zero <= m.wide + 40 && m.zero > m.bare)
+                }
+            }
+        }
         // A queued bubble ends where the user's bubbles end, at every reading width, text size and pane width.
         for width in ReadingWidth.allCases {
             for size in ReadingSize.allCases {
@@ -159,6 +171,36 @@ extension SnapshotRunner {
         win.orderOut(nil)
         func half(_ x: CGFloat) -> CGFloat { (x * 2).rounded() / 2 }
         return (half(user), half(queued), half(composer), half(card), away)
+    }
+
+    /// The bottom of a pane (queue strip and composer): its minimum height (a zero proposal, as a split view asks), its
+    /// height at 900 wide, and the composer's alone. Draws the bottom at 500 wide and its minimum height to `path`.
+    @MainActor private static func minimum(queue: QueuedInput, dark: Bool, path: String) async -> (zero: CGFloat, wide: CGFloat, bare: CGFloat) {
+        func bottom(_ q: QueuedInput?) -> some View {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if let q { QueuedStrip(queue: q, canPull: true, pulling: false, onPull: {}) }
+                ComposerView(agentName: q?.agent ?? "claude", draft: ComposerDraft(), onSend: { _ in }).inputColumn()
+            }
+            .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
+        }
+        let c = NSHostingController(rootView: bottom(queue))
+        let zero = c.sizeThatFits(in: .zero).height, wide = c.sizeThatFits(in: CGSize(width: 900, height: 0)).height
+        let bare = NSHostingController(rootView: bottom(nil)).sizeThatFits(in: .zero).height
+        let size = NSSize(width: 500, height: zero)
+        let host = NSHostingView(rootView: ZStack { Color(nsColor: .textBackgroundColor); bottom(queue) }
+            .environment(\.colorScheme, dark ? .dark : .light).frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        for _ in 0..<6 { try? await Task.sleep(for: .milliseconds(150)); host.layoutSubtreeIfNeeded(); host.displayIfNeeded() }
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        win.orderOut(nil)
+        return (zero, wide, bare)
     }
 
     /// One still: the last message, the queue strip and the composer, as PaneView stacks them. Waits with Task.sleep, not
