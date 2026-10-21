@@ -105,7 +105,10 @@ public final class HerdrStore {
         return ws
     }
 
-    static func claims(_ ws: [Workspace], resolved: [String: String]) -> Set<String> { [] }
+    /// The logs panes already show: herdr's sessions and the logs the resolver found.
+    static func claims(_ ws: [Workspace], resolved: [String: String]) -> Set<String> {
+        Set(ws.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.sessionId }).union(resolved.values)
+    }
 
     /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
     /// a teammate's log. The snapshot never waits for it.
@@ -124,7 +127,7 @@ public final class HerdrStore {
         let claimed = Set(panes.compactMap { $0.agent?.sessionId })
         resolveTask = Task { [weak self, resolver] in
             let found = await resolver.resolve(needs, claimed: claimed)
-            let swapped = await resolver.leads(asks, claimed: claimed)
+            let swapped = await resolver.leads(asks, claimed: claimed.union(found.values))
             guard let self else { return }
             self.resolveTask = nil
             guard found != self.resolved || swapped != self.swaps else { return }

@@ -180,7 +180,8 @@ import Foundation
     check(small.bytesRead == size(grow), "teammate: an unchanged log is not read again")
     let before = size(grow)
     append(grow, leadLine("team-g") + "\n")
-    check(small.mentions(grow, "team-g") == true && small.bytesRead == size(grow), "teammate: only the bytes added since are read, and a name in them is found")
+    check(small.mentions(grow, "team-g") == true && small.bytesRead > before && small.bytesRead <= size(grow),
+          "teammate: only the bytes added since are read, and a name in them is found")
     fm.createFile(atPath: grow, contents: Data((lead + "\n").utf8))
     check(small.mentions(grow, "team-g") == false, "teammate: a log cut shorter is read again from the start")
     let fresh = grow + ".new"
@@ -237,8 +238,8 @@ import Foundation
     let big = String(repeating: "x", count: 4096)
     check(R.teammateVerdict(cut(#"{"parentUuid":null,"isSidechain":false,"teamName":"team-1","agentName":"helper","type":"user","message":{"role":"user","content":""# + big)) == true,
           "teammate: a cut first message line with teamName and agentName marks a teammate log")
-    check(R.teammateVerdict(cut(#"{"parentUuid":null,"type":"user","message":{"role":"user","content":"say \"teamName\":\"t\",\"agentName\":\"a\" "# + big)) == nil,
-          "teammate: a cut first message line without the keys is not decided (quoted keys in the text do not count)")
+    check(R.teammateVerdict(cut(#"{"parentUuid":null,"type":"user","message":{"role":"user","content":"say \"teamName\":\"t\",\"agentName\":\"a\" "# + big)) == false,
+          "teammate: a cut first message line with type and no teamName before the message is a lead's (quoted keys in the text do not count)")
 
     // The store puts the swap in the pane while herdr still names that teammate log.
     func ws(_ sid: String?) -> [Workspace] {
