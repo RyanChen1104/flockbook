@@ -59,54 +59,41 @@ public actor SessionResolver {
         public init(paneId: String, sessionId: String, cwd: String) { self.paneId = paneId; self.sessionId = sessionId; self.cwd = cwd }
     }
 
-    private struct Found { var teammate: String; var folder: String?; var lead: String?; var checked: Date }
-    /// Session id → it is a teammate's log. Only decided logs (a message line was read) are kept.
-    private var verdicts: [String: Bool] = [:]
+    /// Session id → the team when it is a teammate's log, "" when it is not. Only decided logs are kept.
+    private var teams: [String: String] = [:]
     /// paneId → the last lead id herdr gave for the pane.
     private var lastLead: [String: String] = [:]
-    /// paneId → the lead log the search found while herdr names a teammate.
-    private var found: [String: Found] = [:]
+    private var scan = LeadScan()
 
     /// The panes whose herdr session is a teammate's log, each with the log to show instead (paneId → swap):
     /// the lead id herdr gave last for the pane, else `leadLog`, else none. Every other pane keeps herdr's session.
-    /// A search that cannot tell whose lead a log is gives none: two teammate panes on one folder both get none.
     public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> [String: LeadSwap] {
         let ids = Set(asks.map(\.paneId))
         lastLead = lastLead.filter { ids.contains($0.key) }
-        found = found.filter { ids.contains($0.key) }
-        verdicts = verdicts.filter { v in asks.contains { $0.sessionId == v.key } }
-        let now = Date()
+        teams = teams.filter { v in asks.contains { $0.sessionId == v.key } }
         var out: [String: LeadSwap] = [:]
-        var searched: [LeadAsk] = []
         for a in asks {
-            if verdicts[a.sessionId] == nil, let path = locate(a.sessionId), let v = Self.teammateVerdict(Self.head(path)) {
-                verdicts[a.sessionId] = v
+            if teams[a.sessionId] == nil, let path = locate(a.sessionId) {
+                let head = Self.head(path)
+                if let mate = Self.teammateVerdict(head) { teams[a.sessionId] = mate ? Self.teamName(head) ?? "" : "" }
             }
-            guard let mate = verdicts[a.sessionId] else { continue }
-            guard mate else { lastLead[a.paneId] = a.sessionId; continue }
+            guard let team = teams[a.sessionId] else { continue }
+            guard !team.isEmpty else { lastLead[a.paneId] = a.sessionId; continue }
             if let l = lastLead[a.paneId], !claimed.contains(l) {
                 out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: l)
                 continue
             }
             // Leads herdr gave other panes are theirs, though herdr names a teammate there now.
             let held = claimed.union(lastLead.filter { $0.key != a.paneId }.values)
-            searched.append(a)
-            if let f = found[a.paneId], f.teammate == a.sessionId, f.lead.map({ !Self.isClaimed($0, held) }) ?? true,
-               now.timeIntervalSince(f.checked) < (f.lead == nil ? retry : recheck) {
-                continue
-            }
-            let since = locate(a.sessionId).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.creationDate] as? Date } ?? .distantPast
-            found[a.paneId] = Found(teammate: a.sessionId, folder: nil, lead: nil, checked: now)
-            _ = since
+            let made = locate(a.sessionId).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.creationDate] as? Date } ?? .distantPast
+            let lead = Self.leadLog(projectsDir: projectsDir, cwd: a.cwd, home: home, team: team,
+                                    since: made.addingTimeInterval(-600), claimed: held, scan: &scan)
+            out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
         }
-        var panes: [String: Int] = [:]
-        for a in searched { if let d = found[a.paneId]?.folder { panes[d, default: 0] += 1 } }
-        for a in searched {
-            guard let f = found[a.paneId] else { continue }
-            let shared = f.folder.map { panes[$0, default: 0] > 1 } ?? false
-            if shared { found[a.paneId]?.lead = nil }
-            out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: shared ? nil : f.lead)
-        }
+        // One lead for two panes is no pane's.
+        let twice = Dictionary(grouping: out.values.compactMap(\.lead), by: { $0 }).filter { $0.value.count > 1 }
+        for (p, s) in out where s.lead.map({ twice[$0] != nil }) ?? false { out[p]?.lead = nil }
+        scan.prune()
         return out
     }
 
@@ -115,18 +102,28 @@ public actor SessionResolver {
     /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and
     /// `agentName`. Nil while the log has no message line yet, or when that line is cut off by the read limit and its
     /// keys before `"message":` (where Claude Code writes `teamName`, `agentName` and `type`) do not show a teammate.
-    public static func teammateVerdict(_ data: Data) -> Bool? {
+    public static func teammateVerdict(_ data: Data) -> Bool? { firstMessage(data).map { $0 != nil } }
+
+    /// The team of a teammate's log, from its first message line.
+    public static func teamName(_ data: Data) -> String? { firstMessage(data) ?? nil }
+
+    /// The first message line's team: nil when no line decides, `.some(nil)` for a log that is not a teammate's.
+    private static func firstMessage(_ data: Data) -> String?? {
         for line in data.split(separator: 0x0A) {
             if let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
                 guard let type = o["type"] as? String, type == "user" || type == "assistant" else { continue }
-                func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
-                return named("teamName") && named("agentName")
+                let team = (o["teamName"] as? String) ?? "", agent = (o["agentName"] as? String) ?? ""
+                return .some(team.isEmpty || agent.isEmpty ? nil : team)
             }
             let s = String(decoding: line.prefix(64 << 10), as: UTF8.self)
             let keys = s.range(of: #""message":"#).map { s[..<$0.lowerBound] } ?? s[...]
             guard keys.contains(#""type":"user""#) || keys.contains(#""type":"assistant""#) else { return nil }
-            func named(_ k: String) -> Bool { keys.range(of: "\"\(k)\":\"[^\"]", options: .regularExpression) != nil }
-            return named("teamName") && named("agentName") ? true : nil
+            func value(_ k: String) -> String? {
+                guard let r = keys.range(of: "\"\(k)\":\"[^\"]+\"", options: .regularExpression) else { return nil }
+                return String(keys[r].dropFirst(k.count + 4).dropLast())
+            }
+            guard let team = value("teamName"), value("agentName") != nil else { return nil }
+            return .some(team)
         }
         return nil
     }
@@ -137,16 +134,77 @@ public actor SessionResolver {
         String(cwd.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
     }
 
+    /// The lead's log for a pane whose herdr session is a teammate's of `team`: the one log in the folders of `cwd`
+    /// and its ancestors below `home` that names the team (the lead created the team and runs it), is not a
+    /// teammate's and is not claimed. None or two or more: nil. Logs not modified since `since` are not read.
     public static func leadLog(projectsDir: String, cwd: String, home: String, team: String, since: Date, claimed: Set<String>, scan: inout LeadScan) -> String? {
-        nil
+        let fm = FileManager.default
+        let top = (home as NSString).standardizingPath
+        var dir = (cwd as NSString).standardizingPath
+        var hits: [String] = []
+        while dir.hasPrefix(top + "/") {
+            let folder = projectsDir + "/" + claudeFolder(dir)
+            for f in ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted() where f.hasSuffix(".jsonl") {
+                let p = folder + "/" + f
+                guard !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
+                      at >= since, !scan.isTeammate(p), scan.mentions(p, team) else { continue }
+                hits.append(p)
+            }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        return hits.count == 1 ? hits[0] : nil
     }
 
-    public static func teamName(_ data: Data) -> String? { nil }
-
+    /// What the lead search has read of each log, so that a pass reads only the bytes a log added since the last one.
     public struct LeadScan: Sendable {
-        public init(chunk: Int = 4 << 20) {}
-        public mutating func mentions(_ path: String, _ team: String) -> Bool { false }
-        public func offset(_ path: String, _ team: String) -> UInt64 { 0 }
+        private struct Seen { var offset: UInt64 = 0; var tail = Data(); var hit = false }
+        private var seen: [String: Seen] = [:]
+        /// Path → it is a teammate's log; kept once decided, or once the head is full and still undecided (not one).
+        private var mates: [String: Bool] = [:]
+        private var touched: Set<String> = []
+        private let chunk: Int
+        public init(chunk: Int = 4 << 20) { self.chunk = chunk }
+
+        /// Whether the log at `path` contains `team` (bytes, no JSON parsing).
+        public mutating func mentions(_ path: String, _ team: String) -> Bool {
+            let key = team + "\n" + path
+            touched.insert(path)
+            var s = seen[key] ?? Seen()
+            if s.hit { return true }
+            guard let fh = FileHandle(forReadingAtPath: path), let size = try? fh.seekToEnd() else { return false }
+            defer { try? fh.close() }
+            if size < s.offset { s = Seen() }
+            let needle = Data(team.utf8)
+            try? fh.seek(toOffset: s.offset)
+            while !s.hit, let d = try? fh.read(upToCount: chunk), !d.isEmpty {
+                let buf = s.tail + d
+                s.hit = buf.range(of: needle) != nil
+                s.offset += UInt64(d.count)
+                s.tail = Data(buf.suffix(needle.count - 1))
+            }
+            seen[key] = s
+            return s.hit
+        }
+
+        /// How far `mentions` has read the log for `team`.
+        public func offset(_ path: String, _ team: String) -> UInt64 { seen[team + "\n" + path]?.offset ?? 0 }
+
+        mutating func isTeammate(_ path: String) -> Bool {
+            touched.insert(path)
+            if let m = mates[path] { return m }
+            let head = SessionResolver.head(path)
+            let v = SessionResolver.teammateVerdict(head)
+            if let v { mates[path] = v } else if head.count >= 1 << 20 { mates[path] = false }
+            return v == true
+        }
+
+        /// Forgets the logs no search looked at since the last prune.
+        mutating func prune() {
+            let keep = touched
+            seen = seen.filter { keep.contains(String($0.key[$0.key.index(after: $0.key.firstIndex(of: "\n")!)...])) }
+            mates = mates.filter { keep.contains($0.key) }
+            touched = []
+        }
     }
 
     /// The first 1 MB of a file.
