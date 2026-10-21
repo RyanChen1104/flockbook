@@ -42,9 +42,9 @@ public enum TeamNote: String, Sendable, Hashable, Codable {
     /// The pane shows the lead's last known log, which may be an older session.
     case lastLead
 
-    public static let waitingTitle = ""
-    public static let waitingDetail = ""
-    public static let lastLeadLine = ""
+    public static let waitingTitle = "Waiting for the lead's log"
+    public static let waitingDetail = "Herdr points this pane at an agent-team teammate. The lead's conversation shows here once Herdr reports it. The terminal shows what it is doing."
+    public static let lastLeadLine = "Agent team: showing the lead's last known session."
 }
 
 public struct Pane: Identifiable, Sendable, Hashable {

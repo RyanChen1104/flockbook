@@ -1682,6 +1682,8 @@ async function team() {
   check(await p.until("document.querySelector('.team-line')?.textContent === \"Agent team: showing the lead's last known session.\"", 8000) === true
     && await p.eval("!document.querySelector('.team-wait')"), "team: the last lead -> one line over the conversation");
   check(await p.eval(noScroll), "team: no sideways scroll");
+  check(await p.eval("(() => { const l = document.querySelector('.team-line'); return l.scrollWidth <= l.clientWidth; })()") === true,
+    "team: the line is read whole at 390 pt (not cut off)");
   await p.shot("team-lastlead");
   await p.shot("team-lastlead", true);
   hub.stdin.write("team w2:p2 none s4\n");

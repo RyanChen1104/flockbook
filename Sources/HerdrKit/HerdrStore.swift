@@ -87,28 +87,32 @@ public final class HerdrStore {
 
     /// Fills `agent.sessionId` from `resolved` where herdr gave none, and puts the lead's log (or none) in place of
     /// a teammate's or undecided log while herdr still names it. Either way the session is not herdr's
-    /// (`sessionResolved`). With `leads`, a Claude session that is in neither `leads` nor `swaps` is not judged yet
-    /// and shows no log; nil `leads` (no resolver, as in previews) holds nothing back.
+    /// (`sessionResolved`), and the pane says which (`team`). With `leads`, a Claude session that is in neither `leads`
+    /// nor `swaps` is not judged yet and shows no log, with no note (judging takes one pass); nil `leads` (no resolver,
+    /// as in previews) holds nothing back.
     static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap], leads: Set<String>?) -> [Workspace] {
         guard !resolved.isEmpty || !swaps.isEmpty || leads != nil else { return ws }
         var ws = ws
         for w in ws.indices { for t in ws[w].tabs.indices { for p in ws[w].tabs[t].panes.indices {
             let pane = ws[w].tabs[t].panes[p]
-            // The log to show in place of `sid`, or nil to show `sid`.
-            func instead(_ sid: String) -> String?? {
-                if let s = swaps[pane.id], s.teammate == sid { return .some(s.lead) }
-                if let leads, pane.agent?.kind == "claude", !leads.contains(sid) { return .some(nil) }
+            // The log to show in place of `sid` and the pane's note, or nil to show `sid`.
+            func instead(_ sid: String) -> (String?, TeamNote?)? {
+                if let s = swaps[pane.id], s.teammate == sid { return (s.lead, s.lead == nil ? .waitingForLead : .lastLead) }
+                if let leads, pane.agent?.kind == "claude", !leads.contains(sid) { return (nil, nil) }
                 return nil
             }
             guard let sid = pane.agent?.sessionId else {
                 if pane.agent != nil, let path = resolved[pane.id] {
-                    ws[w].tabs[t].panes[p].agent?.sessionId = instead(path) ?? path
+                    let shown = instead(path)
+                    ws[w].tabs[t].panes[p].agent?.sessionId = shown.map(\.0) ?? path
+                    ws[w].tabs[t].panes[p].agent?.team = shown?.1
                     ws[w].tabs[t].panes[p].agent?.sessionResolved = true
                 }
                 continue
             }
             if let shown = instead(sid) {
-                ws[w].tabs[t].panes[p].agent?.sessionId = shown
+                ws[w].tabs[t].panes[p].agent?.sessionId = shown.0
+                ws[w].tabs[t].panes[p].agent?.team = shown.1
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
