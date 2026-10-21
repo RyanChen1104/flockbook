@@ -1511,6 +1511,110 @@ async function pictures() {
   const full = await p.eval("document.querySelector('.viewer img').src");
   await p.click(".viewer-close");
   check(await p.eval(`!document.querySelector('.viewer') && window.__revoked.includes(${JSON.stringify(full)})`) === true, "pictures: closing the viewer lets the full picture go");
+  // Dragged up or down like the Photos app: the picture follows the finger and the page under it shows through.
+  // Let go past a quarter of the screen, or flicked, it closes; a short drag springs back. Sideways, two fingers or
+  // zoomed in, nothing closes. Each point is [x, y]; one finger unless a second list is given.
+  const opened = async () => {
+    await p.click("button.picture[data-index='1']");
+    return await p.until("document.querySelector('.viewer img')?.naturalWidth === 1600", 8000) === true;
+  };
+  // Each touch carries its own time (`after` ms past the one before), so the page sees the intended speed however
+  // slow the browser is to take them.
+  let clock;
+  const touch = async (type, touchPoints, after) => {
+    clock = type === "touchStart" ? Date.now() / 1000 : clock + after / 1000;
+    await p.cdp("Input.dispatchTouchEvent", { type, touchPoints, timestamp: clock });
+  };
+  const swipe = async (path, { ms = 30, lift = true, second } = {}) => {
+    const at = (i) => [{ id: 1, x: path[i][0], y: path[i][1] }, ...(second ? [{ id: 2, x: second[i][0], y: second[i][1] }] : [])];
+    await touch("touchStart", at(0), 0);
+    for (let i = 1; i < path.length; i++) await touch("touchMove", at(i), ms);
+    if (lift) await touch("touchEnd", [], 120);
+  };
+  const line = (x0, y0, x1, y1, n) => Array.from({ length: n + 1 }, (_, i) => [x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n]);
+  const shift = "(() => { const m = getComputedStyle(document.querySelector('.viewer img')).transform; return m === 'none' ? 0 : Math.round(new DOMMatrix(m).m42); })()";
+  const fade = "(document.querySelector('.viewer') ? Number(getComputedStyle(document.querySelector('.viewer')).backgroundColor.match(/\\(([^)]*)\\)/)?.[1].match(/[\\d.]+/g)?.[3] ?? 1) : 1)";
+  const viewerGone = "!document.querySelector('.viewer')";
+  check(await opened(), "pictures: the viewer opens for a drag");
+  const dragged = await p.eval("document.querySelector('.viewer img').src");
+  await swipe(line(195, 300, 195, 420, 12), { lift: false });
+  const midShift = await p.eval(shift), midFade = await p.eval(fade);
+  check(Math.abs(midShift - 120) <= 12 && midFade < 0.9, `pictures: a drag down moves the picture with the finger and the page shows through (${midShift} px, background ${midFade})`);
+  if (shots) await p.scale(2);
+  await p.shot("picture-viewer-drag");
+  await p.shot("picture-viewer-drag", true);
+  if (shots) await p.scale(3);
+  await touch("touchEnd", [], 120);
+  const sprung = await p.until(`${shift} === 0`, 2000);
+  check(sprung === undefined ? false : !(await p.eval(viewerGone)), `pictures: a short drag springs back and the viewer stays (${await p.eval(shift)} px)`);
+  await swipe(line(195, 300, 195, 300 + 844 / 4 + 40, 16));
+  check(await p.until(`${viewerGone} && window.__revoked.includes(${JSON.stringify(dragged)})`, 2000) === true,
+    "pictures: a drag past a quarter of the screen closes the viewer and lets the full picture go");
+  check(await p.eval("document.activeElement?.matches(\"button.picture[data-index='1']\")") === true, "pictures: after a drag closes it, focus is back on the picture");
+  check(await opened(), "pictures: the viewer opens for a flick");
+  await swipe(line(195, 500, 195, 410, 3), { ms: 16, lift: false });
+  await touch("touchEnd", [], 16);
+  check(await p.until(viewerGone, 2000) === true, "pictures: a quick flick up closes the viewer though it is short");
+  // A drag that closes right after one that sprang back: the spring's late end does not cut the slide out short.
+  // The second drag starts while the spring back runs and lets go 100 to 300 ms after it began (touch times do not
+  // move timers): the spring's end, by its event or its timer, comes during the slide out. The observer reads each
+  // change itself, so one the closing viewer had just before it left counts too; it is set before the first drag, so
+  // no round trip sits between the two. The page times both lifts; when the browser was too slow to let go before the
+  // spring's 350 ms timer (old code would pass), it is set up again.
+  let gap = Infinity;
+  for (let tries = 0; tries < 3 && gap >= 300; tries++) {
+    check(await opened(), "pictures: the viewer opens for two drags");
+    await p.eval("window.__lifts = []; window.__cut = false; { const v = document.querySelector('.viewer'); v.addEventListener('touchend', () => window.__lifts.push(performance.now()), true); new MutationObserver((rs) => { for (const r of rs) if (r.target.classList.contains('closing') && !r.target.classList.contains('moving')) window.__cut = true; }).observe(v, { attributes: true, attributeFilter: ['class'] }); }");
+    await swipe(line(195, 300, 195, 360, 2));
+    const sprang = Date.now();
+    // Sent without waiting on each answer, so slow answers from the busy page do not stretch the gap.
+    const sent = [touch("touchStart", [{ id: 1, x: 195, y: 300 }], 0), touch("touchMove", [{ id: 1, x: 195, y: 600 }], 16)];
+    await new Promise((r) => setTimeout(r, Math.max(0, 100 - (Date.now() - sprang))));
+    await Promise.all([...sent, touch("touchEnd", [], 16)]);
+    gap = await p.eval("window.__lifts.length === 2 ? Math.round(window.__lifts[1] - window.__lifts[0]) : Infinity");
+    if (!(await p.until(viewerGone, 2000))) break;
+  }
+  check(gap < 300, `pictures: the drag after a spring back lets go before the spring's timer (${gap} ms after it)`);
+  check(await p.eval(viewerGone) === true && await p.eval("window.__cut") === false, "pictures: a drag that closes right after a spring back slides out whole");
+  check(await opened(), "pictures: the viewer opens for a sideways drag");
+  await swipe(line(60, 420, 330, 440, 16));
+  await new Promise((r) => setTimeout(r, 400));
+  check(!(await p.eval(viewerGone)) && await p.eval(shift) === 0, `pictures: a sideways drag does not move or close the viewer (${await p.eval(shift)} px)`);
+  await swipe(line(150, 300, 150, 600, 16), { second: line(240, 300, 240, 600, 16) });
+  await new Promise((r) => setTimeout(r, 400));
+  check(!(await p.eval(viewerGone)) && await p.eval(shift) === 0, `pictures: two fingers (a pinch) do not close the viewer (${await p.eval(shift)} px)`);
+  // A real tap that moves the finger a little is still a tap: it zooms the picture, and on Close it closes.
+  const tap = async (sel) => {
+    const [x, y] = await p.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; })()`);
+    await swipe([[x, y], [x + 2, y + 4]]);
+  };
+  // Chrome keeps moves inside its touch slop from the page, so the tap is also checked with a move the page sees:
+  // under the drag threshold it is not cancelled (Safari would drop the click).
+  check(await p.eval(`(() => {
+    const v = document.querySelector('.viewer'), at = (y) => [new Touch({ identifier: 1, target: v, clientX: 195, clientY: y })];
+    v.dispatchEvent(new TouchEvent('touchstart', { touches: at(400), changedTouches: at(400), bubbles: true, cancelable: true }));
+    const kept = v.dispatchEvent(new TouchEvent('touchmove', { touches: at(406), changedTouches: at(406), bubbles: true, cancelable: true }));
+    v.dispatchEvent(new TouchEvent('touchend', { touches: [], changedTouches: at(406), bubbles: true, cancelable: true }));
+    return kept;
+  })()`) === true, "pictures: a move under the drag threshold is not cancelled");
+  await tap(".viewer img");
+  check(await p.until("!!document.querySelector('.viewer img.zoomed')", 1000) === true, "pictures: a tap that moves a little still zooms the picture");
+  await tap(".viewer img");
+  await p.until("!document.querySelector('.viewer img.zoomed')", 1000);
+  await tap(".viewer-close");
+  check(await p.until(viewerGone, 1000) === true, "pictures: a tap on Close that moves a little still closes the viewer");
+  check(await opened(), "pictures: the viewer opens to zoom in");
+  await p.click(".viewer img");   // zoomed in to its own size
+  await swipe(line(195, 300, 195, 600, 16));
+  await new Promise((r) => setTimeout(r, 400));
+  check(!(await p.eval(viewerGone)) && await p.eval("!!document.querySelector('.viewer img.zoomed')"), "pictures: zoomed in, a drag pans and does not close the viewer");
+  await p.click(".viewer-close");
+  // Reduced motion: past the threshold it closes at the lift, with no slide out.
+  await p.cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  check(await opened(), "pictures: the viewer opens with reduced motion");
+  await swipe(line(195, 300, 195, 300 + 844 / 4 + 40, 16));
+  check(await p.eval(viewerGone) === true, "pictures: with reduced motion a long drag closes at once");
+  await p.cdp("Emulation.setEmulatedMedia", { features: [] });
   // Scrolled far away: the previews are let go.
   const previews = await p.eval("[...document.querySelectorAll('button.picture img')].map((i) => i.src)");
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 })); window.scrollTo(0, document.documentElement.scrollHeight)");
