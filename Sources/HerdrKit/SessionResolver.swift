@@ -104,7 +104,7 @@ public actor SessionResolver {
         let a = try? FileManager.default.attributesOfItem(atPath: path)
         guard let file = a?[.systemFileNumber] as? Int, let size = a?[.size] as? UInt64 else { return nil }
         if let v = verdicts[path], v.file == file, size >= v.size { return v.mate }
-        guard let mate = Self.teammateVerdict(Self.head(path)) else { return nil }
+        guard let mate = Self.teammateVerdict(path: path) else { return nil }
         verdicts[path] = Verdict(file: file, size: size, mate: mate)
         return mate
     }
@@ -121,32 +121,62 @@ public actor SessionResolver {
     }
 
     /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and
-    /// `agentName`. A line cut off by the read limit is judged by its keys before `"message":`, where Claude Code
-    /// writes `teamName`, `agentName` and then `type`: `type` without `teamName` is not a teammate's. Nil while no
-    /// message line decides, such as a first line not yet whole.
+    /// `agentName`. Nil while no message line decides, such as a first line not yet whole.
     public static func teammateVerdict(_ data: Data) -> Bool? {
         for line in data.split(separator: 0x0A) {
-            if let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
-                guard let type = o["type"] as? String, type == "user" || type == "assistant" else { continue }
-                func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
-                return named("teamName") && named("agentName")
+            switch lineVerdict(line) {
+            case .skip: continue
+            case .decided(let mate): return mate
+            case .undecided: return nil
             }
-            let s = String(decoding: line, as: UTF8.self)
-            let keys = s.range(of: #""message":"#).map { s[..<$0.lowerBound] } ?? s[...]
-            guard keys.contains(#""type":"user""#) || keys.contains(#""type":"assistant""#) else { return nil }
-            func named(_ k: String) -> Bool { keys.range(of: "\"\(k)\":\"[^\"]", options: .regularExpression) != nil }
-            if !keys.contains(#""teamName":"#) { return false }
-            return named("teamName") && named("agentName") ? true : nil
         }
         return nil
     }
 
-    /// The first 64 KB of a file: enough for the lines before the first message line and that line's keys.
-    static func head(_ path: String) -> Data {
-        guard let fh = FileHandle(forReadingAtPath: path) else { return Data() }
+    /// `teammateVerdict` of the log at `path`, read line by line: at most 64 KB of each line and 8 MB in all.
+    static func teammateVerdict(path: String) -> Bool? {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? fh.close() }
-        return (try? fh.read(upToCount: 64 << 10)) ?? Data()
+        let keep = 64 << 10
+        var line = Data(), cut = false, read = 0
+        while read < 8 << 20, let d = try? fh.read(upToCount: 64 << 10), !d.isEmpty {
+            read += d.count
+            var rest = d[...]
+            while let nl = rest.firstIndex(of: 0x0A) {
+                if !cut { line.append(rest[..<nl].prefix(keep - line.count)) }
+                switch lineVerdict(line) {
+                case .skip: break
+                case .decided(let mate): return mate
+                case .undecided: return nil
+                }
+                line = Data(); cut = false
+                rest = rest[rest.index(after: nl)...]
+            }
+            if !cut { line.append(rest.prefix(keep - line.count)); cut = line.count >= keep }
+        }
+        return line.isEmpty ? nil : teammateVerdict(line)
     }
+
+    private enum LineVerdict { case skip, decided(Bool), undecided }
+
+    /// One log line. A line cut off (by the 64 KB limit, or not yet whole) is judged by its keys: one that begins
+    /// with a `type` other than `user` or `assistant` is skipped; else the keys before `"message":`, where Claude Code
+    /// writes `teamName`, `agentName` and then `type`, decide: `type` without `teamName` is not a teammate's.
+    private static func lineVerdict(_ line: Data) -> LineVerdict {
+        if let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
+            guard let type = o["type"] as? String, type == "user" || type == "assistant" else { return .skip }
+            func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
+            return .decided(named("teamName") && named("agentName"))
+        }
+        let s = String(decoding: line, as: UTF8.self)
+        if s.hasPrefix(#"{"type":""#), !s.hasPrefix(#"{"type":"user""#), !s.hasPrefix(#"{"type":"assistant""#) { return .skip }
+        let keys = s.range(of: #""message":"#).map { s[..<$0.lowerBound] } ?? s[...]
+        guard keys.contains(#""type":"user""#) || keys.contains(#""type":"assistant""#) else { return .undecided }
+        func named(_ k: String) -> Bool { keys.range(of: "\"\(k)\":\"[^\"]", options: .regularExpression) != nil }
+        if !keys.contains(#""teamName":"#) { return .decided(false) }
+        return named("teamName") && named("agentName") ? .decided(true) : .undecided
+    }
+
 
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.
