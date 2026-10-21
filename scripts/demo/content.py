@@ -6,9 +6,11 @@ All names, code and data here are made up. Turn forms:
   ("bash", cmd, output[, error])   shell command; output None = still running (or waiting for approval)
   ("read", path, body)  ("edit", path, old, new)  ("write", path, body)  ("grep", pattern, output)
   ("glob", pattern, output)        file search
+  Claude only: ("u", text, [picture, ...])  a user message with pasted pictures (files in scripts/demo/pictures/)
+               ("readimg", path, picture)   a Read of an image file
   Claude only: ("task", description, prompt, result)  ("todo", [(text, status)])  ("fetch", url, prompt, result)
                ("ask", questions, answers)  an answered AskUserQuestion
-Agent status: idle | working | done | question | approval. `start`/`end`: minutes ago of the first/last turn.
+Agent status: idle | working | done | question | approval. Codex, working: "queued" = follow-ups waiting on its screen. `start`/`end`: minutes ago of the first/last turn.
 Prompts answer keys (Claude only; see gen.interactive):
   approval: the last turn is ("bash", cmd, None); "allow" = {"output", "then": [turns after it], "verb"}.
   question: "question" = one single-choice question; "answers" = {option label: follow-up text}.
@@ -774,6 +776,55 @@ MEADOW_ONBOARD_A = {
     "Keep email + password": "Keeping email and password. I'll restyle `SignInPage` to match the new onboarding pages and leave the auth calls untouched.",
 }
 
+MEADOW_CARD = [
+    ("u", "The harvest card is cramped on the iPhone SE: the total wraps under the number and the chart is cut off after Saturday. Can you fix the layout?",
+     ["card-before.png"]),
+    ("read", "Meadow/Views/HarvestCard.swift", '''struct HarvestCard: View {
+    let total: Measurement<UnitMass>
+    let week: [DayHarvest]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Today").font(.caption.weight(.semibold)).textCase(.uppercase)
+            HStack(alignment: .firstTextBaseline) {
+                Text(total.value, format: .number).font(.system(size: 54, weight: .bold))
+                Text("kg").font(.title3.weight(.semibold))
+            }
+            .frame(width: 150)
+            Text(delta).foregroundStyle(.green)
+            HStack(spacing: 14) {
+                ForEach(week) { day in Bar(day: day).frame(width: 34) }
+            }
+        }
+    }
+}'''),
+    ("a", '''Two fixed sizes cause both problems:
+
+- The total is 54 pt in a 150 pt frame, so "kg" has no room and wraps.
+- Each bar is 34 pt wide with 14 pt gaps: seven days need 320 pt, more than the card has on a 320 pt screen.
+
+I'll let the bars share the width and give the number a smaller size that scales with Dynamic Type.'''),
+    ("edit", "Meadow/Views/HarvestCard.swift", '''                Text(total.value, format: .number).font(.system(size: 54, weight: .bold))
+                Text("kg").font(.title3.weight(.semibold))
+            }
+            .frame(width: 150)''', '''                Text(total.value, format: .number).font(.largeTitle.weight(.bold))
+                Text("kg").font(.title3.weight(.semibold))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)'''),
+    ("edit", "Meadow/Views/HarvestCard.swift", '''            HStack(spacing: 14) {
+                ForEach(week) { day in Bar(day: day).frame(width: 34) }
+            }''', '''            HStack(spacing: 8) {
+                ForEach(week) { day in Bar(day: day).frame(maxWidth: .infinity) }
+            }'''),
+    ("bash", "xcrun simctl io booted screenshot /tmp/harvest-card.png", "Wrote screenshot to: /tmp/harvest-card.png", False,
+     "Take a simulator screenshot"),
+    ("readimg", "/tmp/harvest-card.png", "card-after.png"),
+    ("a", '''Fixed. On the iPhone SE simulator the total and "kg" stay on one line, and all seven days fit: the bars share the card's width.
+
+The pickup row was cut off for the same reason; it now shows the full time.'''),
+]
+
 MEADOW_WIDGETS = [
     ("u", "Add a small home screen widget that shows today's harvest total."),
     ("write", "MeadowWidget/HarvestWidget.swift", '''struct HarvestWidget: Widget {
@@ -786,7 +837,18 @@ MEADOW_WIDGETS = [
 }'''),
     ("bash", "xcodebuild -scheme MeadowWidget -destination 'generic/platform=iOS Simulator' build 2>&1 | tail -1", "** BUILD SUCCEEDED **"),
     ("a", "The widget builds. Next: a timeline provider that refreshes every 30 minutes from the shared app group."),
-    ("bash", "xcodebuild test -scheme MeadowWidget -destination 'platform=iOS Simulator,name=iPhone 17' 2>&1 | tail -3", None),
+    ("write", "MeadowWidget/HarvestProvider.swift", '''struct HarvestProvider: TimelineProvider {
+    let store = HarvestStore(group: "group.meadow.shared")
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<HarvestEntry>) -> Void) {
+        let entry = HarvestEntry(date: .now, total: store.today().total)
+        let next = Calendar.current.date(byAdding: .minute, value: 30, to: .now)!
+        completion(Timeline(entries: [entry], policy: .after(next)))
+    }
+}'''),
+    ("a", "The provider reads today's total from the shared store and asks for a new timeline every 30 minutes. "
+          "The app already writes the store after each pickup, so the widget is never more than half an hour behind. "
+          "Next I'll run the widget tests on the simulator."),
 ]
 
 MEADOW_CRASH = [
@@ -1015,9 +1077,14 @@ WORKSPACES = [
             {"name": "meadow-onboard-dev", "kind": "claude", "status": "question", "title": "Onboarding rework",
              "start": 12, "end": 3, "turns": MEADOW_ONBOARD, "question": MEADOW_ONBOARD_Q, "answers": MEADOW_ONBOARD_A},
         ]},
+        {"label": "harvest card", "panes": [
+            {"name": "meadow-card-dev", "kind": "claude", "status": "done", "title": "Harvest card on small phones",
+             "start": 24, "end": 5, "turns": MEADOW_CARD},
+        ]},
         {"label": "widgets", "panes": [
-            {"name": "meadow-widget-dev", "kind": "codex", "status": "working", "title": "Harvest widget",
-             "start": 28, "end": 0.4, "turns": MEADOW_WIDGETS, "elapsed": "58s"},
+            {"name": "meadow-widget-dev", "kind": "claude", "status": "working", "title": "Harvest widget",
+             "start": 28, "end": 0.4, "turns": MEADOW_WIDGETS, "elapsed": "58s",
+             "queued": ["Also add a medium size that shows the week chart.", "Use the app's green for today's bar."]},
         ]},
         {"label": "crash", "panes": [
             {"name": "meadow-crash-dev", "kind": "claude", "status": "done", "title": "Launch crash after upgrade",

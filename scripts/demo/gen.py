@@ -13,13 +13,22 @@ Ids are fixed per agent, so a rerun overwrites the same files. Nothing is delete
 
 Rebuild = create the new workspaces, then close every workspace that existed before the run.
 """
-import argparse, datetime as dt, json, os, subprocess, sys, textwrap, time, uuid
+import argparse, base64, datetime as dt, json, os, subprocess, sys, textwrap, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import content  # noqa: E402
 
 W = 100  # screen width; narrower than the pane, so the app's terminal sheet does not wrap it
 NS = uuid.UUID("6f1e9a52-3c1d-4b8e-9a8e-0d1f4c2b7a10")
+PICTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")  # drawn by pictures.mjs
+
+
+def picture(name):
+    """A Claude image block with scripts/demo/pictures/<name>."""
+    with open(os.path.join(PICTURES, name), "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    mime = "image/jpeg" if name.endswith(".jpg") else "image/png"
+    return {"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}}
 
 
 # ---------------------------------------------------------------- herdr
@@ -120,7 +129,9 @@ def claude_log(agent, cwd, sid):
     for k, (t, ts) in enumerate(zip(turns, times)):
         tid = f"toolu_{uuid.uuid5(NS, f'{sid}-t{k}').hex[:24]}"
         op = t[0]
-        if op == "u":
+        if op == "u" and len(t) > 2:   # with pasted pictures
+            line("user", {"role": "user", "content": [{"type": "text", "text": t[1]}] + [picture(n) for n in t[2]]}, ts)
+        elif op == "u":
             line("user", {"role": "user", "content": t[1]}, ts)
         elif op == "deny":   # Esc on the permission prompt for the tool call just before
             result(last_tid, REJECTED, ts, True, extra={"toolUseResult": "User rejected tool use"})
@@ -156,6 +167,8 @@ def claude_tool(t, cwd):
     if op == "bash":
         cmd, out = t[1], t[2] if len(t) > 2 else None
         return "Bash", {"command": cmd, "description": t[4] if len(t) > 4 else describe(cmd)}, out, len(t) > 3 and t[3]
+    if op == "readimg":
+        return "Read", {"file_path": absp(t[1])}, [picture(t[2])], False
     if op == "read":
         body = t[2]
         numbered = "\n".join(f"{i + 1:>6}\t{l}" for i, l in enumerate(body.splitlines()))
@@ -334,6 +347,8 @@ def claude_body(agent, cwd_label):
         op = t[0]
         if op == "u":
             text = t[1].split("<pasted_content")[0].strip() or "[Pasted text]"
+            if len(t) > 2:
+                text += "".join(f" [Image #{i + 1}]" for i in range(len(t[2])))
             out += [""] + [f"{GRAY}{l}{RESET}" for l in wrap(text, W - 4, "❯ ", "  ")[:6]] + [""]
         elif op == "a":
             out += wrap(strip_md(t[1]), W - 4, "⏺ ", "  ")[:10] + [""]
@@ -359,6 +374,8 @@ def claude_body(agent, cwd_label):
             out.append(f"{dot} {BOLD}{shown}{RESET}({shorten(arg, W - 20)})" if arg else f"{dot} {BOLD}{shown}{RESET}")
             if res is None:
                 out.append(f"  ⎿  {DIM}Running…{RESET}")
+            elif op == "readimg":
+                out.append(f"  ⎿  Read image ({os.path.getsize(os.path.join(PICTURES, t[2])) / 1024:.1f}KB)")
             elif name == "Read":
                 out.append(f"  ⎿  Read {len(t[2].splitlines())} lines")
             elif name == "Edit":
@@ -380,7 +397,13 @@ def claude_body(agent, cwd_label):
 def claude_screen(agent, cwd_label, state, cursor=0):
     body = claude_body(agent, cwd_label)
     title = agent["title"]
-    if state == "working":
+    if state == "working" and agent.get("queued"):   # messages typed while it works (Flockbook shows them)
+        foot = [f"❯ {q}" for q in agent["queued"]] + [f"  {DIM}ctrl+enter to send now{RESET}",
+                f"{ORANGE}✻{RESET} {agent.get('verb', 'Working')}… ({agent.get('elapsed', '1m 12s')} · {DIM}esc to interrupt{RESET})",
+                GRAY + RULE + RESET, f"❯ {DIM}Press up to edit queued messages{RESET}", GRAY + RULE + RESET,
+                f"  {DIM}⏵⏵ accept edits on (shift+tab to cycle){RESET}"]
+        osc = f"⠂ {title}"
+    elif state == "working":
         foot = [f"{ORANGE}✻{RESET} {agent.get('verb', 'Working')}… ({agent.get('elapsed', '1m 12s')} · {DIM}esc to interrupt{RESET})",
                 "", GRAY + RULE + RESET, "❯ ", GRAY + RULE + RESET, f"  {DIM}⏵⏵ accept edits on (shift+tab to cycle){RESET}"]
         osc = f"⠂ {title}"
@@ -440,7 +463,13 @@ def codex_screen(agent, cwd_label, state):
                 out.append(f"    {DIM}… +{len(rl) - 3} lines{RESET}")
             out.append("")
     title = agent["title"]
-    if state == "working":
+    if state == "working" and agent.get("queued"):   # follow-ups typed while it works (Flockbook shows them)
+        foot = [f"• Working ({agent.get('elapsed', '48s')} • {DIM}esc to interrupt{RESET})", "", "• Queued follow-up inputs"]
+        foot += [f"  ↳ {q}" for q in agent["queued"]]
+        foot += [f"    {DIM}⇧← edit last queued message{RESET}", "", f"› {DIM}Ask Codex to do anything{RESET}", "",
+                 f"  {DIM}gpt-5.5 high · 71% context left{RESET}"]
+        osc = f"⠋ {title}"
+    elif state == "working":
         foot = [f"• Working ({agent.get('elapsed', '48s')} • {DIM}esc to interrupt{RESET})", "", "› ", "",
                 f"  {DIM}gpt-5.5 high · 71% context left{RESET}"]
         osc = f"⠋ {title}"

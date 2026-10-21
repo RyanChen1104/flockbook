@@ -4,8 +4,8 @@ import SwiftUI
 
 /// README / website stills from the live demo session (`scripts/demo-seed.sh`):
 ///   env -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_ENV \
-///     timeout -k 5 60 .build/debug/HerdrDesk --session flockbook-demo --snapshot-demo docs/media [--dark]
-/// Read-only: it selects tabs and reads screens, it sends nothing. Offscreen window, no Dock icon, under 60 s;
+///     timeout -k 5 90 .build/debug/HerdrDesk --session flockbook-demo --snapshot-demo docs/media [--dark]
+/// Read-only: it selects tabs and reads screens, it sends nothing. Offscreen window, no Dock icon, under 90 s;
 /// one appearance per run. Each still is checked (its content is on screen) before it is saved; any failure exits 1.
 extension SnapshotRunner {
     @MainActor static func runDemo(dir: String, store: HerdrStore) async {
@@ -163,6 +163,27 @@ extension SnapshotRunner {
         await clearIsland("reply")
         save("reply")
 
+        // 9. Pictures: the owner's pasted screenshot and the agent's simulator screenshot, in the conversation.
+        let card = open("Meadow", "harvest card")
+        func pictures() -> Int {
+            (card?.panes ?? []).flatMap { store.conversation(for: $0.agent?.sessionId) }.reduce(0) { n, m in
+                if case .toolChips(let chips) = m.kind { return n + chips.reduce(0) { $0 + $1.calls.reduce(0) { $0 + $1.images.count } } }
+                return n + m.images.count
+            }
+        }
+        let shown = await wait(6) { pictures() >= 2 }
+        step("pictures: \(pictures()) in the log (want 2)", shown)
+        try? await Task.sleep(for: .seconds(1.5))   // the pictures decode
+        await clearIsland("pictures")
+        save("pictures")
+
+        // 10. Queued: Claude Code's messages waiting for its turn to end, above the reply field.
+        let widget = open("Meadow", "widgets")
+        let queued = await wait(6) { (widget?.panes.first).map { (model.queued[$0.id]?.items.count ?? 0) >= 2 } ?? false }
+        step("queued: \((widget?.panes.first).flatMap { model.queued[$0.id]?.items.count } ?? 0) messages (want 2)", queued)
+        await clearIsland("queued")
+        save("queued")
+
         print("snapshot-demo: \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
         finish()
     }
@@ -200,11 +221,14 @@ extension SnapshotRunner {
               let _ = Optional(ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))), let data = ctx.data else { return false }
         let px = data.assumingMemoryBound(to: UInt8.self)
         func at(_ x: CGFloat, _ y: CGFloat) -> Int { (Int(y * k) * w + Int(x * k)) * 4 }   // y from the top, in points
-        // Content area 330...1230 pt; the island and its shadow sit around the middle of the top 54 pt.
+        // Content area 330...1230 pt; the island, the + / terminal capsule and their shadows sit in the top 54 pt, where
+        // the toolbar laid them out (a workspace with many tabs has a wider island).
+        let row = WindowChrome.toolbarRow(win).map { $0.island.union($0.actions) } ?? CGRect(x: 540, y: 0, width: 420, height: 54)
+        let skip = (row.minX - 12)...(row.maxX + 12)
         for y in stride(from: CGFloat(4), to: 58, by: 0.5) {
             let ref = at(1240, y)
             for x in stride(from: CGFloat(330), to: 1230, by: 0.5) {
-                if y < 54, x > 540, x < 960 { continue }
+                if y < 54, skip.contains(x) { continue }
                 let p = at(x, y)
                 if (0..<3).contains(where: { abs(Int(px[p + $0]) - Int(px[ref + $0])) > 8 }) { return false }
             }

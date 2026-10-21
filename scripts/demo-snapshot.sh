@@ -11,5 +11,5 @@ for look in light dark; do
     fi
     flag=; [ "$look" = dark ] && flag=--dark
     env -u HERDR_SOCKET_PATH -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_ENV \
-        timeout -k 5 60 .build/debug/HerdrDesk --session flockbook-demo --snapshot-demo "$out" $flag
+        timeout -k 5 90 .build/debug/HerdrDesk --session flockbook-demo --snapshot-demo "$out" $flag
 done

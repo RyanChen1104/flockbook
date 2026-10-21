@@ -228,9 +228,23 @@ import ImageIO
             if w.count == 3, w[0] == "pictures", b.items[w[2]] == nil {
                 let file = dir.appendingPathComponent("\(w[2]).jsonl")
                 try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let user = [noisyImage(.jpeg, w: 120, h: 80, seed: 3), noisyImage(.png, w: 1600, h: 1200, seed: 4)].compactMap { $0 }
-                let tool = [noisyImage(.png, w: 900, h: 600, seed: 5)].compactMap { $0 }
-                if let items = try? pictureLog(file, user: user, tool: tool, tail: 40) { b.items[w[2]] = items; b.logURLs[w[2]] = file }
+                // Stills (web-test --shots): drawn pictures of a fictional app screen in the same shapes, and words to match.
+                if let drawn = ProcessInfo.processInfo.environment["SERVE_WEB_PICTURES"] {
+                    func load(_ name: String) -> Data? { try? Data(contentsOf: URL(fileURLWithPath: drawn).appendingPathComponent(name)) }
+                    let user = ["card-thumb.jpg", "card-before-1600.png"].compactMap(load), tool = ["card-after-900.png"].compactMap(load)
+                    let say = ["Two fixed sizes cause it: the total is 54 pt in a 150 pt frame, and seven bars of 34 pt need more than a 320 pt screen.",
+                               "The bars now share the width, and the total uses a smaller size that scales with Dynamic Type.",
+                               "On the iPhone SE the whole week fits, and the pickup row shows its full time."]
+                    if let items = try? pictureLog(file, user: user, tool: tool, tail: 40,
+                                                   text: "The harvest card is cramped on the iPhone SE. Can you fix the layout?",
+                                                   say: { $0 == 39 ? "Done: the card fits on a 320 pt screen." : say[$0 % say.count] }) {
+                        b.items[w[2]] = items; b.logURLs[w[2]] = file
+                    }
+                } else {
+                    let user = [noisyImage(.jpeg, w: 120, h: 80, seed: 3), noisyImage(.png, w: 1600, h: 1200, seed: 4)].compactMap { $0 }
+                    let tool = [noisyImage(.png, w: 900, h: 600, seed: 5)].compactMap { $0 }
+                    if let items = try? pictureLog(file, user: user, tool: tool, tail: 40) { b.items[w[2]] = items; b.logURLs[w[2]] = file }
+                }
             }
             // `session <pane> <session> [rows]`: a new agent session in that pane (40 rows of its own unless given).
             if w.count == 3 || w.count == 4, w[0] == "session" || w[0] == "pictures" {

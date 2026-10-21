@@ -27,8 +27,9 @@ func noisyImage(_ type: UTType, w: Int, h: Int, seed: UInt64 = 1) -> Data? {
 }
 
 /// A Claude Code log with pictures: the owner's message with `user` pictures, then a Read call whose result has `tool`
-/// pictures, then `tail` assistant lines. The items as the parser reads the file (refs with real offsets).
-func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: String = "What is wrong here?") throws -> [ConversationItem] {
+/// pictures, then `tail` assistant lines (`say` writes line i). The items as the parser reads the file (refs with real offsets).
+func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: String = "What is wrong here?",
+                say: (Int) -> String = { "Line \($0 + 1). The picture shows the layout of the settings page; the second column wraps on a narrow window." }) throws -> [ConversationItem] {
     func json(_ o: Any) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: o, options: [.withoutEscapingSlashes]), as: UTF8.self) }
     func block(_ d: Data) -> [String: Any] {
         let mime = LogImage.header(d).map { "image/\($0.format.rawValue)" } ?? "image/png"
@@ -41,8 +42,7 @@ func pictureLog(_ file: URL, user: [Data], tool: [Data], tail: Int = 0, text: St
             ["type": "tool_result", "tool_use_id": "pic-r1", "content": tool.map(block)]]]] as [String: Any]))
     }
     for i in 0..<tail {
-        lines.append(json(["type": "assistant", "uuid": "pic-tail-\(i)", "message": ["content": [["type": "text", "text":
-            "Line \(i + 1). The picture shows the layout of the settings page; the second column wraps on a narrow window."]]]] as [String: Any]))
+        lines.append(json(["type": "assistant", "uuid": "pic-tail-\(i)", "message": ["content": [["type": "text", "text": say(i)]]]] as [String: Any]))
     }
     var p = ConversationParser(), offset: UInt64 = 0, body = Data()
     for l in lines {

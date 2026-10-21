@@ -113,7 +113,8 @@
 							href="{links.github}/releases">GitHub Releases</a
 						>{:else}GitHub Releases{/if}
 					and drag Flockbook to Applications. Signed and notarized by Apple. Check the download against
-					<code>SHA256SUMS</code>.
+					<code>SHA256SUMS</code>. After that, Flockbook updates itself: it checks for a new release once a day
+					and installs it only after you agree.
 					<small class="unsigned">
 						Only if a build's release notes mark it unsigned:
 						<code>xattr -dr com.apple.quarantine /Applications/Flockbook.app</code>
@@ -124,7 +125,9 @@
 				<dt>Privacy</dt>
 				<dd>
 					Runs locally. Reads agent session logs on your Mac and talks to Herdr through its local socket.
-					Sends nothing over the network. No telemetry.
+					No telemetry. It goes on the network only for the daily update check (you can turn it off) and, when
+					you turn them on, for remote access over Tailscale or your local network and for notifications
+					through your phone’s push service.
 				</dd>
 			</div>
 		</dl>

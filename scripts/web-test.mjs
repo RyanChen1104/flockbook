@@ -48,7 +48,9 @@ if (live && /"CGSSessionScreenIsLocked"\s*=\s*Yes/.test(execFileSync("/usr/sbin/
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("HERDR_")));
 const hub = live
   ? spawn(join(root, ".build/debug/HerdrDesk"), ["--session", live, "--serve-remote"], { stdio: ["pipe", "pipe", "ignore"], env })
-  : spawn(join(root, ".build/debug/HerdrKitChecks"), ["--serve-web"], { stdio: ["pipe", "pipe", "inherit"] });
+  : spawn(join(root, ".build/debug/HerdrKitChecks"), ["--serve-web"], { stdio: ["pipe", "pipe", "inherit"],
+      // Stills: the pictures in the conversation are the drawn ones (scripts/demo/pictures), not noise.
+      env: shots ? { ...process.env, SERVE_WEB_PICTURES: join(root, "scripts/demo/pictures") } : process.env });
 const info = await new Promise((resolve, reject) => {
   const rl = createInterface({ input: hub.stdout });
   rl.on("line", (l) => {
@@ -1477,7 +1479,8 @@ async function pictures() {
   await p.until("!!document.querySelector('.list')", 8000);
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   const boxes = "document.querySelectorAll('button.picture')";
-  check(await p.until(`${boxes}.length === 3 && document.body.innerText.includes('Line 40.')`, 8000) === true,
+  const lastLine = shots ? "Done: the card fits" : "Line 40.";   // the drawn pictures' words (stills)
+  check(await p.until(`${boxes}.length === 3 && document.body.innerText.includes(${JSON.stringify(lastLine)})`, 8000) === true,
     `pictures: three picture boxes in the conversation (${await p.eval(`${boxes}.length`)}: ${await p.eval("document.body.innerText.slice(0, 160)")})`);
   // Each box has the picture's shape before anything loads (120x80, 1600x1200 in the bubble; 900x600 under the tool group).
   const shapes = await p.eval(`[...${boxes}].map((b) => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })`);

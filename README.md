@@ -41,6 +41,24 @@ Type under the conversation and press Return to send. You can paste images or at
   <img src="docs/media/reply-light.png" alt="Reply" width="800">
 </picture>
 
+### Pictures
+
+Screenshots you paste and pictures the agent reads (for example a simulator screenshot) show in the conversation. Click one to see it at full size.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/pictures-dark.png">
+  <img src="docs/media/pictures-light.png" alt="Pictures in the conversation" width="800">
+</picture>
+
+### Queued messages
+
+Messages you send while an agent works wait in the agent's queue. Flockbook shows them above the reply field, on the Mac and on the phone, until the agent takes them. For Claude Code, **Pull back to edit** moves the queue into the reply field; Codex's queue is edited in its terminal.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/queued-dark.png">
+  <img src="docs/media/queued-light.png" alt="Two queued messages above the reply field, with Pull back to edit" width="800">
+</picture>
+
 ### Question card
 
 When an agent asks a question with options, pick an answer from a card.
@@ -101,6 +119,20 @@ A phone with input can also send images: tap **+** in the message box (camera or
 
 Codex questions can be answered from the phone. Claude Code questions need one more step: at **Answer Claude questions from the phone**, click **Install…**. The sheet shows the exact entry it adds to `~/.claude/settings.json` (a copy of the file is kept first). The hook only tells Flockbook the question; the phone answers only when the picker on screen matches it exactly, else it says to answer on the Mac. Restart running Claude sessions to include them. **Uninstall…** removes only that entry.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/phone-dark.png">
+  <img src="docs/media/phone-light.png" alt="Flockbook on a phone" width="800">
+</picture>
+
+#### Notifications on the phone
+
+Tap **Notify me** at the top of the agent list. The phone then shows a notification when an agent needs you, also when the page is closed. On iPhone, add Flockbook to the Home Screen first and turn on notifications there. The notification has the agent's title, workspace and tab, never conversation text. It goes through your phone's push service (Apple, Google, Mozilla or Microsoft).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/push-dark.png">
+  <img src="docs/media/push-light.png" alt="Notifications on the phone" width="800">
+</picture>
+
 **Direct address** (no Tailscale Serve) is under the same setting, marked advanced and less safe: it uses a self-signed certificate that the phone's browser cannot check.
 
 ## Requirements
@@ -135,7 +167,7 @@ The Rust code in `xplat/` is an early port of Flockbook to Linux and Windows, bu
 
 ## Privacy
 
-Flockbook runs locally. It reads agent session logs on your Mac (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.pi/agent/sessions/`) and talks to Herdr through its local socket. It sends nothing over the network and has no telemetry.
+Flockbook runs locally. It reads agent session logs on your Mac (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.pi/agent/sessions/`) and talks to Herdr through its local socket. It has no telemetry. It goes on the network only for the daily update check (you can turn it off) and, when you turn them on, for remote access over Tailscale or your local network and for phone notifications through the phone's push service.
 
 ## How this was built
 

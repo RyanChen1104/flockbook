@@ -37,6 +37,34 @@ export const features = [
 		alt: 'A question card with three options and a permission card with Allow and Deny.'
 	},
 	{
+		id: 'pictures',
+		title: 'Pictures in the conversation',
+		body: 'Screenshots you paste and pictures the agent reads show in the conversation, on the Mac and on your phone.',
+		image: 'pictures',
+		alt: 'A conversation with a pasted screenshot of a cramped app screen and the agent’s screenshot of the fixed screen.'
+	},
+	{
+		id: 'queued',
+		title: 'See what is queued',
+		body: 'Messages you send while an agent works stay above the reply field until the agent takes them, and you can pull Claude Code’s queue back to edit it.',
+		image: 'queued',
+		alt: 'Two queued messages above the reply field while the agent works, with Pull back to edit.'
+	},
+	{
+		id: 'phone',
+		title: 'Your agents on your phone',
+		body: 'Read, reply, answer and approve from your phone over Tailscale or your local network. It is off until you turn it on.',
+		image: 'phone',
+		alt: 'Two phone screens: the list of agents that need you, and a conversation with pictures.'
+	},
+	{
+		id: 'push',
+		title: 'Notifications on your phone',
+		body: 'Your phone shows a notification when an agent needs you, also when the page is closed.',
+		image: 'push',
+		alt: 'A phone lock screen with Flockbook notifications for agents that need you.'
+	},
+	{
 		id: 'overview',
 		title: 'Every workspace at a glance',
 		body: 'Overview shows every tab of every workspace with its state: working, waiting for you, or done.',
