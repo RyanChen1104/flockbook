@@ -105,6 +105,7 @@ try await checksPushStore()
 await checksPushCenter()
 await checksNotifyEndpoint()
 try await checksSettingsTabs()
+try await checksStatusLine()
 
 print(failures == 0 ? "OK \(total) checks passed" : "\(failures) of \(total) checks FAILED")
 exit(failures == 0 ? 0 : 1)

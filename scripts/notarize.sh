@@ -16,13 +16,14 @@ PROFILE="${NOTARY_PROFILE:-flockbook}"
 [ -e "$TARGET" ] || { echo "missing: $TARGET (run scripts/bundle.sh)"; exit 1; }
 codesign -dvv "$TARGET" 2>&1 | grep -q 'Authority=Developer ID Application' \
   || { echo "not Developer ID signed: $TARGET"; exit 1; }
-# The agents' command inside the app: notarization needs it signed with the Developer ID and the hardened runtime too.
+# The helpers inside the app (the agents' command, the statusLine wrapper): notarization needs it signed with the Developer ID and the hardened runtime too.
 if [[ "$TARGET" == *.app ]]; then
-  HELPER="$TARGET/Contents/MacOS/flockbook-notify"
-  [ -e "$HELPER" ] || { echo "missing: $HELPER (run scripts/bundle.sh)"; exit 1; }
-  INFO="$(codesign -dvv "$HELPER" 2>&1)"
-  grep -q 'Authority=Developer ID Application' <<<"$INFO" || { echo "not Developer ID signed: $HELPER"; exit 1; }
-  grep -q 'flags=.*runtime' <<<"$INFO" || { echo "no hardened runtime: $HELPER"; exit 1; }
+  for HELPER in "$TARGET/Contents/MacOS/flockbook-notify" "$TARGET/Contents/MacOS/flockbook-statusline"; do
+    [ -e "$HELPER" ] || { echo "missing: $HELPER (run scripts/bundle.sh)"; exit 1; }
+    INFO="$(codesign -dvv "$HELPER" 2>&1)"
+    grep -q 'Authority=Developer ID Application' <<<"$INFO" || { echo "not Developer ID signed: $HELPER"; exit 1; }
+    grep -q 'flags=.*runtime' <<<"$INFO" || { echo "no hardened runtime: $HELPER"; exit 1; }
+  done
 fi
 
 if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then

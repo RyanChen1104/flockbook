@@ -52,6 +52,8 @@ import CryptoKit
     var remotePictures: Bool { get }
     /// The log file of an agent session, where its pictures are read back (`LogImage.read`).
     func logURL(session: String) -> URL?
+    /// Claude Code's saved status line of this agent session (`StatusLineFolder`); nil when the feature is off or none.
+    func statusLine(session: String) -> StatusLineRecord?
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -112,6 +114,7 @@ extension Hub {
     private var lastScreen: [String: String] = [:]
     private var lastPrompt: [String: HubPrompt] = [:]
     private var lastQueued: [String: HubQueued] = [:]
+    private var lastStatusLine: [String: HubStatusLine] = [:]
 
     private let pairing: HubPairing?
 
@@ -241,7 +244,7 @@ extension Hub {
             return await pushes(p, force: true) + [ok(m.id)]
         case .unwatch(let id):
             watched.removeAll { $0 == id }
-            sent[id] = nil; lastScreen[id] = nil; lastPrompt[id] = nil; lastQueued[id] = nil
+            sent[id] = nil; lastScreen[id] = nil; lastPrompt[id] = nil; lastQueued[id] = nil; lastStatusLine[id] = nil
             return [ok(m.id)]
         case .loadEarlier(let session, let before):
             return await loadEarlier(session: session, before: before, re: m.id)
@@ -588,6 +591,10 @@ extension Hub {
         let queued = HubQueued(pane: p.id, st.queued)
         if force ? !queued.items.isEmpty : queued != (lastQueued[p.id] ?? HubQueued(pane: p.id, nil)) { out.append(.queued(queued)) }
         lastQueued[p.id] = queued
+        // The status line (Claude only), the same way.
+        let line = HubStatusLine(pane: p.id, record: p.agent.flatMap { $0.kind == "claude" ? $0.sessionId : nil }.flatMap { backend.statusLine(session: $0) })
+        if force ? !line.lines.isEmpty : line != (lastStatusLine[p.id] ?? HubStatusLine(pane: p.id, lines: [])) { out.append(.statusLine(line)) }
+        lastStatusLine[p.id] = line
         return out
     }
 
