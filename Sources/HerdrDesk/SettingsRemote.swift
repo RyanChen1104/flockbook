@@ -2,7 +2,7 @@ import HerdrKit
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 
-/// Settings > Remote access: off by default; the state always in sight; pairing and the device list in sheets.
+/// Settings > Remote: Remote access, off by default; the state always in sight; pairing and the device list in sheets.
 /// Tailscale mode (recommended) shows a checklist with live state; the direct address is "Advanced, less safe".
 struct RemoteAccessSection: View {
     @Bindable var hub: RemoteHub
@@ -16,6 +16,7 @@ struct RemoteAccessSection: View {
                 Text("Remote access")
                 Text(status).foregroundStyle(hub.problem != nil && hub.enabled ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
             }
+            .settingsControl(.remoteAccess)
             if hub.enabled {
                 Picker(selection: $hub.mode) {
                     Text("Tailscale (recommended)").tag(RemoteHub.Mode.tailscale)
@@ -25,7 +26,8 @@ struct RemoteAccessSection: View {
                     Text(hub.mode == .tailscale ? "Tailscale gives your Mac a private HTTPS address only your devices can reach."
                                                 : "The phone's browser cannot check this certificate. Use Tailscale when you can.")
                 }
-                if hub.mode == .tailscale { TailscaleSteps(hub: hub) } else { addressPicker }
+                .settingsControl(.connectWith)
+                if hub.mode == .tailscale { TailscaleSteps(hub: hub).settingsControl(.tailscaleSteps) } else { addressPicker.settingsControl(.address) }
                 LabeledContent {
                     HStack {
                         Button("Devices…") { showDevices = true }
@@ -36,10 +38,12 @@ struct RemoteAccessSection: View {
                     Text("Devices")
                     Text(hub.deviceList.isEmpty ? "None paired." : "\(hub.deviceList.count) paired, \(hub.deviceList.filter { $0.device.level == .input }.count) with input.")
                 }
+                .settingsControl(.devices)
                 Toggle(isOn: $hub.pictures) {
                     Text("Show pictures on remote devices")
                     Text("Phones load each picture from this Mac when it scrolls into view. Nothing is stored on the phone.")
                 }
+                .settingsControl(.pictures)
                 LabeledContent {
                     Button("Notifications…") { showPushes = true }
                 } label: {
@@ -47,6 +51,7 @@ struct RemoteAccessSection: View {
                     Text(hub.pushList.isEmpty ? "No phone has them on. Tap Notify me in Flockbook on the phone."
                                               : "On for \(hub.pushList.count) \(hub.pushList.count == 1 ? "device" : "devices").")
                 }
+                .settingsControl(.phoneNotifications)
                 if let command = hub.notifyCommand {
                     LabeledContent {
                         Button("Copy") {
@@ -58,8 +63,8 @@ struct RemoteAccessSection: View {
                         Text(command).font(.caption.monospaced()).textSelection(.enabled)
                         Text("An agent runs it with a title and a text to notify the phones: flockbook-notify \"Title\" \"Text\"")
                     }
+                    .settingsControl(.agentCommand)
                 }
-                ClaudeHookRow(setup: hub.claudeHook)
             }
         } header: {
             Text("Remote access")

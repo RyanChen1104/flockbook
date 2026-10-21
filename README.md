@@ -111,7 +111,7 @@ Read your agents, and Allow or answer, from your phone. Off by default. Tailscal
 
 1. Install [Tailscale](https://tailscale.com/download) on the Mac and on the phone. Sign in with the same account on both.
 2. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), on the DNS page, turn on **MagicDNS** and **HTTPS Certificates**.
-3. In Flockbook, open **Settings > Remote access** and turn it on. The checklist shows each step with a tick.
+3. In Flockbook, open **Settings > Remote**, turn on **Remote access**. The checklist shows each step with a tick.
 4. Click **Turn On** at "Tailscale Serve". It runs the command it shows (or copy it and run it yourself). It shares only port 7480 with your tailnet, never the internet, and leaves your other Serve settings alone. **Turn Off** removes only that port.
 5. Click **Pair a Device** and scan the QR code with the phone. A paired phone can read; turn on input for it in **Devices**.
 

@@ -1,10 +1,12 @@
+import HerdrKit
 import SwiftUI
 
 enum AppSettings { static let allowInputKey = "allowInput" }
 
-/// One grouped pane, like the Settings of Notes or Reminders: four settings do not fill toolbar tabs.
-/// Each row says what it does in a secondary line under its title. Shown as a page of the main window (SettingsPage).
+/// One tab of Settings as a grouped form, like a pane of System Settings. Each row says what it does in a secondary line
+/// under its title. The tabs and the rows each holds: `SettingsTab` (HerdrKit). Shown beside the tab list (SettingsSplit).
 struct SettingsView: View {
+    var tab: SettingsTab = .general
     @AppStorage(AppSettings.allowInputKey, store: AppDefaults.store) private var allowInput = true
     @AppStorage(WindowGlass.key, store: AppDefaults.store) private var glass = WindowGlass.full.rawValue
     @Environment(\.accessibilityReduceTransparency) private var systemReduce
@@ -16,76 +18,17 @@ struct SettingsView: View {
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
-    /// The Settings page: fills the detail column and scrolls, so a long page (Remote access) never runs off the screen.
+    /// The Settings page: fills its column and scrolls, so a long page (Remote access) never runs off the screen.
     /// Snapshots keep the full height at a fixed width.
     var scrolls = false
 
     var body: some View {
         Form {
-            Section("Appearance") {
-                Picker(selection: reduce ? .constant(WindowGlass.off.rawValue) : $glass) {
-                    ForEach(WindowGlass.allCases) { Text($0.label).tag($0.rawValue) }
-                } label: {
-                    Text("Window")
-                    Text(reduce ? "Opaque while Reduce Transparency is on in System Settings."
-                                : "Glass lets the desktop show through, blurred.")
-                }
-                .pickerStyle(.segmented)
-                .disabled(reduce)
-                .probe { SettingsProbe.firstRow = $0 }
-            }
-            Section("Reading") {
-                Picker(selection: $readingSize) {
-                    ForEach(ReadingSize.allCases) { Text($0.label).tag($0.rawValue) }
-                } label: {
-                    Text("Text size")
-                    Text("⌘= larger, ⌘− smaller, ⌘0 reset")
-                }
-                .pickerStyle(.segmented)
-                Picker(selection: $readingWidth) {
-                    ForEach(ReadingWidth.allCases) { Text($0.label).tag($0.rawValue) }
-                } label: {
-                    Text("Width")
-                    Text(widthNote)
-                }
-                .pickerStyle(.segmented)
-            }
-            Section {
-                Toggle(isOn: $allowInput) {
-                    Text("Allow sending input to agents")
-                    Text("Typing, Allow and Deny, new tab, close tab and split.")
-                }
-            } header: {
-                Text("Input")
-            } footer: {
-                Label {
-                    Text(readOnlyLaunch ? "Launched with --read-only: the app only reads, whatever this says."
-                         : allowInput ? "Flockbook types into your agents' terminals. Turn this off to only read."
-                                      : "Read only: typing, Allow and Deny, new tab, close tab and split are disabled.")
-                } icon: {
-                    Image(systemName: allowInput && !readOnlyLaunch ? "exclamationmark.triangle.fill" : "lock.fill")
-                        .foregroundStyle(allowInput && !readOnlyLaunch ? .orange : .secondary)
-                }
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let remote { RemoteAccessSection(hub: remote) }
-            if let updates = AppUpdater.shared.updater {
-                Section("Updates") {
-                    Toggle(isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },
-                                         set: { AppUpdater.shared.automaticallyChecks = $0 })) {
-                        Text("Check for updates automatically")
-                        Text("Once a day. Flockbook asks before it installs an update.")
-                    }
-                    LabeledContent {
-                        Button("Check Now") { AppUpdater.shared.checkForUpdates() }.disabled(!AppUpdater.shared.canCheck)
-                    } label: {
-                        Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                        if let last = updates.lastUpdateCheckDate {
-                            Text("Last checked \(last.formatted(.relative(presentation: .named)))")
-                        }
-                    }
-                }
+            switch tab {
+            case .general: general
+            case .agents: agents
+            case .remote: if let remote { RemoteAccessSection(hub: remote) }
+            case .updates: updates
             }
         }
         .formStyle(.grouped)
@@ -97,6 +40,95 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: !scrolls)
     }
 
+    @ViewBuilder private var general: some View {
+        Section("Appearance") {
+            Picker(selection: reduce ? .constant(WindowGlass.off.rawValue) : $glass) {
+                ForEach(WindowGlass.allCases) { Text($0.label).tag($0.rawValue) }
+            } label: {
+                Text("Window")
+                Text(reduce ? "Opaque while Reduce Transparency is on in System Settings."
+                            : "Glass lets the desktop show through, blurred.")
+            }
+            .pickerStyle(.segmented)
+            .disabled(reduce)
+            .settingsControl(.window)
+        }
+        Section("Reading") {
+            Picker(selection: $readingSize) {
+                ForEach(ReadingSize.allCases) { Text($0.label).tag($0.rawValue) }
+            } label: {
+                Text("Text size")
+                Text("⌘= larger, ⌘− smaller, ⌘0 reset")
+            }
+            .pickerStyle(.segmented)
+            .settingsControl(.textSize)
+            Picker(selection: $readingWidth) {
+                ForEach(ReadingWidth.allCases) { Text($0.label).tag($0.rawValue) }
+            } label: {
+                Text("Width")
+                Text(widthNote)
+            }
+            .pickerStyle(.segmented)
+            .settingsControl(.readingWidth)
+        }
+    }
+
+    @ViewBuilder private var agents: some View {
+        Section {
+            Toggle(isOn: $allowInput) {
+                Text("Allow sending input to agents")
+                Text("Typing, Allow and Deny, new tab, close tab and split.")
+            }
+            .settingsControl(.allowInput)
+        } header: {
+            Text("Input")
+        } footer: {
+            Label {
+                Text(readOnlyLaunch ? "Launched with --read-only: the app only reads, whatever this says."
+                     : allowInput ? "Flockbook types into your agents' terminals. Turn this off to only read."
+                                  : "Read only: typing, Allow and Deny, new tab, close tab and split are disabled.")
+            } icon: {
+                Image(systemName: allowInput && !readOnlyLaunch ? "exclamationmark.triangle.fill" : "lock.fill")
+                    .foregroundStyle(allowInput && !readOnlyLaunch ? .orange : .secondary)
+            }
+            .font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // The question hook serves the phone: shown while Remote access is on, as before.
+        if let remote, remote.enabled {
+            Section("Claude Code") {
+                ClaudeHookRow(setup: remote.claudeHook).settingsControl(.claudeQuestions)
+            }
+        }
+    }
+
+    @ViewBuilder private var updates: some View {
+        Section("Updates") {
+            if AppUpdater.shared.updater != nil {
+                Toggle(isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },
+                                     set: { AppUpdater.shared.automaticallyChecks = $0 })) {
+                    Text("Check for updates automatically")
+                    Text("Once a day. Flockbook asks before it installs an update.")
+                }
+                .settingsControl(.autoUpdate)
+            }
+            LabeledContent {
+                if AppUpdater.shared.updater != nil {
+                    Button("Check Now") { AppUpdater.shared.checkForUpdates() }.disabled(!AppUpdater.shared.canCheck)
+                }
+            } label: {
+                Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                if let last = AppUpdater.shared.updater?.lastUpdateCheckDate {
+                    Text("Last checked \(last.formatted(.relative(presentation: .named)))")
+                } else if AppUpdater.shared.updater == nil {
+                    // A build from source or a check run: Sparkle is off (UpdaterGate), so the tab says why it has no switch.
+                    Text("This build does not update itself.")
+                }
+            }
+            .settingsControl(.version)
+        }
+    }
+
     private var widthNote: String {
         switch ReadingWidth(rawValue: readingWidth) ?? .medium {
         case .full: "The text fills the window."
@@ -105,20 +137,94 @@ struct SettingsView: View {
     }
 }
 
-/// Settings as a page of the main window (the sidebar's foot row, ⌘,): the whole detail column scrolls, so the wheel works
-/// over the side margins too, and the rows keep a readable column in its middle.
-struct SettingsPage: View {
-    @Environment(AppModel.self) private var model
-    @State private var width: CGFloat = 0
-    /// Widest the grouped rows get.
+/// Settings: the tab list on the left, the chosen tab's form on the right, like System Settings. Opens on the tab
+/// chosen last (`SettingsTab.key`). `fixed`: snapshots show that tab and leave the remembered one alone.
+struct SettingsSplit: View {
+    @AppStorage(SettingsTab.key, store: AppDefaults.store) private var stored = SettingsTab.general.rawValue
+    var fixed: SettingsTab? = nil
+    var remote: RemoteHub? = nil
+    var scrolls = false
+    var reduceTransparency: Bool? = nil
+    /// Widest the form gets; wider columns centre it.
     static let column: CGFloat = 640
+    static let listWidth: CGFloat = 196
+    @State private var width: CGFloat = 0
+
+    private var tab: SettingsTab { fixed ?? SettingsTab(stored: stored) }
 
     var body: some View {
-        SettingsView(remote: model.remote, scrolls: true)
-            .contentMargins(.horizontal, max(0, (width - Self.column) / 2), for: .scrollContent)
+        HStack(alignment: .top, spacing: 0) {
+            SettingsTabList(selection: Binding(get: { tab }, set: { if fixed == nil { stored = $0.rawValue } }))
+                .frame(width: Self.listWidth)
+                .frame(maxHeight: .infinity, alignment: .top)
+            Divider()
+            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, scrolls: scrolls)
+                .contentMargins(.horizontal, scrolls ? max(0, (width - Self.column) / 2) : 0, for: .scrollContent)
+                .frame(maxWidth: scrolls ? .infinity : nil, maxHeight: scrolls ? .infinity : nil, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+                .probe { SettingsProbe.content = $0 }
+                .id(tab)
+        }
+        .frame(minHeight: scrolls ? nil : 420, alignment: .top)
+    }
+}
+
+/// The tabs as sidebar rows: a coloured icon tile and the name, the chosen row filled with the accent colour.
+struct SettingsTabList: View {
+    @Binding var selection: SettingsTab
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SettingsTab.allCases) { t in
+                let on = t == selection
+                Button { selection = t } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: t.symbol)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Self.tint(t).gradient))
+                        Text(t.title).foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8).frame(height: 30)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .probe { SettingsProbe.tabs[t] = $0 }
+            }
+        }
+        .padding(.horizontal, 10).padding(.top, 12)
+    }
+
+    static func tint(_ t: SettingsTab) -> Color {
+        switch t {
+        case .general: .gray
+        case .agents: .indigo
+        case .remote: .blue
+        case .updates: .green
+        }
+    }
+}
+
+/// Settings as a page of the main window (the sidebar's foot row, ⌘,): the tab list and the form fill the detail column;
+/// the form scrolls, so the wheel works over its side margins too, and its rows keep a readable column in the middle.
+struct SettingsPage: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsSplit(remote: model.remote, scrolls: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .probe { SettingsProbe.page = $0 }
             .onDisappear { SettingsProbe.page = .zero }
+    }
+}
+
+extension View {
+    /// Marks a Settings row: checks find each control's frame (and so its tab) in `SettingsProbe.controls`.
+    func settingsControl(_ c: SettingsControl) -> some View {
+        probe { SettingsProbe.controls[c] = $0 }
+            .onDisappear { SettingsProbe.controls[c] = nil }
     }
 }

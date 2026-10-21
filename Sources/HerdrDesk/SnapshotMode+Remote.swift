@@ -108,7 +108,7 @@ extension SnapshotRunner {
         // The Settings window scrolls at a fixed height: the long Tailscale page must not grow past the screen
         // (the Pair a Device row ran off the bottom). The scroll view's content is taller than what it shows.
         do {
-            let host = NSHostingView(rootView: SettingsView(remote: tsOn, scrolls: true))
+            let host = NSHostingView(rootView: SettingsView(tab: .remote, remote: tsOn, scrolls: true))
             let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
             win.contentView = host
             win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -122,19 +122,19 @@ extension SnapshotRunner {
         }
 
         let shots: [(String, AnyView, CGFloat)] = [
-            ("settings-off", AnyView(SettingsView(remote: off)), 520),
-            ("settings-on", AnyView(SettingsView(remote: on)), 520),
-            ("tailscale-setup", AnyView(SettingsView(remote: tsSetup)), 520),
-            ("tailscale-ready", AnyView(SettingsView(remote: tsReady)), 520),
-            ("tailscale-on", AnyView(SettingsView(remote: tsOn)), 520),
-            ("tailscale-taken", AnyView(SettingsView(remote: tsTaken)), 520),
+            ("settings-off", AnyView(SettingsView(tab: .remote, remote: off)), 520),
+            ("settings-on", AnyView(SettingsView(tab: .remote, remote: on)), 520),
+            ("tailscale-setup", AnyView(SettingsView(tab: .remote, remote: tsSetup)), 520),
+            ("tailscale-ready", AnyView(SettingsView(tab: .remote, remote: tsReady)), 520),
+            ("tailscale-on", AnyView(SettingsView(tab: .remote, remote: tsOn)), 520),
+            ("tailscale-taken", AnyView(SettingsView(tab: .remote, remote: tsTaken)), 520),
             ("tailscale-pair", AnyView(PairSheet(hub: tsPair)), 380),
             ("tailscale-pair-stopped", AnyView(PairSheet(hub: tsStopped)), 380),
             ("pair", AnyView(PairSheet(hub: pairing)), 380),
             ("devices", AnyView(DevicesSheet(hub: on)), 460),
             ("push", AnyView(PushSheet(hub: on)), 480),
             ("push-none", AnyView(PushSheet(hub: off)), 480),
-            ("claude-hook-on", AnyView(SettingsView(remote: tsHook)), 520),
+            ("claude-hook-on", AnyView(SettingsView(tab: .agents, remote: tsHook)), 520),
             ("claude-hook-install", AnyView(ClaudeHookSheet(setup: off.claudeHook)), 520),
             ("claude-hook-uninstall", AnyView(ClaudeHookSheet(setup: tsHook.claudeHook)), 520),
         ]

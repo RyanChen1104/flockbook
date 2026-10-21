@@ -3,55 +3,135 @@ import CoreImage
 import HerdrKit
 import SwiftUI
 
-/// The settings form (the Settings page's content) in a window of its own, offscreen, in every look it must survive:
+/// Settings (the tab list and a tab's form) in a window of its own, offscreen, in every look it must survive:
 ///   .build/debug/HerdrDesk --snapshot-settings <dir>
-/// -> <dir>/settings-<glass>-<light|dark>.png for Glass, Subtle and Opaque, and settings-reduce-<light|dark>.png
-/// (Reduce Transparency, through a stand-in flag). Offscreen there is no desktop and a behind-window blur samples
-/// nothing, so each still is composed: a stand-in wallpaper, blurred as the material would, under a capture of the
-/// settings form alone. Only this app's own windows are captured, never the screen.
+/// -> <dir>/settings-<glass>-<light|dark>.png (the General tab) for Glass, Subtle and Opaque, and settings-reduce-<light|dark>.png
+/// (Reduce Transparency, through a stand-in flag); then <dir>/settings-tab-<tab>-<light|dark>.png, one per tab, with Remote
+/// access on. Each tab shows only its own controls (`SettingsTab.controls`), every control shows in some tab, and the
+/// tab chosen last comes back. Offscreen there is no desktop and a behind-window blur samples nothing, so each still is
+/// composed: a stand-in wallpaper, blurred as the material would, under a capture of the settings window alone. Only this
+/// app's own windows are captured, never the screen.
 /// Increase Contrast is not rendered here: offscreen, the high-contrast appearances draw the same pixels as
 /// the plain ones. The view uses only system colors and controls, so the system handles it.
 /// Own settings store (test isolation), no Dock icon, nothing sent anywhere.
 extension SnapshotRunner {
     @MainActor static func runSettings(dir: String) async {
         var failures = 0
-        let looks: [(String, WindowGlass, Bool)] = [("glass", .full, false), ("subtle", .subtle, false), ("opaque", .off, false), ("reduce", .full, true)]
-        for (name, glass, reduce) in looks {
-            for dark in [false, true] {
-                AppDefaults.store.set(glass.rawValue, forKey: WindowGlass.key)
-                // In the app the page sits on the main window's surface (WindowSurface); here its blur is the blurred wallpaper
-                // below (offscreen the material view paints solid), so only its tint goes here.
-                let surface = reduce ? WindowGlass.off : glass
-                let host = NSHostingView(rootView: ZStack {
-                    Color(nsColor: .textBackgroundColor).opacity(surface.tint).ignoresSafeArea()
-                    SettingsView(reduceTransparency: reduce ? true : nil)
-                })
-                let size = host.fittingSize
-                let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-                win.title = "Flockbook Settings"
-                win.titlebarAppearsTransparent = true
-                win.isOpaque = false; win.backgroundColor = .clear
-                win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                win.contentView = host
-                win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
-                try? await Task.sleep(for: .milliseconds(900))
-                let path = "\(dir)/settings-\(name)-\(dark ? "dark" : "light").png"
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("snapshot-settings: \(n) \(ok ? "ok" : "FAIL")") }
+        let phone = TailscaleSetup.Peer(name: "Phone", os: "iOS", online: true)
+        let ts = TailscaleSetup.Status(signedIn: true, backendState: "Running", dnsName: "mac.example.ts.net", magicDNS: true, certificates: true, peers: [phone])
+        let hub = RemoteHub.preview(running: true, devices: [(HubDevice(id: "d1", name: "Phone", level: .input), Date(timeIntervalSince1970: 1_790_000_000))],
+                                    offer: false, tailscale: ts, serve: .ours, mode: .tailscale)
+        let direct = RemoteHub.preview(running: true, devices: [], offer: false)
+
+        /// Shows `view` in an offscreen window, saves the composed still to `path` (when given), and returns its size
+        /// and whether it drew; the window stays up for `inspect`, which reads the probes.
+        func shoot(_ view: some View, glass: WindowGlass = .full, reduce: Bool = false, dark: Bool, to path: String?,
+                   inspect: (NSWindow) async -> Void = { _ in }) async -> (size: NSSize, ink: Double, bytes: Int) {
+            AppDefaults.store.set(glass.rawValue, forKey: WindowGlass.key)
+            // In the app the page sits on the main window's surface (WindowSurface); here its blur is the blurred wallpaper
+            // below (offscreen the material view paints solid), so only its tint goes here.
+            let surface = reduce ? WindowGlass.off : glass
+            let host = NSHostingView(rootView: ZStack {
+                Color(nsColor: .textBackgroundColor).opacity(surface.tint).ignoresSafeArea()
+                view
+            })
+            let size = host.fittingSize
+            let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+            win.title = "Flockbook Settings"
+            win.titlebarAppearsTransparent = true
+            win.isOpaque = false; win.backgroundColor = .clear
+            win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            win.contentView = host
+            // The form keeps clear of the title bar (its safe area), which the fitting size leaves out: add it, so a long
+            // tab's last line is not cut.
+            let bar = win.frame.height - win.contentLayoutRect.height
+            if bar > 0 { win.setContentSize(NSSize(width: size.width, height: size.height + bar)) }
+            win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(900))
+            var ink = 1.0, bytes = 0
+            if let path {
                 // The window's own capture must show content: a blank one (no screen-capture permission) is a FAIL,
                 // not a wallpaper-only PASS.
                 // The first window of a run can still be undrawn after 900 ms on a busy machine: capture again, up to 2 s
                 // more. A window that never draws stays blank and fails.
-                var ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
+                ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
                 for _ in 0..<4 where ink <= 0.02 {
                     try? await Task.sleep(for: .milliseconds(500))
                     ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
                 }
-                let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-                let ok = ink > 0.02 && bytes > 5_000 && size.width >= 480 && size.width <= 600 && size.height > 200 && size.height < 900
+                bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+            }
+            await inspect(win)
+            win.orderOut(nil); win.contentView = nil
+            try? await Task.sleep(for: .milliseconds(100))
+            return (size, ink, bytes)
+        }
+        func shown() -> Set<SettingsControl> { Set(SettingsProbe.controls.filter { $0.value.width > 0 }.keys) }
+        func names(_ s: Set<SettingsControl>) -> String { s.map(\.rawValue).sorted().joined(separator: ",") }
+        let width = SettingsSplit.listWidth + 521
+
+        // The looks, on the General tab.
+        let looks: [(String, WindowGlass, Bool)] = [("glass", .full, false), ("subtle", .subtle, false), ("opaque", .off, false), ("reduce", .full, true)]
+        for (name, glass, reduce) in looks {
+            for dark in [false, true] {
+                let path = "\(dir)/settings-\(name)-\(dark ? "dark" : "light").png"
+                let r = await shoot(SettingsSplit(fixed: .general, reduceTransparency: reduce ? true : nil), glass: glass, reduce: reduce, dark: dark, to: path)
+                let ok = r.ink > 0.02 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 900
                 if !ok { failures += 1 }
-                print("snapshot-settings: \(name)-\(dark ? "dark" : "light") \(Int(size.width))x\(Int(size.height)) pt, \(bytes / 1024) KB, window \(String(format: "%.1f", ink * 100))% ink \(ok ? "ok" : "FAIL")")
-                win.orderOut(nil)
+                print("snapshot-settings: \(name)-\(dark ? "dark" : "light") \(Int(r.size.width))x\(Int(r.size.height)) pt, \(r.bytes / 1024) KB, window \(String(format: "%.1f", r.ink * 100))% ink \(ok ? "ok" : "FAIL")")
             }
         }
+
+        // One still per tab; each tab shows its own controls and no other tab's.
+        var seen: Set<SettingsControl> = []
+        for tab in SettingsTab.allCases {
+            for dark in [false, true] {
+                let path = "\(dir)/settings-tab-\(tab.rawValue)-\(dark ? "dark" : "light").png"
+                var here: Set<SettingsControl> = [], selected: [SettingsTab] = []
+                let r = await shoot(SettingsSplit(fixed: tab, remote: hub), dark: dark, to: path) { _ in
+                    here = shown()
+                    selected = SettingsTab.allCases.filter { SettingsProbe.tabs[$0].map { $0.width > 0 } ?? false }
+                }
+                seen.formUnion(here)
+                step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): \(Int(r.size.width))x\(Int(r.size.height)) pt, \(r.bytes / 1024) KB, \(String(format: "%.1f", r.ink * 100))% ink",
+                     r.ink > 0.02 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 1500)
+                step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): shows [\(names(here))], all in the tab, list of \(selected.count) tabs",
+                     !here.isEmpty && here.isSubset(of: Set(tab.controls)) && selected == SettingsTab.allCases)
+            }
+        }
+        // The direct address (Remote access without Tailscale), and the Claude question hook only while Remote access is on.
+        _ = await shoot(SettingsSplit(fixed: .remote, remote: direct), dark: false, to: nil) { _ in seen.formUnion(shown()) }
+        var offAgents: Set<SettingsControl> = []
+        _ = await shoot(SettingsSplit(fixed: .agents, remote: RemoteHub.preview(running: false, devices: [], offer: false)), dark: false, to: nil) { _ in offAgents = shown() }
+        step("agents with Remote access off: [\(names(offAgents))], no question hook", offAgents == [.allowInput])
+        // Sparkle never starts in a check run (UpdaterGate), so the automatic-update switch cannot show here.
+        let missing = Set(SettingsControl.allCases).subtracting(seen).subtracting([.autoUpdate])
+        step("every control shows in some tab (missing: [\(names(missing))])", missing.isEmpty)
+
+        // The tab chosen last comes back, and a click on a tab chooses it.
+        AppDefaults.store.set(SettingsTab.updates.rawValue, forKey: SettingsTab.key)
+        var reopened: Set<SettingsControl> = [], clicked: Set<SettingsControl> = []
+        _ = await shoot(SettingsSplit(remote: hub), dark: false, to: nil) { win in
+            reopened = shown()
+            if let r = SettingsProbe.tabs[.agents], let content = win.contentView {
+                let p = NSPoint(x: r.midX, y: content.bounds.height - r.midY)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: win.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { win.sendEvent(e) }
+                }
+                try? await Task.sleep(for: .milliseconds(600))
+                clicked = shown()
+            }
+        }
+        step("stored updates: Settings opens on Updates ([\(names(reopened))])", !reopened.isEmpty && reopened.isSubset(of: Set(SettingsTab.updates.controls)))
+        step("a click on Agents shows it and remembers it ([\(names(clicked))], stored \(AppDefaults.store.string(forKey: SettingsTab.key) ?? "nil"))",
+             clicked.contains(.allowInput) && AppDefaults.store.string(forKey: SettingsTab.key) == SettingsTab.agents.rawValue)
+        AppDefaults.store.removeObject(forKey: SettingsTab.key)
+        var fresh: Set<SettingsControl> = []
+        _ = await shoot(SettingsSplit(), dark: false, to: nil) { _ in fresh = shown() }
+        step("nothing stored: Settings opens on General ([\(names(fresh))])", fresh == Set(SettingsTab.general.controls))
+
         print("snapshot-settings: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         exit(failures == 0 ? 0 : 1)
     }
@@ -108,19 +188,29 @@ extension SnapshotRunner {
 /// Where the Settings page and its first row lie (global frames); the page is zero while it is not shown.
 enum SettingsProbe {
     nonisolated(unsafe) static var page: CGRect = .zero
-    nonisolated(unsafe) static var firstRow: CGRect = .zero
+    /// The form beside the tab list.
+    nonisolated(unsafe) static var content: CGRect = .zero
+    nonisolated(unsafe) static var tabs: [SettingsTab: CGRect] = [:]
+    /// The rows on screen now (`settingsControl`).
+    nonisolated(unsafe) static var controls: [SettingsControl: CGRect] = [:]
 }
 
 extension ChromeTests {
     /// `--test-settings-page`: Settings is a page of the main window, not a window of its own. A Settings row at the foot of
-    /// the sidebar opens it in the detail column (a real click), the page fills that column and scrolls (a long Remote
-    /// access section), ⌘,'s action opens it from any screen, and another sidebar row leaves it. Offscreen window only;
-    /// stills of the page in light and dark, top and scrolled, go to build/snapshots-settings-page/.
+    /// the sidebar opens it in the detail column (a real click), the page fills that column with the tab list on its left
+    /// and the chosen tab's form beside it, the form scrolls (the long Remote tab, chosen last), ⌘,'s action opens it from
+    /// any screen, and another sidebar row leaves it. Offscreen window only; stills of the page in light and dark, top and
+    /// scrolled, go to build/snapshots-settings-page/.
     static func runSettingsPageTest() async {
         let dir = "build/snapshots-settings-page"
+        AppDefaults.store.set(SettingsTab.remote.rawValue, forKey: SettingsTab.key)
         let model = AppModel(store: .preview)
-        model.remote = RemoteHub.preview(running: true, devices: [(HubDevice(id: "d1", name: "Phone", level: .input), Date(timeIntervalSince1970: 1_790_000_000))], offer: false)
-        let size = NSSize(width: 1200, height: 680)
+        // Tailscale on: the long Remote tab, taller than the column.
+        let ts = TailscaleSetup.Status(signedIn: true, backendState: "Running", dnsName: "mac.example.ts.net", magicDNS: true, certificates: true,
+                                       peers: [TailscaleSetup.Peer(name: "Phone", os: "iOS", online: true)])
+        model.remote = RemoteHub.preview(running: true, devices: [(HubDevice(id: "d1", name: "Phone", level: .input), Date(timeIntervalSince1970: 1_790_000_000))],
+                                         offer: false, tailscale: ts, serve: .ours, mode: .tailscale)
+        let size = NSSize(width: 1200, height: 600)
         let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -157,17 +247,22 @@ extension ChromeTests {
         let page = SettingsProbe.page, detail = ChromeProbe.detail
         step("the page fills the detail column (page \(page.integral), detail \(detail.integral))",
              page.width > 0 && abs(page.minX - detail.minX) < 2 && abs(page.maxX - detail.maxX) < 2 && page.height > detail.height - 40)
+        let list = SettingsTab.allCases.compactMap { SettingsProbe.tabs[$0] }, content = SettingsProbe.content
+        step("the tab list on the left, \(list.count) tabs top to bottom (x \(Int(list.first?.minX ?? 0)), first y \(Int(list.first?.minY ?? 0))), the form beside it (\(content.integral))",
+             list.count == SettingsTab.allCases.count && zip(list, list.dropFirst()).allSatisfy { $0.maxY <= $1.minY }
+             && (list.first?.minX ?? 0) - page.minX < 20 && (list.first?.minY ?? 0) >= detail.minY
+             && content.minX >= (list.first?.maxX ?? .infinity) && abs(content.maxX - page.maxX) < 2 && content.height > page.height - 40)
 
         // It scrolls: the page is taller than the column (with the remote section, even here); a wheel over it moves it.
         func scrollViews(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrollViews) }
-        // At the top of the page: the first row starts below the toolbar (the detail column's top, under its safe area), and
-        // the rows' column is centred in the detail column.
+        // At the top of the page: the Remote tab's first row starts below the toolbar (the detail column's top, under its
+        // safe area), and the rows' column is centred in the form beside the tab list.
         func topCheck(_ tag: String) {
-            let row = SettingsProbe.firstRow, detail = ChromeProbe.detail
-            step("\(tag): first row y \(Int(row.minY)) below the toolbar (\(Int(detail.minY))), column midX \(Int(row.midX)) = detail midX \(Int(detail.midX))",
-                 row.width > 0 && row.minY >= detail.minY && abs(row.midX - detail.midX) <= 2)
+            let row = SettingsProbe.controls[.remoteAccess] ?? .zero, detail = ChromeProbe.detail, content = SettingsProbe.content
+            step("\(tag): first row y \(Int(row.minY)) below the toolbar (\(Int(detail.minY))), column midX \(Int(row.midX)) = form midX \(Int(content.midX))",
+                 row.width > 0 && row.minY >= detail.minY && abs(row.midX - content.midX) <= 2)
         }
-        let p = NSPoint(x: page.midX, y: page.midY)
+        let p = NSPoint(x: content.midX, y: content.midY)
         let hit = host.hitTest(host.convert(NSPoint(x: p.x, y: host.isFlipped ? p.y : host.bounds.height - p.y), to: host.superview))
         if let sv = hit?.enclosingScrollView {
             let shown = sv.contentView.bounds.height, content = sv.documentView?.frame.height ?? 0
@@ -217,6 +312,7 @@ extension ChromeTests {
             await click(title)
             step("the current workspace's row returns to its tab (\(model.screen))", model.screen == .tab)
         } else { step("a workspace row to click", false) }
+        AppDefaults.store.removeObject(forKey: SettingsTab.key)
         print("settings-page-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }
