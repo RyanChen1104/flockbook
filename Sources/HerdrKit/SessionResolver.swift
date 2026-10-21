@@ -96,8 +96,8 @@ public actor SessionResolver {
                 continue
             }
             let since = locate(a.sessionId).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.creationDate] as? Date } ?? .distantPast
-            let c = Self.leadCandidates(projectsDir: projectsDir, cwd: a.cwd, home: home, since: since, claimed: held)
-            found[a.paneId] = Found(teammate: a.sessionId, folder: c?.folder, lead: c?.paths.count == 1 ? c?.paths[0] : nil, checked: now)
+            found[a.paneId] = Found(teammate: a.sessionId, folder: nil, lead: nil, checked: now)
+            _ = since
         }
         var panes: [String: Int] = [:]
         for a in searched { if let d = found[a.paneId]?.folder { panes[d, default: 0] += 1 } }
@@ -137,31 +137,16 @@ public actor SessionResolver {
         String(cwd.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
     }
 
-    /// The lead's log for a pane whose herdr session is a teammate's: the one log modified at or after `since` (when
-    /// the teammate's log began) that is not claimed and is decided not a teammate's, in the folder of `cwd`, else of
-    /// the nearest ancestor that has such a log. Two or more there: none. Folders of `home` and above are not searched.
-    public static func leadLog(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> String? {
-        guard let c = leadCandidates(projectsDir: projectsDir, cwd: cwd, home: home, since: since, claimed: claimed), c.paths.count == 1 else { return nil }
-        return c.paths[0]
+    public static func leadLog(projectsDir: String, cwd: String, home: String, team: String, since: Date, claimed: Set<String>, scan: inout LeadScan) -> String? {
+        nil
     }
 
-    /// The nearest folder (of `cwd` or an ancestor below `home`) with lead candidates, and those candidates.
-    static func leadCandidates(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> (folder: String, paths: [String])? {
-        let fm = FileManager.default
-        let top = (home as NSString).standardizingPath
-        var dir = (cwd as NSString).standardizingPath
-        while dir.hasPrefix(top + "/") {
-            let folder = projectsDir + "/" + claudeFolder(dir)
-            let paths = ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted().compactMap { f -> String? in
-                let p = folder + "/" + f
-                guard f.hasSuffix(".jsonl"), !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
-                      at >= since, teammateVerdict(head(p)) == false else { return nil }
-                return p
-            }
-            if !paths.isEmpty { return (folder, paths) }
-            dir = (dir as NSString).deletingLastPathComponent
-        }
-        return nil
+    public static func teamName(_ data: Data) -> String? { nil }
+
+    public struct LeadScan: Sendable {
+        public init(chunk: Int = 4 << 20) {}
+        public mutating func mentions(_ path: String, _ team: String) -> Bool { false }
+        public func offset(_ path: String, _ team: String) -> UInt64 { 0 }
     }
 
     /// The first 1 MB of a file.
