@@ -148,7 +148,7 @@ import Foundation
     _ = log("mate1", meta, mate)
     _ = log("new1", meta)
     let r = R(socketPath: "/nonexistent.sock", projectsDir: projects)
-    func ask(_ pane: String, _ sid: String) -> R.LeadAsk { R.LeadAsk(paneId: pane, sessionId: sid, cwd: "/w/proj") }
+    func ask(_ pane: String, _ sid: String) -> R.LeadAsk { R.LeadAsk(paneId: pane, sessionId: sid) }
 
     let cold = await r.leads([ask("w1:p1", "mate1")], claimed: ["mate1"])
     check(cold.swaps == ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)] && cold.leads.isEmpty,

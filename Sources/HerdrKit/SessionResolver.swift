@@ -17,7 +17,6 @@ public struct LeadSwap: Sendable, Hashable {
 ///    Exactly one unclaimed match, or none. It never guesses between two.
 ///
 /// The result is cached per pane and kept while the agent pid stays the same.
-
 public actor SessionResolver {
     public struct Proc: Sendable, Hashable {
         public var pid: Int32
@@ -56,8 +55,7 @@ public actor SessionResolver {
     public struct LeadAsk: Sendable, Hashable {
         public var paneId: String
         public var sessionId: String
-        public var cwd: String
-        public init(paneId: String, sessionId: String, cwd: String) { self.paneId = paneId; self.sessionId = sessionId; self.cwd = cwd }
+        public init(paneId: String, sessionId: String) { self.paneId = paneId; self.sessionId = sessionId }
     }
 
     /// One pass over the Claude panes: the panes whose log is not shown (paneId → swap), and the sessions judged to
@@ -78,7 +76,26 @@ public actor SessionResolver {
     /// lead. A teammate's log, an undecided one or one not found is never shown: the pane gets its last lead (unless
     /// another pane shows that log), else no log.
     public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> LeadPass {
-        LeadPass() // STUB
+        let ids = Set(asks.map(\.paneId))
+        lastLead = lastLead.filter { ids.contains($0.key) }
+        var pass = LeadPass()
+        var asked: Set<String> = []
+        for a in asks {
+            let p = path(a.sessionId)
+            if let p { asked.insert(p) }
+            if let p, judge(p) == false {
+                lastLead[a.paneId] = p
+                pass.leads.insert(a.sessionId)
+            }
+        }
+        verdicts = verdicts.filter { asked.contains($0.key) }
+        located = located.filter { id in asks.contains { $0.sessionId == id.key } }
+        let shown = Set(claimed.map { $0.hasPrefix("/") ? ($0 as NSString).standardizingPath : $0 })
+        for a in asks where !pass.leads.contains(a.sessionId) {
+            let lead = lastLead[a.paneId].flatMap { l in Self.isClaimed(l, shown) || lastLead.contains { $0.key != a.paneId && $0.value == l } ? nil : l }
+            pass.swaps[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
+        }
+        return pass
     }
 
     /// Whether the log at `path` is a teammate's, nil while undecided. A decided verdict is kept for the same file
@@ -92,9 +109,15 @@ public actor SessionResolver {
         return mate
     }
 
+    /// Session id → its log's standardized path, kept while the file is there.
+    private var located: [String: String] = [:]
+
     private func path(_ idOrPath: String) -> String? {
-        let p = idOrPath.hasPrefix("/") ? idOrPath : SessionLog.locate(agent: "claude", sessionId: idOrPath, dir: projectsDir)?.path
-        return p.map { ($0 as NSString).standardizingPath }
+        if idOrPath.hasPrefix("/") { return (idOrPath as NSString).standardizingPath }
+        if let p = located[idOrPath], FileManager.default.fileExists(atPath: p) { return p }
+        let p = SessionLog.locate(agent: "claude", sessionId: idOrPath, dir: projectsDir).map { ($0.path as NSString).standardizingPath }
+        located[idOrPath] = p
+        return p
     }
 
     /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and

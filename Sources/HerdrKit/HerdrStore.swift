@@ -104,7 +104,7 @@ public final class HerdrStore {
             if let s = swaps[pane.id], s.teammate == sid {
                 ws[w].tabs[t].panes[p].agent?.sessionId = s.lead
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
-            } else if false, let leads, pane.agent?.kind == "claude", !leads.contains(sid) { // STUB
+            } else if let leads, pane.agent?.kind == "claude", !leads.contains(sid) {
                 ws[w].tabs[t].panes[p].agent?.sessionId = nil
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
@@ -127,7 +127,7 @@ public final class HerdrStore {
         }
         let asks = panes.compactMap { p in
             p.agent.flatMap { a in
-                a.kind == "claude" ? a.sessionId.map { SessionResolver.LeadAsk(paneId: p.id, sessionId: $0, cwd: p.cwd) } : nil
+                a.kind == "claude" ? a.sessionId.map { SessionResolver.LeadAsk(paneId: p.id, sessionId: $0) } : nil
             }
         }
         if needs.isEmpty, resolved.isEmpty, asks.isEmpty, swaps.isEmpty, leads.isEmpty { return }
@@ -137,11 +137,12 @@ public final class HerdrStore {
             let pass = await resolver.leads(asks, claimed: claimed.union(found.values))
             guard let self else { return }
             self.resolveTask = nil
-            guard found != self.resolved || pass.swaps != self.swaps || pass.leads != self.leads else { return }
-            self.resolved = found
-            self.swaps = pass.swaps
-            self.leads = pass.leads
-            self.applySnapshot(self.lastRaw)
+            if found != self.resolved || pass.swaps != self.swaps || pass.leads != self.leads {
+                self.resolved = found
+                self.swaps = pass.swaps
+                self.leads = pass.leads
+                self.applySnapshot(self.lastRaw)
+            }
             // Sessions herdr named while this pass ran are judged by the next one.
             let judged = Set(pass.swaps.values.map(\.teammate)).union(pass.leads)
             let named = self.lastRaw.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.kind == "claude" ? $0.agent?.sessionId : nil }
