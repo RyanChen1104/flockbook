@@ -117,7 +117,8 @@ import Foundation
 }
 
 // A teammate of a Claude Code agent team runs with the lead's HERDR_* env, so herdr can name the teammate's log as the
-// pane's session. The pane shows the lead's log instead, or no log; never the teammate's. Synthetic logs only.
+// pane's session. The pane never shows a teammate's log: it shows the last lead log herdr gave for the pane, or no log.
+// Synthetic logs only.
 @MainActor func checksTeammateSession() async throws {
     typealias R = SessionResolver
     let meta = #"{"type":"agent-setting","sessionId":"s"}"#
@@ -127,133 +128,78 @@ import Foundation
     check(R.teammateVerdict(data(meta, mate)) == true, "teammate: a message line with teamName and agentName marks a teammate log")
     check(R.teammateVerdict(data(meta, lead, mate)) == false, "teammate: the first message line decides (a lead log)")
     check(R.teammateVerdict(data(meta)) == nil && R.teammateVerdict(Data()) == nil, "teammate: no message line yet: not decided")
-    check(R.claudeFolder("/w/my.app/sub_dir") == "-w-my-app-sub-dir", "teammate: Claude project folder of a cwd")
-
-    let fm = FileManager.default
-    let root = NSTemporaryDirectory() + "hkmate-\(UUID().uuidString)"
-    let home = root + "/home", projects = root + "/projects", cwd = home + "/proj"
-    let t0 = Date(timeIntervalSince1970: 1_791_000_000)
-    func log(_ cwd: String, _ id: String, _ line: String, made: Date, modified: Date) -> String {
-        let dir = projects + "/" + R.claudeFolder(cwd)
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let p = dir + "/" + id + ".jsonl"
-        fm.createFile(atPath: p, contents: data(meta, line))
-        try? fm.setAttributes([.creationDate: made, .modificationDate: modified], ofItemAtPath: p)
-        return p
-    }
-    // The lead is found by identity: the one unclaimed log near the pane's cwd that is not a teammate's and names
-    // the teammate's team (the lead created and runs the team). Time only skips logs not written lately.
-    func mateLine(_ team: String) -> String { #"{"type":"user","sessionId":"s","teamName":""# + team + #"","agentName":"helper","message":{"role":"user","content":"hi"}}"# }
-    func leadLine(_ team: String) -> String { #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","input":{"team_name":""# + team + #""}}]}}"# }
-    check(R.teamName(data(meta, mate)) == "team-1" && R.teamName(data(meta, lead)) == nil, "teammate: the team of a teammate log")
-    _ = log(cwd + "/web", "mate1", mate, made: t0, modified: t0.addingTimeInterval(120))
-    let leadPath = log(cwd, "lead1", lead + "\n" + leadLine("team-1"), made: t0.addingTimeInterval(-3600), modified: t0.addingTimeInterval(60))
-    _ = log(cwd, "other1", lead + "\n" + leadLine("team-9"), made: t0.addingTimeInterval(-3600), modified: t0.addingTimeInterval(80))
-    _ = log(cwd, "busy1", lead + "\n" + leadLine("team-1"), made: t0.addingTimeInterval(-60), modified: t0.addingTimeInterval(90))
-    _ = log(cwd, "old1", lead, made: t0.addingTimeInterval(-7200), modified: t0.addingTimeInterval(-3000))
-    _ = log(home, "home1", lead + "\n" + leadLine("team-1"), made: t0, modified: t0.addingTimeInterval(300))
-    var scan = R.LeadScan()
-    check(R.leadLog(projectsDir: projects, cwd: cwd, home: home, team: "team-1", since: t0, claimed: ["busy1"], scan: &scan) == leadPath,
-          "teammate: the lead is the one unclaimed non-teammate log that names the team")
-    check(R.leadLog(projectsDir: projects, cwd: cwd + "/web/src", home: home, team: "team-1", since: t0, claimed: ["busy1"], scan: &scan) == leadPath,
-          "teammate: ancestor folders are searched, the teammate's own log skipped")
-    check(R.leadLog(projectsDir: projects, cwd: cwd, home: home, team: "team-1", since: t0, claimed: [], scan: &scan) == nil,
-          "teammate: two logs name the team: no lead")
-    check(R.leadLog(projectsDir: projects, cwd: cwd, home: home, team: "team-2", since: t0, claimed: [], scan: &scan) == nil,
-          "teammate: no log names the team: no lead, never the newest log")
-    check(R.leadLog(projectsDir: projects, cwd: home + "/elsewhere", home: home, team: "team-1", since: t0, claimed: [], scan: &scan) == nil,
-          "teammate: the home folder is not searched")
-
-    // A lead whose first message line is over the 1 MiB head limit is still found.
-    let hugePath = log(home + "/huge", "huge1", #"{"type":"user","message":{"role":"user","content":""# + String(repeating: "x", count: 1_200_000) + #""}}"# + "\n" + leadLine("team-h"),
-                       made: t0, modified: t0.addingTimeInterval(60))
-    check(R.leadLog(projectsDir: projects, cwd: home + "/huge", home: home, team: "team-h", since: t0, claimed: [], scan: &scan) == hugePath,
-          "teammate: a lead with a first message line over the head limit is found")
-
-    // The scan reads only what a log added since the last pass, and finds a name cut by a chunk edge.
-    func append(_ p: String, _ text: String) { if let fh = FileHandle(forWritingAtPath: p) { fh.seekToEndOfFile(); fh.write(Data(text.utf8)); fh.closeFile() } }
-    func size(_ p: String) -> UInt64 { (try? fm.attributesOfItem(atPath: p))?[.size] as? UInt64 ?? 0 }
-    var small = R.LeadScan(chunk: 7)
-    let grow = log(home + "/grow", "grow1", lead, made: t0, modified: t0)
-    check(small.mentions(grow, "team-g") == false && small.bytesRead == size(grow), "teammate: a log without the team name does not name it")
-    _ = small.mentions(grow, "team-g")
-    check(small.bytesRead == size(grow), "teammate: an unchanged log is not read again")
-    let before = size(grow)
-    append(grow, leadLine("team-g") + "\n")
-    check(small.mentions(grow, "team-g") == true && small.bytesRead > before && small.bytesRead <= size(grow),
-          "teammate: only the bytes added since are read, and a name in them is found")
-    fm.createFile(atPath: grow, contents: Data((lead + "\n").utf8))
-    check(small.mentions(grow, "team-g") == false, "teammate: a log cut shorter is read again from the start")
-    let fresh = grow + ".new"
-    fm.createFile(atPath: fresh, contents: Data(("team-g " + String(repeating: "y", count: Int(before)) + "\n").utf8))
-    _ = try? fm.replaceItemAt(URL(fileURLWithPath: grow), withItemAt: URL(fileURLWithPath: fresh))
-    check(small.mentions(grow, "team-g") == true, "teammate: a log replaced by another file is read again from the start")
-
-    // Each pass reads at most a byte budget; a log not read to its end gives no lead this pass, and the next goes on.
-    var budget = R.LeadScan(chunk: 64, budget: 256)
-    let slow = home + "/slow"
-    let slowLead = log(slow, "lead6", lead + "\n" + leadLine("team-s"), made: t0, modified: t0.addingTimeInterval(60))
-    _ = log(slow, "big6", lead + "\n" + String(repeating: "z", count: 1000), made: t0, modified: t0.addingTimeInterval(60))
-    check(R.leadLog(projectsDir: projects, cwd: slow, home: home, team: "team-s", since: t0, claimed: [], scan: &budget) == nil && budget.bytesRead <= 256 + 64,
-          "teammate: a pass stops at its byte budget and gives no lead before every log is read")
-    var passes = 1, got: String?
-    while got == nil, passes < 10 { budget.endPass(); got = R.leadLog(projectsDir: projects, cwd: slow, home: home, team: "team-s", since: t0, claimed: [], scan: &budget); passes += 1 }
-    check(got == slowLead && passes > 1, "teammate: later passes go on where the last stopped and find the lead")
-
-    // A log whose first message line is not yet whole, with teamName already written, is not a lead candidate.
-    let part = home + "/part"
-    let partLead = log(part, "lead7", lead + "\n" + leadLine("team-p"), made: t0, modified: t0.addingTimeInterval(60))
-    let partMate = log(part, "mate7", lead, made: t0, modified: t0.addingTimeInterval(60))
-    fm.createFile(atPath: partMate, contents: Data((meta + "\n" + #"{"parentUuid":null,"isSidechain":false,"teamName":"team-p""#).utf8))
-    check(R.leadLog(projectsDir: projects, cwd: part, home: home, team: "team-p", since: .distantPast, claimed: [], scan: &scan) == partLead,
-          "teammate: an undecided log is never a lead candidate")
-
-    // The resolver: two teammate panes on one cwd, teammates begun at different times, each gets its own lead.
-    let r = R(socketPath: "/nonexistent.sock", projectsDir: projects, home: home)
-    let duo = home + "/duo"
-    _ = log(duo, "mateA", mateLine("team-a"), made: t0.addingTimeInterval(10), modified: t0.addingTimeInterval(40))
-    _ = log(duo, "mateB", mateLine("team-b"), made: t0.addingTimeInterval(20), modified: t0.addingTimeInterval(40))
-    let leadA = log(duo, "leadA", lead + "\n" + leadLine("team-a"), made: t0, modified: t0.addingTimeInterval(12))
-    let leadB = log(duo, "leadB", lead + "\n" + leadLine("team-b"), made: t0, modified: t0.addingTimeInterval(15))
-    let both = await r.leads([R.LeadAsk(paneId: "w2:p1", sessionId: "mateA", cwd: duo), R.LeadAsk(paneId: "w2:p2", sessionId: "mateB", cwd: duo)], claimed: [])
-    check(both == ["w2:p1": LeadSwap(teammate: "mateA", lead: leadA), "w2:p2": LeadSwap(teammate: "mateB", lead: leadB)],
-          "teammate: two panes on one cwd each get the lead that names their team")
-    check(await r.leads([R.LeadAsk(paneId: "w2:p1", sessionId: "mateA", cwd: duo)], claimed: ["leadA"]) == ["w2:p1": LeadSwap(teammate: "mateA", lead: nil)],
-          "teammate: a lead another pane claims is not this pane's")
-    check(await r.leads([R.LeadAsk(paneId: "w2:p1", sessionId: "leadB", cwd: duo)], claimed: []).isEmpty,
-          "teammate: a lead log herdr names is kept")
-    check(await r.leads([R.LeadAsk(paneId: "w2:p1", sessionId: "mateA", cwd: duo)], claimed: []) == ["w2:p1": LeadSwap(teammate: "mateA", lead: "leadB")],
-          "teammate: the lead id herdr gave last time comes before the search")
-    check(await r.leads([R.LeadAsk(paneId: "w2:p1", sessionId: "mateA", cwd: duo), R.LeadAsk(paneId: "w2:p2", sessionId: "mateB", cwd: duo)], claimed: [])
-          == ["w2:p1": LeadSwap(teammate: "mateA", lead: "leadB"), "w2:p2": LeadSwap(teammate: "mateB", lead: nil)],
-          "teammate: the lead herdr gave another pane is never found for this pane")
-    check(await r.leads([R.LeadAsk(paneId: "w3:p1", sessionId: "mate1", cwd: home + "/elsewhere")], claimed: []) == ["w3:p1": LeadSwap(teammate: "mate1", lead: nil)],
-          "teammate: no lead found: no log rather than the teammate's")
-    check(await r.leads([R.LeadAsk(paneId: "w3:p2", sessionId: "unknown1", cwd: cwd)], claimed: []).isEmpty,
-          "teammate: a log not found yet is kept")
-    try? fm.removeItem(atPath: root)
-
-    // A first message line cut off by the read limit still shows its team keys, which come before the message.
     func cut(_ s: String) -> Data { Data((meta + "\n" + s).utf8) }
     let big = String(repeating: "x", count: 4096)
     check(R.teammateVerdict(cut(#"{"parentUuid":null,"isSidechain":false,"teamName":"team-1","agentName":"helper","type":"user","message":{"role":"user","content":""# + big)) == true,
           "teammate: a cut first message line with teamName and agentName marks a teammate log")
-    check(R.teammateVerdict(cut(#"{"parentUuid":null,"type":"user","message":{"role":"user","content":"say \"teamName\":\"t\",\"agentName\":\"a\" "# + big)) == false,
-          "teammate: a cut first message line with type and no teamName before the message is a lead's (quoted keys in the text do not count)")
+    check(R.teammateVerdict(cut(#"{"parentUuid":null,"isSidechain":false,"teamName":"team-1""#)) == nil,
+          "teammate: a first line not yet whole is not decided")
 
-    // The store puts the swap in the pane while herdr still names that teammate log.
-    func ws(_ sid: String?) -> [Workspace] {
+    let fm = FileManager.default
+    let root = NSTemporaryDirectory() + "hkmate-\(UUID().uuidString)"
+    let projects = root + "/projects", dir = projects + "/-w-proj"
+    try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    func log(_ id: String, _ ls: String...) -> String {
+        let p = dir + "/" + id + ".jsonl"
+        fm.createFile(atPath: p, contents: Data((ls.joined(separator: "\n") + "\n").utf8))
+        return p
+    }
+    let lead1 = log("lead1", meta, lead), lead2 = log("lead2", meta, lead)
+    _ = log("mate1", meta, mate)
+    _ = log("new1", meta)
+    let r = R(socketPath: "/nonexistent.sock", projectsDir: projects)
+    func ask(_ pane: String, _ sid: String) -> R.LeadAsk { R.LeadAsk(paneId: pane, sessionId: sid, cwd: "/w/proj") }
+
+    let cold = await r.leads([ask("w1:p1", "mate1")], claimed: ["mate1"])
+    check(cold.swaps == ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)] && cold.leads.isEmpty,
+          "teammate: a teammate log and no lead seen yet for the pane: no log")
+    let first = await r.leads([ask("w1:p1", "lead1")], claimed: ["lead1"])
+    check(first.swaps.isEmpty && first.leads == ["lead1"], "teammate: a lead log herdr names is shown")
+    check(await r.leads([ask("w1:p1", "mate1")], claimed: ["mate1"]).swaps == ["w1:p1": LeadSwap(teammate: "mate1", lead: lead1)],
+          "teammate: herdr names a teammate log: the pane shows the last lead log herdr gave for it")
+    check(await r.leads([ask("w1:p1", "new1")], claimed: ["new1"]).swaps == ["w1:p1": LeadSwap(teammate: "new1", lead: lead1)],
+          "teammate: an undecided log is not shown either")
+    check(await r.leads([ask("w1:p1", "gone1")], claimed: ["gone1"]).swaps == ["w1:p1": LeadSwap(teammate: "gone1", lead: lead1)],
+          "teammate: a log not found yet is not shown either")
+    check(await r.leads([ask("w1:p1", "mate1"), ask("w1:p2", "lead1")], claimed: ["mate1", "lead1"]).swaps == ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)],
+          "teammate: the last lead, now another pane's (by id), is not shown twice")
+    _ = await r.leads([ask("w1:p1", "lead1")], claimed: ["lead1"])
+    check(await r.leads([ask("w1:p1", "mate1"), ask("w1:p2", "lead2")], claimed: ["mate1", root + "/projects/./-w-proj/lead1.jsonl"]).swaps["w1:p1"]?.lead == nil,
+          "teammate: the last lead, now another pane's (by a path written another way), is not shown twice")
+
+    // A verdict holds for one file: a log replaced, or rewritten shorter, is judged again.
+    _ = await r.leads([ask("w2:p1", "lead2")], claimed: ["lead2"])
+    let swapFile = lead2 + ".new"
+    fm.createFile(atPath: swapFile, contents: data(meta, mate))
+    _ = try? fm.replaceItemAt(URL(fileURLWithPath: lead2), withItemAt: URL(fileURLWithPath: swapFile))
+    check(await r.leads([ask("w2:p1", "lead2")], claimed: ["lead2"]).swaps["w2:p1"]?.teammate == "lead2",
+          "teammate: a lead log replaced by a teammate's is judged again")
+    let shrink = log("shrink1", meta, lead + String(repeating: " ", count: 400))
+    _ = await r.leads([ask("w3:p1", "shrink1")], claimed: ["shrink1"])
+    if let fh = FileHandle(forWritingAtPath: shrink) { try? fh.truncate(atOffset: 0); fh.write(data(meta, mate)); try? fh.close() }
+    check(await r.leads([ask("w3:p1", "shrink1")], claimed: ["shrink1"]).swaps["w3:p1"]?.teammate == "shrink1",
+          "teammate: a log rewritten shorter is judged again")
+    try? fm.removeItem(atPath: root)
+
+    // The store: a swap stands in while herdr still names that log; a Claude log not judged yet is held back.
+    func ws(_ sid: String?, kind: String = "claude") -> [Workspace] {
         [Workspace(id: "w1", label: "w", tabs: [Tab(id: "t1", label: "t", number: 1, panes: [
-            Pane(id: "w1:p1", terminalId: "x", cwd: cwd, agent: Agent(name: "claude", kind: "claude", status: .working, sessionId: sid, title: "c"))
+            Pane(id: "w1:p1", terminalId: "x", cwd: "/w/proj", agent: Agent(name: kind, kind: kind, status: .working, sessionId: sid, title: "c"))
         ], status: .working)])]
     }
     func agent(_ w: [Workspace]) -> Agent? { w[0].tabs[0].panes[0].agent }
-    let lifted = HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)])
-    check(agent(lifted)?.sessionId == leadPath && agent(lifted)?.sessionResolved == true, "teammate: the store shows the lead's log, marked as not herdr's")
-    check(agent(HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)]))?.sessionId == nil,
+    let lifted = HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: lead1)], leads: [])
+    check(agent(lifted)?.sessionId == lead1 && agent(lifted)?.sessionResolved == true, "teammate: the store shows the lead's log, marked as not herdr's")
+    check(agent(HerdrStore.withFallbacks(ws("mate1"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: nil)], leads: []))?.sessionId == nil,
           "teammate: the store shows no log when there is no lead")
-    check(agent(HerdrStore.withFallbacks(ws("lead2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: leadPath)]))?.sessionId == "lead2",
-          "teammate: once herdr names another log, the old swap does nothing")
+    check(agent(HerdrStore.withFallbacks(ws("lead2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: lead1)], leads: ["lead2"]))?.sessionId == "lead2",
+          "teammate: once herdr names a lead log, the old swap does nothing")
+    check(agent(HerdrStore.withFallbacks(ws("mate2"), resolved: [:], swaps: ["w1:p1": LeadSwap(teammate: "mate1", lead: lead1)], leads: ["lead1"]))?.sessionId == nil,
+          "teammate: a Claude log the resolver has not judged yet is not shown")
+    check(agent(HerdrStore.withFallbacks(ws("cx1", kind: "codex"), resolved: [:], swaps: [:], leads: []))?.sessionId == "cx1",
+          "teammate: other agents' logs are not held back")
+    check(agent(HerdrStore.withFallbacks(ws("mate2"), resolved: [:], swaps: [:], leads: nil))?.sessionId == "mate2",
+          "teammate: without a resolver (preview) nothing is held back")
     check(HerdrStore.claims(ws("mate1"), resolved: ["w9:p1": "/x/found.jsonl"]) == ["mate1", "/x/found.jsonl"],
           "teammate: logs the resolver found for other panes are claimed too")
 }

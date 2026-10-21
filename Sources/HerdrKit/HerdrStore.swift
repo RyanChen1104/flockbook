@@ -80,13 +80,17 @@ public final class HerdrStore {
     @ObservationIgnored private var resolved: [String: String] = [:]
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
 
-    /// paneId → the log to show in place of a teammate's log that herdr names (see `SessionResolver.leads`).
+    /// paneId → the log to show in place of a teammate's or undecided log that herdr names (see `SessionResolver.leads`).
     @ObservationIgnored private var swaps: [String: LeadSwap] = [:]
+    /// Claude sessions the resolver judged to be a lead's log. Other Claude sessions are held back until judged.
+    @ObservationIgnored private var leads: Set<String> = []
 
     /// Fills `agent.sessionId` from `resolved` where herdr gave none, and puts the lead's log (or none) in place of
-    /// a teammate's log while herdr still names it. Either way the session is not herdr's (`sessionResolved`).
-    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap]) -> [Workspace] {
-        guard !resolved.isEmpty || !swaps.isEmpty else { return ws }
+    /// a teammate's or undecided log while herdr still names it. Either way the session is not herdr's
+    /// (`sessionResolved`). With `leads`, a Claude session that is in neither `leads` nor `swaps` is not judged yet
+    /// and shows no log; nil `leads` (no resolver, as in previews) holds nothing back.
+    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap], leads: Set<String>?) -> [Workspace] {
+        guard !resolved.isEmpty || !swaps.isEmpty || leads != nil else { return ws }
         var ws = ws
         for w in ws.indices { for t in ws[w].tabs.indices { for p in ws[w].tabs[t].panes.indices {
             let pane = ws[w].tabs[t].panes[p]
@@ -99,6 +103,9 @@ public final class HerdrStore {
             }
             if let s = swaps[pane.id], s.teammate == sid {
                 ws[w].tabs[t].panes[p].agent?.sessionId = s.lead
+                ws[w].tabs[t].panes[p].agent?.sessionResolved = true
+            } else if false, let leads, pane.agent?.kind == "claude", !leads.contains(sid) { // STUB
+                ws[w].tabs[t].panes[p].agent?.sessionId = nil
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
@@ -123,17 +130,22 @@ public final class HerdrStore {
                 a.kind == "claude" ? a.sessionId.map { SessionResolver.LeadAsk(paneId: p.id, sessionId: $0, cwd: p.cwd) } : nil
             }
         }
-        if needs.isEmpty, resolved.isEmpty, asks.isEmpty, swaps.isEmpty { return }
+        if needs.isEmpty, resolved.isEmpty, asks.isEmpty, swaps.isEmpty, leads.isEmpty { return }
         let claimed = Set(panes.compactMap { $0.agent?.sessionId })
         resolveTask = Task { [weak self, resolver] in
             let found = await resolver.resolve(needs, claimed: claimed)
-            let swapped = await resolver.leads(asks, claimed: claimed.union(found.values))
+            let pass = await resolver.leads(asks, claimed: claimed.union(found.values))
             guard let self else { return }
             self.resolveTask = nil
-            guard found != self.resolved || swapped != self.swaps else { return }
+            guard found != self.resolved || pass.swaps != self.swaps || pass.leads != self.leads else { return }
             self.resolved = found
-            self.swaps = swapped
+            self.swaps = pass.swaps
+            self.leads = pass.leads
             self.applySnapshot(self.lastRaw)
+            // Sessions herdr named while this pass ran are judged by the next one.
+            let judged = Set(pass.swaps.values.map(\.teammate)).union(pass.leads)
+            let named = self.lastRaw.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.kind == "claude" ? $0.agent?.sessionId : nil }
+            if named.contains(where: { !judged.contains($0) }) { self.resolveMissing(self.lastRaw) }
         }
     }
 
@@ -142,7 +154,7 @@ public final class HerdrStore {
 
     private func applySnapshot(_ raw: [Workspace]) {
         lastRaw = raw
-        let ws = Self.withFallbacks(raw, resolved: resolved, swaps: swaps)
+        let ws = Self.withFallbacks(raw, resolved: resolved, swaps: swaps, leads: isPreview ? nil : leads)
         if ws != workspaces { workspaces = ws }
         syncLogs()
     }
