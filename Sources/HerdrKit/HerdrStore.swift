@@ -80,47 +80,64 @@ public final class HerdrStore {
     @ObservationIgnored private var resolved: [String: String] = [:]
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
 
-    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap]) -> [Workspace] { ws }
+    /// paneId → the log to show in place of a teammate's log that herdr names (see `SessionResolver.leads`).
+    @ObservationIgnored private var swaps: [String: LeadSwap] = [:]
 
-    /// Fills `agent.sessionId` from `resolved` where herdr gave none.
-    private func withResolved(_ ws: [Workspace]) -> [Workspace] {
-        guard !resolved.isEmpty else { return ws }
+    /// Fills `agent.sessionId` from `resolved` where herdr gave none, and puts the lead's log (or none) in place of
+    /// a teammate's log while herdr still names it. Either way the session is not herdr's (`sessionResolved`).
+    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap]) -> [Workspace] {
+        guard !resolved.isEmpty || !swaps.isEmpty else { return ws }
         var ws = ws
         for w in ws.indices { for t in ws[w].tabs.indices { for p in ws[w].tabs[t].panes.indices {
             let pane = ws[w].tabs[t].panes[p]
-            if pane.agent != nil, pane.agent?.sessionId == nil, let path = resolved[pane.id] {
-                ws[w].tabs[t].panes[p].agent?.sessionId = path
+            guard let sid = pane.agent?.sessionId else {
+                if pane.agent != nil, let path = resolved[pane.id] {
+                    ws[w].tabs[t].panes[p].agent?.sessionId = path
+                    ws[w].tabs[t].panes[p].agent?.sessionResolved = true
+                }
+                continue
+            }
+            if let s = swaps[pane.id], s.teammate == sid {
+                ws[w].tabs[t].panes[p].agent?.sessionId = s.lead
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
         return ws
     }
 
-    /// Starts one resolver pass for the panes that still have no session. The snapshot never waits for it.
+    /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
+    /// a teammate's log. The snapshot never waits for it.
     private func resolveMissing(_ raw: [Workspace]) {
         guard !isPreview, resolveTask == nil else { return }
         let panes = raw.flatMap(\.tabs).flatMap(\.panes)
         let needs = panes.compactMap { p in
             p.agent.flatMap { $0.sessionId == nil ? SessionResolver.Need(paneId: p.id, kind: $0.kind, cwd: p.cwd) : nil }
         }
-        if needs.isEmpty, resolved.isEmpty { return }
+        let asks = panes.compactMap { p in
+            p.agent.flatMap { a in
+                a.kind == "claude" ? a.sessionId.map { SessionResolver.LeadAsk(paneId: p.id, sessionId: $0, cwd: p.cwd) } : nil
+            }
+        }
+        if needs.isEmpty, resolved.isEmpty, asks.isEmpty, swaps.isEmpty { return }
         let claimed = Set(panes.compactMap { $0.agent?.sessionId })
         resolveTask = Task { [weak self, resolver] in
             let found = await resolver.resolve(needs, claimed: claimed)
+            let swapped = await resolver.leads(asks, claimed: claimed)
             guard let self else { return }
             self.resolveTask = nil
-            guard found != self.resolved else { return }
+            guard found != self.resolved || swapped != self.swaps else { return }
             self.resolved = found
+            self.swaps = swapped
             self.applySnapshot(self.lastRaw)
         }
     }
 
-    /// The last snapshot as herdr sent it, before `withResolved`.
+    /// The last snapshot as herdr sent it, before `withFallbacks`.
     @ObservationIgnored private var lastRaw: [Workspace] = []
 
     private func applySnapshot(_ raw: [Workspace]) {
         lastRaw = raw
-        let ws = withResolved(raw)
+        let ws = Self.withFallbacks(raw, resolved: resolved, swaps: swaps)
         if ws != workspaces { workspaces = ws }
         syncLogs()
     }

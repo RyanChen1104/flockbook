@@ -51,6 +51,7 @@ public actor SessionResolver {
 
     // MARK: - Teammates
 
+    /// A Claude pane whose herdr session may be a teammate's log.
     public struct LeadAsk: Sendable, Hashable {
         public var paneId: String
         public var sessionId: String
@@ -58,13 +59,96 @@ public actor SessionResolver {
         public init(paneId: String, sessionId: String, cwd: String) { self.paneId = paneId; self.sessionId = sessionId; self.cwd = cwd }
     }
 
-    public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> [String: LeadSwap] { [:] }
+    private struct Found { var teammate: String; var lead: String?; var checked: Date }
+    /// Session id → it is a teammate's log. Only decided logs (a message line was read) are kept.
+    private var verdicts: [String: Bool] = [:]
+    /// paneId → the last lead id herdr gave for the pane.
+    private var lastLead: [String: String] = [:]
+    /// paneId → the lead log the search found while herdr names a teammate.
+    private var found: [String: Found] = [:]
 
-    public static func teammateVerdict(_ data: Data) -> Bool? { nil }
+    /// The panes whose herdr session is a teammate's log, each with the log to show instead (paneId → swap):
+    /// the lead id herdr gave last for the pane, else `leadLog`, else none. Every other pane keeps herdr's session.
+    public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> [String: LeadSwap] {
+        let ids = Set(asks.map(\.paneId))
+        lastLead = lastLead.filter { ids.contains($0.key) }
+        found = found.filter { ids.contains($0.key) }
+        verdicts = verdicts.filter { v in asks.contains { $0.sessionId == v.key } }
+        let now = Date()
+        var out: [String: LeadSwap] = [:]
+        for a in asks {
+            if verdicts[a.sessionId] == nil, let path = locate(a.sessionId), let v = Self.teammateVerdict(Self.head(path)) {
+                verdicts[a.sessionId] = v
+            }
+            guard let mate = verdicts[a.sessionId] else { continue }
+            guard mate else { lastLead[a.paneId] = a.sessionId; continue }
+            if let l = lastLead[a.paneId], !claimed.contains(l) {
+                out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: l)
+                continue
+            }
+            if let f = found[a.paneId], f.teammate == a.sessionId,
+               now.timeIntervalSince(f.checked) < (f.lead == nil ? retry : recheck) {
+                out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: f.lead)
+                continue
+            }
+            var taken = claimed
+            for (p, f) in found where p != a.paneId { if let l = f.lead { taken.insert(l) } }
+            let since = locate(a.sessionId).flatMap { (try? FileManager.default.attributesOfItem(atPath: $0))?[.creationDate] as? Date } ?? .distantPast
+            let lead = Self.leadLog(projectsDir: projectsDir, cwd: a.cwd, home: home, since: since, claimed: taken)
+            found[a.paneId] = Found(teammate: a.sessionId, lead: lead, checked: now)
+            out[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
+        }
+        return out
+    }
 
-    public static func claudeFolder(_ cwd: String) -> String { cwd }
+    private func locate(_ id: String) -> String? { SessionLog.locate(agent: "claude", sessionId: id, dir: projectsDir)?.path }
 
-    public static func leadLog(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> String? { nil }
+    /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and
+    /// `agentName`. Nil while the log has no message line yet.
+    public static func teammateVerdict(_ data: Data) -> Bool? {
+        for line in data.split(separator: 0x0A) {
+            guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let type = o["type"] as? String, type == "user" || type == "assistant" else { continue }
+            func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
+            return named("teamName") && named("agentName")
+        }
+        return nil
+    }
+
+    /// The folder under `~/.claude/projects` that Claude Code keeps a cwd's logs in: each character other than an
+    /// ASCII letter or digit becomes "-".
+    public static func claudeFolder(_ cwd: String) -> String {
+        String(cwd.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
+    }
+
+    /// The lead's log for a pane whose herdr session is a teammate's: the newest log modified at or after `since`
+    /// (when the teammate's log began) that is not claimed and not a teammate's, in the folder of `cwd`, else of the
+    /// nearest ancestor that has one. Folders of `home` and above are not searched.
+    public static func leadLog(projectsDir: String, cwd: String, home: String, since: Date, claimed: Set<String>) -> String? {
+        let fm = FileManager.default
+        let top = (home as NSString).standardizingPath
+        var dir = (cwd as NSString).standardizingPath
+        while dir.hasPrefix(top + "/") {
+            let folder = projectsDir + "/" + claudeFolder(dir)
+            var best: (path: String, at: Date)?
+            for f in (try? fm.contentsOfDirectory(atPath: folder)) ?? [] where f.hasSuffix(".jsonl") {
+                let p = folder + "/" + f
+                guard !isClaimed(p, claimed), let at = (try? fm.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
+                      at >= since, best.map({ at > $0.at }) ?? true, teammateVerdict(head(p)) != true else { continue }
+                best = (p, at)
+            }
+            if let best { return best.path }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// The first 1 MB of a file.
+    static func head(_ path: String) -> Data {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return Data() }
+        defer { try? fh.close() }
+        return (try? fh.read(upToCount: 1 << 20)) ?? Data()
+    }
 
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.
