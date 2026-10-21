@@ -115,6 +115,7 @@ struct PaneView: View {
                                             onPull: { model.pullQueued(pane) })
                             }
                             composer(agent)
+                            if let line = model.statusLines[pane.id] { StatusLineBar(record: line) }
                         }
                     }
                     .softScrollEdges([.top, .bottom])
@@ -139,6 +140,14 @@ struct PaneView: View {
             repeat {
                 await model.checkPrompt(for: pane)
                 guard focused, pane.agent?.status == .blocked || model.hasPending(pane) else { break }
+                try? await Task.sleep(for: .seconds(2))
+            } while !Task.isCancelled
+        }
+        .task(id: pane.agent?.sessionId) {
+            // Claude Code's status line (Settings > Agents), every 2 s while shown (read-only: the wrapper's files).
+            guard pane.agent?.kind == "claude" else { model.checkStatusLine(for: pane); return }
+            repeat {
+                model.checkStatusLine(for: pane)
                 try? await Task.sleep(for: .seconds(2))
             } while !Task.isCancelled
         }

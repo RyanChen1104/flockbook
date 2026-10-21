@@ -33,7 +33,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
     public var controls: [SettingsControl] {
         switch self {
         case .general: [.window, .textSize, .readingWidth]
-        case .agents: [.allowInput, .claudeQuestions]
+        case .agents: [.allowInput, .statusLine, .claudeQuestions]
         case .remote: [.remoteAccess, .connectWith, .tailscaleSteps, .address, .devices, .pictures, .phoneNotifications, .agentCommand]
         case .updates: [.autoUpdate, .version]
         }
@@ -53,7 +53,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
 /// One control (row) of the Settings page.
 public enum SettingsControl: String, CaseIterable, Sendable {
     case window, textSize, readingWidth
-    case allowInput, claudeQuestions
+    case allowInput, statusLine, claudeQuestions
     case remoteAccess, connectWith, tailscaleSteps, address, devices, pictures, phoneNotifications, agentCommand
     case autoUpdate, version
 }

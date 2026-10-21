@@ -1,6 +1,6 @@
 // Flockbook PWA: pair, agent list (Needs you first), conversation, approval and question cards, composer (input only).
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
-import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
+import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, StatusLine, StyledRun, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token";
@@ -34,7 +34,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
 const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
 /** `waiting`: older rows that came in and go in front of `items` a few per frame (oldest first). */
-interface PaneView { session?: string; items: Item[]; waiting?: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
+interface PaneView { session?: string; items: Item[]; waiting?: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue; statusLine?: StatusLine }
 const state = {
   token: load(TOKEN_KEY),
   pairSecret: null as string | null,
@@ -69,6 +69,8 @@ const state = {
   revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
+  /** Claude Code's status line is open (one line that scrolls sideways) instead of a chip. */
+  statusOpen: false,
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -217,6 +219,9 @@ function receive(m: HubMessage): void {
     }
     case "screen":
       view(m.pane).screen = m.text;
+      break;
+    case "statusLine":
+      view(m.pane).statusLine = m.lines.length ? m : undefined;
       break;
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
@@ -906,6 +911,9 @@ function keepScreen(nodes: (Node | string)[]): { composer: boolean } | null {
   else fillItems([newSection]);
   const form = keepComposer(oldSection, newSection);
   if (form) swap.set(form.fresh, form.old);
+  // A read-only device's status line at the foot stays while it is the same (its sideways scroll too).
+  const oldFoot = oldSection.querySelector<HTMLElement>(":scope > .status-foot"), newFoot = newSection.querySelector<HTMLElement>(":scope > .status-foot");
+  if (oldFoot && newFoot && oldFoot.querySelector<HTMLElement>(".statusline")?.dataset.key === newFoot.querySelector<HTMLElement>(".statusline")?.dataset.key) swap.set(newFoot, oldFoot);
   syncChildren(oldSection, [...newSection.childNodes].map((n) => swap.get(n) ?? n));
   syncChildren(app, nodes.map((n) => (typeof n === "string" ? n : swap.get(n) ?? n)));
   return { composer: !!form };
@@ -924,7 +932,10 @@ function keepComposer(oldSection: HTMLElement, newSection: HTMLElement): { old: 
   if (!oldRow || !newRow || !oldBox || !newBox) return null;
   // Everything around a kept element is replaced; the kept element itself never leaves the page.
   syncChildren(oldRow, [...newRow.childNodes].map((n) => (n === newBox ? oldBox : n)));
-  syncChildren(oldForm, [...newForm.childNodes].map((n) => (n === newRow ? oldRow : n)));
+  // The status line stays while it is the same (its sideways scroll too).
+  const oldLine = oldForm.querySelector<HTMLElement>(":scope > .statusline"), newLine = newForm.querySelector<HTMLElement>(":scope > .statusline");
+  const sameLine = oldLine && newLine && oldLine.dataset.key === newLine.dataset.key;
+  syncChildren(oldForm, [...newForm.childNodes].map((n) => (n === newRow ? oldRow : sameLine && n === newLine ? oldLine : n)));
   for (const a of ["placeholder", "aria-label"]) oldBox.setAttribute(a, newBox.getAttribute(a) ?? "");
   (oldBox as HTMLTextAreaElement).disabled = (newBox as HTMLTextAreaElement).disabled;
   return { old: oldForm, fresh: newForm };
@@ -1033,7 +1044,54 @@ function conversationScreen(pane: string): HTMLElement {
   // new list here would take them out of the page.
   const list = h("div", { class: "items" });
   itemsOf.set(list, items);
-  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, composer(pane, !!card, where?.p.agent?.name));
+  const form = composer(pane, !!card, where?.p.agent?.name);
+  // Claude Code's status line: in the composer, under the text field; a read-only device has it at the foot alone.
+  const line = statusLineView(pane);
+  if (form && line) form.append(line);
+  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
+}
+
+/** Claude Code's status line: a chip with its first line, cut; a tap shows every line at full length, each scrolling
+ *  sideways, and Claude Code's facts. Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
+function statusLineView(pane: string): HTMLElement | null {
+  const s = view(pane).statusLine;
+  if (!s?.lines.length) return null;
+  const open = state.statusOpen;
+  const plain = (l: StyledRun[]): string => l.map((r) => r.text).join("");
+  const chip = h("button", { class: `status-chip${open ? " open" : ""}`, type: "button", "aria-expanded": open ? "true" : "false",
+    "aria-label": open ? "Hide the status line" : "Show the status line", onclick: () => { state.statusOpen = !state.statusOpen; render(); } },
+    open ? "Status line" : plain(s.lines[0]));
+  const facts = statusFacts(s);
+  const body = open ? h("div", { class: "status-lines" },
+    ...s.lines.map((l) => h("div", { class: "status-row" }, ...l.map(runView))),
+    facts ? h("div", { class: "status-facts" }, facts) : null) : null;
+  return h("div", { class: "statusline", "data-key": JSON.stringify([s, open]) }, chip, body);
+}
+
+/** "Opus 5.5 · context 42% of 1M · session $3.27 (estimate)": what Claude Code's JSON says. */
+function statusFacts(s: StatusLine): string {
+  const tokens = (n: number): string => n >= 1e6 && n % 1e6 === 0 ? `${n / 1e6}M` : n >= 1000 ? `${Math.floor(n / 1000)}K` : `${n}`;
+  return [s.model,
+    s.contextPercent !== undefined ? `context ${s.contextPercent}%${s.contextSize ? ` of ${tokens(s.contextSize)}` : ""}` : undefined,
+    s.costUSD !== undefined ? `session $${s.costUSD.toFixed(2)} (estimate)` : undefined].filter(Boolean).join(" · ");
+}
+
+/** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that
+ *  would vanish on this background (white on light, black on dark) is left to the line's own. */
+function runView(r: StyledRun): HTMLElement {
+  const el = h("span", {}, r.text);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const lum = (hex: string): number => {
+    const v = parseInt(hex.slice(1), 16);
+    return (0.2126 * (v >> 16 & 255) + 0.7152 * (v >> 8 & 255) + 0.0722 * (v & 255)) / 255;
+  };
+  if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg) && !(dark ? lum(r.fg) < 0.12 : lum(r.fg) > 0.85)) el.style.color = r.fg;
+  if (r.bg && /^#[0-9a-f]{6}$/i.test(r.bg)) el.style.backgroundColor = r.bg;
+  if (r.bold) el.style.fontWeight = "700";
+  if (r.dim) el.style.opacity = "0.6";
+  if (r.italic) el.style.fontStyle = "italic";
+  if (r.underline) el.style.textDecoration = "underline";
+  return el;
 }
 
 function itemView(it: Item, pane: string): HTMLElement {

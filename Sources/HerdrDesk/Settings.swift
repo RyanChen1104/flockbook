@@ -18,6 +18,8 @@ struct SettingsView: View {
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
+    /// Claude Code's status line switch; snapshots get a preview that never reads or writes.
+    var statusLine: StatusLineSetup = .previewOff
     /// The Settings page: fills its column and scrolls, so a long page (Remote access) never runs off the screen.
     /// Snapshots keep the full height at a fixed width.
     var scrolls = false
@@ -94,9 +96,10 @@ struct SettingsView: View {
             .font(.footnote).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // The question hook serves the phone: shown while Remote access is on, as before.
-        if let remote, remote.enabled {
-            Section("Claude Code") {
+        Section("Claude Code") {
+            StatusLineRow(setup: statusLine).settingsControl(.statusLine)
+            // The question hook serves the phone: shown while Remote access is on, as before.
+            if let remote, remote.enabled {
                 ClaudeHookRow(setup: remote.claudeHook).settingsControl(.claudeQuestions)
             }
         }
@@ -144,6 +147,7 @@ struct SettingsSplit: View {
     @AppStorage(SettingsTab.key, store: AppDefaults.store) private var stored = SettingsTab.general.rawValue
     var fixed: SettingsTab? = nil
     var remote: RemoteHub? = nil
+    var statusLine: StatusLineSetup = .previewOff
     var scrolls = false
     var reduceTransparency: Bool? = nil
     var list = true
@@ -165,7 +169,7 @@ struct SettingsSplit: View {
                     .onDisappear { SettingsProbe.pageList = .zero }
                 Divider()
             }
-            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, scrolls: scrolls)
+            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, statusLine: statusLine, scrolls: scrolls)
                 .contentMargins(.horizontal, scrolls ? max(0, (width - Self.column) / 2) : 0, for: .scrollContent)
                 .frame(maxWidth: scrolls ? .infinity : nil, maxHeight: scrolls ? .infinity : nil, alignment: .top)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -222,7 +226,7 @@ struct SettingsPage: View {
 
     var body: some View {
         let own = model.sidebarVisibility == .detailOnly
-        SettingsSplit(remote: model.remote, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
+        SettingsSplit(remote: model.remote, statusLine: .live, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { Button("Back") { model.closeSettings() }.keyboardShortcut(.cancelAction).hidden() }
             .probe { SettingsProbe.page = $0 }

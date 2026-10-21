@@ -191,6 +191,7 @@ Rules:
 | `prompt` | `pane`, `approval?`, `question?` | The open prompt of a watched pane. Both absent = no prompt open. |
 | `attached` | `upload`, `width`, `height`, `bytes` | The last `attach` part was taken: the size of the re-encoded image. Before that part's `reply`. |
 | `picturePart` | `re`, `pane`, `item`, `index`, `full`, `part`, `parts`, `mime`, `width`, `height`, `data` | One part of a picture for the `picture` message `re`. `data`: standard base64. All parts come before that message's `reply`. See 3.4. |
+| `statusLine` | `pane`, `lines` (lists of runs `{text, fg?, bg?, bold?, dim?, italic?, underline?}`, colours `#rrggbb`), `model?`, `costUSD?`, `contextPercent?`, `contextSize?` | Claude Code's status line of a watched Claude pane, while the owner has "Show Claude Code status line" on (Settings > Agents). On `watch` only when there is one, then on each change; empty `lines` clear it. `costUSD` is Claude Code's own estimate. |
 | `pong` | – | Answer to `ping`. |
 
 Error codes: `unauthorized`, `readOnly`, `stale`, `promptOpen`, `notFound`, `badRequest`, `rateLimited`, `unsupportedVersion`, `failed`. A client treats an unknown code as `failed`.

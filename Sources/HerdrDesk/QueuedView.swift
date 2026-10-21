@@ -190,7 +190,7 @@ struct QueuedStrip: View {
 /// SwiftUI asks a pane's minimum height with a zero width (the split view's minimum). The strip's texts would wrap a
 /// letter per line there and push the composer off the window, so a zero width is measured at `width` (the reading
 /// column) instead. Every other proposal lays the strip out as it is.
-private struct ZeroWidthAs: Layout {
+struct ZeroWidthAs: Layout {
     let width: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {

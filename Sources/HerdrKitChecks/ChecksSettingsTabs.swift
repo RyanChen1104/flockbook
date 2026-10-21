@@ -14,7 +14,7 @@ func checksSettingsTabs() async throws {
     check(Set(placed) == Set(SettingsControl.allCases), "settings tabs: every control is in a tab (missing \(Set(SettingsControl.allCases).subtracting(placed).map(\.rawValue)))")
     check(SettingsTab.allCases.allSatisfy { !$0.controls.isEmpty }, "settings tabs: no empty tab")
     check(SettingsTab.general.controls == [.window, .textSize, .readingWidth], "settings tabs: General holds the window look and reading")
-    check(SettingsTab.agents.controls == [.allowInput, .claudeQuestions], "settings tabs: Agents holds input and the Claude question hook")
+    check(SettingsTab.agents.controls == [.allowInput, .statusLine, .claudeQuestions], "settings tabs: Agents holds input, the Claude status line and the question hook")
     check(SettingsTab.remote.controls == [.remoteAccess, .connectWith, .tailscaleSteps, .address, .devices, .pictures, .phoneNotifications, .agentCommand],
           "settings tabs: Remote holds pairing, pictures and notifications")
     check(SettingsTab.updates.controls == [.autoUpdate, .version], "settings tabs: Updates holds automatic updates and the version")
