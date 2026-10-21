@@ -177,6 +177,13 @@ extension SnapshotRunner {
         await clearIsland("pictures")
         save("pictures")
 
+        // 10. Queued: Claude Code's messages waiting for its turn to end, above the reply field.
+        let widget = open("Meadow", "widgets")
+        let queued = await wait(6) { (widget?.panes.first).map { (model.queued[$0.id]?.items.count ?? 0) >= 2 } ?? false }
+        step("queued: \((widget?.panes.first).flatMap { model.queued[$0.id]?.items.count } ?? 0) messages (want 2)", queued)
+        await clearIsland("queued")
+        save("queued")
+
         print("snapshot-demo: \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
         finish()
     }

@@ -48,7 +48,7 @@ export const features = [
 		title: 'See what is queued',
 		body: 'Messages you send while an agent works stay above the reply field until the agent takes them, and you can pull Claude Code’s queue back to edit it.',
 		image: 'queued',
-		alt: 'A phone showing two queued messages above the reply field while the agent works.'
+		alt: 'Two queued messages above the reply field while the agent works, with Pull back to edit.'
 	},
 	{
 		id: 'phone',

@@ -1,7 +1,7 @@
 // The phone slides for the README and the website: phone stills (scripts/demo/phone-stills.mjs) in plain phone
 // frames on a transparent 2560x1704 canvas, the shape of the Mac stills.
-//   node scripts/demo/phone-frames.mjs <phone-stills-dir> [out-dir]   -> <out>/phone-*.png, push-*.png, queued-*.png
-// phone: the list of agents and a conversation with pictures. queued: the messages waiting for the agent's turn. push: a lock screen with the notifications the hub
+//   node scripts/demo/phone-frames.mjs <phone-stills-dir> [out-dir]   -> <out>/phone-*.png, push-*.png
+// phone: the list of agents and a conversation with pictures. push: a lock screen with the notifications the hub
 // sends (title "Needs you · <agent title>", body "<agent> · <workspace> · <tab>", as PushNotice.agent words them),
 // next to the list they open.
 import { createRequire } from 'node:module';
@@ -69,7 +69,7 @@ const lock = `<div class="lock"><p class="date">Tuesday 20 October</p><p class="
 const browser = await chromium.launch({ headless: true });
 for (const look of ['light', 'dark']) {
 	const shot = (name) => `<img src="${data(join(stills, `phone-${name}-${look}.png`), 'image/png')}" alt="">`;
-	for (const [name, phones] of [['phone', [shot('list'), shot('pictures')]], ['push', [lock, shot('list')]], ['queued', [shot('queued')]]]) {
+	for (const [name, phones] of [['phone', [shot('list'), shot('pictures')]], ['push', [lock, shot('list')]]]) {
 		const p = await browser.newPage({ viewport: { width: 1280, height: 852 }, deviceScaleFactor: 2 });
 		await p.setContent(page(look, phones));
 		await p.waitForLoadState('load');

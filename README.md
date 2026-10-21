@@ -56,7 +56,7 @@ Messages you send while an agent works wait in the agent's queue. Flockbook show
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/queued-dark.png">
-  <img src="docs/media/queued-light.png" alt="Queued messages on the phone" width="800">
+  <img src="docs/media/queued-light.png" alt="Two queued messages above the reply field, with Pull back to edit" width="800">
 </picture>
 
 ### Question card
