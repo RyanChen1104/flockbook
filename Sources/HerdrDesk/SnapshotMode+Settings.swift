@@ -193,6 +193,10 @@ enum SettingsProbe {
     nonisolated(unsafe) static var tabs: [SettingsTab: CGRect] = [:]
     /// The rows on screen now (`settingsControl`).
     nonisolated(unsafe) static var controls: [SettingsControl: CGRect] = [:]
+    /// The Back row (the sidebar's while Settings has it, or the page's own list while the sidebar is hidden).
+    nonisolated(unsafe) static var back: CGRect = .zero
+    /// The page's own tab list (shown only while the sidebar is hidden); zero while not shown.
+    nonisolated(unsafe) static var pageList: CGRect = .zero
 }
 
 extension ChromeTests {
@@ -248,10 +252,15 @@ extension ChromeTests {
         step("the page fills the detail column (page \(page.integral), detail \(detail.integral))",
              page.width > 0 && abs(page.minX - detail.minX) < 2 && abs(page.maxX - detail.maxX) < 2 && page.height > detail.height - 40)
         let list = SettingsTab.allCases.compactMap { SettingsProbe.tabs[$0] }, content = SettingsProbe.content
-        step("the tab list on the left, \(list.count) tabs top to bottom (x \(Int(list.first?.minX ?? 0)), first y \(Int(list.first?.minY ?? 0))), the form beside it (\(content.integral))",
-             list.count == SettingsTab.allCases.count && zip(list, list.dropFirst()).allSatisfy { $0.maxY <= $1.minY }
-             && (list.first?.minX ?? 0) - page.minX < 20 && (list.first?.minY ?? 0) >= detail.minY
-             && content.minX >= (list.first?.maxX ?? .infinity) && abs(content.maxX - page.maxX) < 2 && content.height > page.height - 40)
+        let side = ChromeProbe.panel, back = SettingsProbe.back
+        // Settings has the sidebar: Back on top, then the tabs, in the sidebar panel; no list of its own in the page.
+        step("the sidebar shows Back (\(back.integral)) then \(list.count) tabs top to bottom, inside the sidebar panel (\(side.integral))",
+             back.width > 0 && list.count == SettingsTab.allCases.count && back.maxY <= (list.first?.minY ?? 0)
+             && zip(list, list.dropFirst()).allSatisfy { $0.maxY <= $1.minY } && list.allSatisfy { side.contains(CGPoint(x: $0.midX, y: $0.midY)) })
+        step("no workspace rows while Settings has the sidebar (Overview row \(ChromeProbe.rowsShown["Overview"] ?? false))", ChromeProbe.rowsShown["Overview"] != true)
+        step("no tab list in the page (\(SettingsProbe.pageList)); the form fills it (\(content.integral))",
+             SettingsProbe.pageList == .zero && abs(content.minX - page.minX) < 2 && abs(content.maxX - page.maxX) < 2 && content.height > page.height - 40)
+        step("no tab row, + or terminal button in the toolbar (tab rows shown: \(TabProbe.rowsShown))", TabProbe.rowsShown == 0)
 
         // It scrolls: the page is taller than the column (with the remote section, even here); a wheel over it moves it.
         func scrollViews(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrollViews) }
@@ -301,17 +310,59 @@ extension ChromeTests {
             win.appearance = nil
         } else { step("a scroll view under the page (\(hit.map { "\(type(of: $0))" } ?? "no view"))", false) }
 
-        // Another row leaves the page.
-        await click(ChromeProbe.rows["Overview"] ?? .zero)
-        step("Overview row leaves the page (\(model.screen), page \(SettingsProbe.page))", model.screen == .overview && SettingsProbe.page == .zero)
-        // ⌘, (the app menu's Settings… calls this) from the tab screen, then a workspace row returns to the agent view.
+        // Every tab, chosen from the sidebar, light and dark.
+        for t in SettingsTab.allCases {
+            await click(SettingsProbe.tabs[t] ?? .zero)
+            step("\(t.rawValue): the sidebar row chooses it (\(AppDefaults.store.string(forKey: SettingsTab.key) ?? "nil"))", AppDefaults.store.string(forKey: SettingsTab.key) == t.rawValue)
+            ContentTests.capture(win, to: "\(dir)/settings-\(t.rawValue)-light.png")
+            win.appearance = NSAppearance(named: .darkAqua); try? await Task.sleep(for: .milliseconds(500))
+            ContentTests.capture(win, to: "\(dir)/settings-\(t.rawValue)-dark.png")
+            win.appearance = nil; try? await Task.sleep(for: .milliseconds(300))
+        }
+
+        // A tab row in the sidebar chooses the tab, and it is remembered.
+        await click(SettingsProbe.tabs[.agents] ?? .zero)
+        step("the sidebar's Agents row shows the Agents tab (\(AppDefaults.store.string(forKey: SettingsTab.key) ?? "nil"))",
+             AppDefaults.store.string(forKey: SettingsTab.key) == SettingsTab.agents.rawValue && SettingsProbe.controls[.allowInput] != nil)
+
+        // Back, Esc and ⌘, again: the screen, workspace and tab from before, unchanged.
         model.screen = .tab
+        let ws = model.workspaceID, tab = model.tabID
+        func same(_ how: String) {
+            step("\(how) returns to the tab screen as it was (\(model.screen), \(model.workspaceID ?? "nil")/\(model.tabID ?? "nil")), the sidebar's rows again, the tab row again (\(TabProbe.rowsShown))",
+                 model.screen == .tab && model.workspaceID == ws && model.tabID == tab && ChromeProbe.rowsShown["Overview"] == true && TabProbe.rowsShown > 0 && SettingsProbe.page == .zero)
+        }
         model.showSettings(); try? await Task.sleep(for: .milliseconds(600))
         step("⌘, opens the page from the tab screen (\(model.screen))", model.screen == .settings && SettingsProbe.page.width > 0)
-        if let ws = model.workspace, let title = ChromeProbe.rows["title:\(ws.id)"] {
-            await click(title)
-            step("the current workspace's row returns to its tab (\(model.screen))", model.screen == .tab)
-        } else { step("a workspace row to click", false) }
+        await click(SettingsProbe.back)
+        same("Back")
+        model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
+        step("⌘, opens it (\(model.screen))", model.screen == .settings)
+        if let cg = CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true), let e = NSEvent(cgEvent: cg) { win.sendEvent(e) }
+        if let cg = CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false), let e = NSEvent(cgEvent: cg) { win.sendEvent(e) }
+        try? await Task.sleep(for: .milliseconds(600))
+        same("Esc")
+        model.toggleSettings(); try? await Task.sleep(for: .milliseconds(400))
+        model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
+        same("⌘, again")
+        // From another screen: back to that screen.
+        model.screen = .overview
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(400))
+        model.closeSettings(); try? await Task.sleep(for: .milliseconds(400))
+        step("from Overview, Back returns to Overview (\(model.screen))", model.screen == .overview)
+        model.screen = .tab; try? await Task.sleep(for: .milliseconds(400))
+
+        // The sidebar hidden: the page brings its own list, Back on top.
+        model.sidebarVisibility = .detailOnly; try? await Task.sleep(for: .milliseconds(800))
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(800))
+        let own = SettingsProbe.pageList, page2 = SettingsProbe.page
+        step("sidebar hidden: the page shows Back and the tabs on its left (\(own.integral) in \(page2.integral)), Back at \(SettingsProbe.back.integral)",
+             own.width > 0 && own.minX - page2.minX < 20 && SettingsProbe.back.width > 0 && own.contains(CGPoint(x: SettingsProbe.back.midX, y: SettingsProbe.back.midY)))
+        step("sidebar hidden: still no tab row in the toolbar (\(TabProbe.rowsShown))", TabProbe.rowsShown == 0)
+        ContentTests.capture(win, to: "\(dir)/settings-page-sidebar-hidden-light.png")
+        await click(SettingsProbe.back)
+        step("sidebar hidden: Back returns (\(model.screen)), the sidebar stays hidden (\(model.sidebarVisibility))", model.screen == .tab && model.sidebarVisibility == .detailOnly)
+        model.sidebarVisibility = .all
         AppDefaults.store.removeObject(forKey: SettingsTab.key)
         print("settings-page-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

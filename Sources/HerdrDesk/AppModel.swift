@@ -19,6 +19,10 @@ final class AppModel {
     var showTerminal = false
     /// Settings is a page of the main window (sidebar foot, ⌘,).
     func showSettings() { screen = .settings }
+    /// ⌘,: opens Settings, or leaves it when it is open.
+    func toggleSettings() { showSettings() }
+    /// Back and Esc: the screen from before Settings.
+    func closeSettings() {}
     var splitDirection: String = "down"
     var searchText = ""
     /// Width of the tab row toolbar item. Follows the detail column, never the tab count (see `setDetailWidth`).

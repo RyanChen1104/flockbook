@@ -142,6 +142,8 @@ struct SidebarView: View {
             Spacer(minLength: 4)
             if badge > 0 { BlockedBadge(count: badge).probe { ChromeProbe.rows["badge:\(title)"] = $0 } }
         }
+        .onAppear { ChromeProbe.rowsShown[title] = true }
+        .onDisappear { ChromeProbe.rowsShown[title] = false }
         .tag(item)
     }
 }

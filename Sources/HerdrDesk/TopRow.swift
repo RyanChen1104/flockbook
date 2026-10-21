@@ -43,6 +43,8 @@ struct TopRow: View {
         .frame(height: Self.height)
         .modifier(IslandGlass())   // the only glass shape: exactly the content width, nothing behind it
         .probe { [probes = TabProbe.writes(host, model)] r in if probes { TabProbe.island = r } }
+        .onAppear { TabProbe.rowsShown += 1 }
+        .onDisappear { TabProbe.rowsShown -= 1 }
     }
 
     /// Island width: content (pills + the inset at both ends), never above the window-derived cap.
@@ -261,6 +263,8 @@ enum TabProbe {
     nonisolated(unsafe) static var labels: [String: CGRect] = [:]
     nonisolated(unsafe) static var pills: [String: CGRect] = [:]
     nonisolated(unsafe) static var island: CGRect = .zero
+    /// Copies of the tab row in the window now (toolbar and full-screen content).
+    nonisolated(unsafe) static var rowsShown = 0
     /// Whether the last change of each tab's position came with an animation.
     nonisolated(unsafe) static var moveAnimated: [String: Bool] = [:]
     /// The copy whose frames the probes hold: the toolbar's windowed, the content copy in full screen (the toolbar copy's
