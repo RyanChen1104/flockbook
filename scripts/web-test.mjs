@@ -658,16 +658,17 @@ async function fakeRun() {
   await p.shot("queue-pulled");
   await p.shot("queue-pulled", true);
   // Claude Code's status line (the Mac's switch on): a row of tags over the composer's field (model, effort, context
-  // with its bar, cost marked as an estimate), the chevron at the right; open: every tag, the owner's lines (each
-  // scrolling sideways, in their colours) and when it was updated.
+  // with its bar, cost marked as an estimate, then the owner's line cut into parts without the repeats), the chevron at
+  // the right; open: every tag, wrapped, in the parts' colours, and when it was updated; no raw line (appendix D).
   await p.type("#composer-text", "status me");
   await p.click("#composer-send");
   const sline = "document.querySelector('form.composer > .statusline')";
   const rowTags = `[...document.querySelectorAll('form.composer > .statusline > .status-head > .status-tags > .status-tag')]`;
   const shownTags = `${rowTags}.filter((t) => t.offsetTop === t.parentElement.firstElementChild.offsetTop).map((t) => t.textContent)`;
   const more = "document.querySelector('form.composer > .statusline > .status-head > .status-more')";
-  check(await p.until(`${shownTags}.join('|') === 'Opus 5.5|high|ctx 42%|$3.27 est.'`) === true,
-    `status line: the tags in one row (${await p.eval(`JSON.stringify(${shownTags})`)})`);
+  check(await p.until(`${shownTags}.slice(0, 4).join('|') === 'Opus 5.5|high|ctx 42%|$3.27 est.' && ${shownTags}.length < ${rowTags}.length`) === true
+    && await p.eval(`${rowTags}.map((t) => t.textContent).join('|')`) === "Opus 5.5|high|ctx 42%|$3.27 est.|⎇ main|turn $0.18|day $11.40/$25|month $212/$300|rate limit 5h: 23%",
+    `status line: Claude Code's tags, then the owner's parts without the repeats; one row (${await p.eval(`JSON.stringify(${shownTags})`)})`);
   check(await p.eval(`${sline} === document.querySelector('form.composer').firstElementChild
     && ${sline}.getBoundingClientRect().bottom <= document.querySelector('form.composer > .composer-row').getBoundingClientRect().top
     && ${sline}.getBoundingClientRect().height < 34 && !document.querySelector('.status-detail') && ${noScroll}`) === true,
@@ -675,17 +676,21 @@ async function fakeRun() {
   check(await p.eval(`+getComputedStyle(${rowTags}[0]).fontWeight >= 600 && ${rowTags}[2].querySelector('.status-fill')?.style.width === '42%'`) === true,
     "status line: the model in bold; the context's bar at 42%");
   check(await p.eval(`!!${more} && !${more}.hidden && ${more}.getAttribute('aria-label') === 'Show the whole status line' && ${more}.getAttribute('aria-expanded') === 'false'`) === true,
-    "status line: own lines to open: the chevron at the right, with a label");
+    "status line: tags left out: the chevron at the right, with a label");
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline");
   await p.shot("statusline", true);
   await p.click("form.composer .status-more");
-  const statusRows = "[...document.querySelectorAll('.status-detail > .status-lines > .status-row')]";
-  check(await p.until(`${statusRows}.length === 2`) === true && await p.eval(`${statusRows}[0].scrollWidth > ${statusRows}[0].clientWidth && ${noScroll}`) === true,
-    "status line: open, two lines; the long one scrolls sideways, not the page");
-  check(await p.eval(`getComputedStyle(${statusRows}[0].firstElementChild).color`) === "rgb(175, 135, 255)" && await p.eval(`getComputedStyle(${statusRows}[1].firstElementChild).opacity`) === "0.6",
-    "status line: the line's colours and dim text");
-  check(await p.eval("[...document.querySelectorAll('.statusline.open > .status-head > .status-tags.all > .status-tag')].map((t) => t.textContent).join('|')") === "Opus 5.5|high|ctx 42%|$3.27 est."
+  const openTags = "[...document.querySelectorAll('.statusline.open > .status-head > .status-tags.all > .status-tag')]";
+  check(await p.until(`${openTags}.length === 9`) === true && await p.eval(`!document.querySelector('.status-lines, .status-row') && ${noScroll}`) === true,
+    "status line: open, every tag wrapped; no raw line; the page does not scroll sideways");
+  const dark = await p.eval("matchMedia('(prefers-color-scheme: dark)').matches");
+  const part = (t) => `${openTags}.find((e) => e.textContent === ${JSON.stringify(t)})`;
+  const red = await p.eval(`getComputedStyle(${part("month $212/$300")}.children[1]).color`), cyan = await p.eval(`getComputedStyle(${part("⎇ main")}.firstElementChild).color`);
+  check(dark ? cyan === "rgb(0, 205, 205)" && red !== "rgb(205, 0, 0)" : red === "rgb(205, 0, 0)" && cyan !== "rgb(0, 205, 205)",
+    `status line: a part's colour where it reads on the tag, else the tag's text colour (${dark ? "dark" : "light"}: red ${red}, cyan ${cyan})`);
+  check(await p.eval(`getComputedStyle(${part("rate limit 5h: 23%")}.firstElementChild).opacity`) === "0.6", "status line: dim text stays dim");
+  check(await p.eval(`${openTags}.map((t) => t.textContent).join('|')`) === "Opus 5.5|high|ctx 42%|$3.27 est.|⎇ main|turn $0.18|day $11.40/$25|month $212/$300|rate limit 5h: 23%"
     && /^Updated \d/.test(await p.eval("document.querySelector('.status-detail > .status-time')?.textContent ?? ''")),
     `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
   check(await p.eval(`${more}.getAttribute('aria-expanded') === 'true' && ${more}.getAttribute('aria-label') === 'Hide the whole status line'`) === true,
@@ -693,9 +698,9 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline-open");
   await p.shot("statusline-open", true);
-  await p.eval(`${statusRows}[0].scrollLeft = 60`);
+  await p.eval("window.__keptLine = document.querySelector('.statusline')");
   await p.until("false", 1500);
-  check(await p.eval(`${statusRows}[0].scrollLeft`) === 60, "status line: hub news does not reset the sideways scroll");
+  check(await p.eval("window.__keptLine === document.querySelector('.statusline')") === true, "status line: hub news does not rebuild an unchanged line");
   await p.click("form.composer .status-more");
   check(await p.until("!document.querySelector('.status-detail')") === true, "status line: a second tap closes it");
   // A narrow phone: the tags that fit, then the chevron.
@@ -716,11 +721,11 @@ async function fakeRun() {
   await p.type("#composer-text", "status tags");
   await p.click("#composer-send");
   check(await p.until(`${shownTags}.length === 4 && ${more}?.hidden === true`) === true, "status line: facts only, all fit: no chevron");
-  // No facts (Claude Code's JSON not read): the owner's first line in the row, and the chevron.
+  // No facts (Claude Code's JSON not read): the owner's parts are the tags.
   await p.type("#composer-text", "status plain");
   await p.click("#composer-send");
-  check(await p.until(`${rowTags}.length === 0 && document.querySelector('.statusline .status-plain')?.textContent.startsWith('Opus 5.5 · ⎇ main') && !${more}.hidden`) === true,
-    "status line: no facts: the owner's line, and the chevron");
+  check(await p.until(`${rowTags}.map((t) => t.textContent).slice(0, 3).join('|') === 'Opus 5.5|⎇ main|ctx 42%' && !document.querySelector('.status-plain')`) === true,
+    `status line: no facts: the owner's parts as tags (${await p.eval(`JSON.stringify(${rowTags}.map((t) => t.textContent))`)})`);
   await p.type("#composer-text", "status off");
   await p.click("#composer-send");
   check(await p.until("!document.querySelector('.statusline')") === true, "status line: none from the hub: nothing shown");

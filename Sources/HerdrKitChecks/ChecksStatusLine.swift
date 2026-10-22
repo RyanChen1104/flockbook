@@ -93,6 +93,41 @@ import Foundation
               "status row: no tags, own lines: the chevron")
     }
 
+    // Appendix D: the owner's lines become tags too. Each line splits at " · ", " | ", "│", " • " or two spaces and
+    // more; each part is trimmed, an empty one dropped; a part keeps its colours. No separator: the whole line.
+    do {
+        func texts(_ segs: [[StyledRun]]) -> [String] { segs.map { $0.map(\.text).joined() } }
+        let one = StatusSegments.split([[StyledRun("a · b | c│d • e   f  ·  ")]])
+        check(texts(one) == ["a", "b", "c", "d", "e", "f"], "status segments: the separators (\(texts(one)))")
+        check(texts(StatusSegments.split([[StyledRun("  just one line ")]])) == ["just one line"], "status segments: no separator: the line, trimmed")
+        check(StatusSegments.split([[StyledRun("   ")], []]) == [], "status segments: blank lines: none")
+        let lines = ANSIText.lines("\(esc)[38;5;141mOpus 5.5\(esc)[0m \(esc)[2m·\(esc)[0m \(esc)[36m⎇ main\(esc)[0m \(esc)[2m·\(esc)[0m ctx \(esc)[33m37%\(esc)[0m "
+            + "\(esc)[2m·\(esc)[0m session \(esc)[32m$0.42\(esc)[0m \(esc)[2m·\(esc)[0m day \(esc)[1m$11.40\(esc)[0m/$25\n\(esc)[2mrate limit 5h: 23% · 7d: 61%\(esc)[0m")
+        let segs = StatusSegments.split(lines)
+        check(texts(segs) == ["Opus 5.5", "⎇ main", "ctx 37%", "session $0.42", "day $11.40/$25", "rate limit 5h: 23%", "7d: 61%"],
+              "status segments: a real line (\(texts(segs)))")
+        check(segs.count == 7 && segs[1] == [StyledRun("⎇ main", fg: ANSIText.basic[6])] && segs[2] == [StyledRun("ctx "), StyledRun("37%", fg: ANSIText.basic[3])]
+              && segs[4] == [StyledRun("day "), StyledRun("$11.40", bold: true), StyledRun("/$25")] && segs[5].allSatisfy(\.dim),
+              "status segments: each part keeps its colours (\(segs.count > 4 ? String(describing: segs[4]) : "-"))")
+        // The tags: Claude Code's first, then the owner's; a part that says what a JSON tag says is not drawn twice.
+        let info = ClaudeStatusInfo(json: input)
+        let rec = StatusLineRecord(lines: lines, info: info, time: Date())
+        check(rec.tags.map(\.text) == ["Opus 5.5", "high", "ctx 37%", "$0.42 est.", "⎇ main", "day $11.40/$25", "rate limit 5h: 23%", "7d: 61%"]
+              && rec.tags[4].kind == .own && rec.tags[4].runs == [StyledRun("⎇ main", fg: ANSIText.basic[6])],
+              "status tags: JSON first, then the owner's parts without the repeats (\(rec.tags.map(\.text)))")
+        let near = StatusSegments.split([[StyledRun("Opus 5.5 (1M) · ctx 38% · $0.42 · session: $0.42 · context 37%")]])
+        check(StatusSegments.dropRepeats(near, info: info).map { $0.map(\.text).joined() } == ["Opus 5.5 (1M)", "ctx 38%", "$0.42"],
+              "status tags: only exact repeats go; unsure ones stay (\(StatusSegments.dropRepeats(near, info: info).map { $0.map(\.text).joined() }))")
+        check(StatusLineRecord(lines: lines, info: nil, time: Date()).tags.map(\.text).first == "Opus 5.5", "status tags: no facts: the owner's parts")
+        // A part's colour is drawn on the tag while it reads there (3:1); else the tag's own text colour.
+        check(StatusTag.readable("#ffff00", dark: false) == false && StatusTag.readable("#ffff00", dark: true)
+              && StatusTag.readable("#000000", dark: false) && !StatusTag.readable("#000000", dark: true),
+              "status tags: a colour that does not read on the tag falls back")
+        let hub = HubStatusLine(pane: "p", record: rec)
+        check(hub.segments == StatusSegments.dropRepeats(segs, info: info),
+              "hub status line: the owner's parts, not the raw lines (\(hub.segments.count))")
+    }
+
     // The folder: the wrapper saves, the app reads one session's record.
     do {
         let dir = tmp("folder")
@@ -268,15 +303,15 @@ import Foundation
         b.statusLines["s1"] = StatusLineRecord(lines: [[StyledRun("main", fg: "#00ff00")]], info: info, time: Date())
         let s = await session(b)
         let l = line(await s.receive(watch))
-        check(l?.pane == "w1:p1" && l?.lines == [[StyledRun("main", fg: "#00ff00")]] && l?.costUSD == 0.4213 && l?.contextPercent == 37 && l?.model == "Opus 5.5"
+        check(l?.pane == "w1:p1" && l?.segments == [[StyledRun("main", fg: "#00ff00")]] && l?.costUSD == 0.4213 && l?.contextPercent == 37 && l?.model == "Opus 5.5"
               && l?.effort == "high" && l?.time != nil,
               "hub status line: watch pushes the line, cost, context, model, effort and time (\(String(describing: l)))")
         check(line(await s.tick()) == nil, "hub status line: no change, no push")
         b.statusLines["s1"] = StatusLineRecord(lines: [[StyledRun("dev")]], info: info, time: Date())
-        check(line(await s.tick())?.lines == [[StyledRun("dev")]], "hub status line: a change is pushed")
+        check(line(await s.tick())?.segments == [[StyledRun("dev")]], "hub status line: a change is pushed")
         b.statusLines["s1"] = StatusLineRecord(lines: [], info: info, time: Date())
         let bare = line(await s.tick())
-        check(bare?.lines == [] && bare?.model == "Opus 5.5" && bare?.isEmpty == false, "hub status line: no own line: the facts alone, not the summary as a line")
+        check(bare?.segments == [] && bare?.model == "Opus 5.5" && bare?.isEmpty == false, "hub status line: no own line: the facts alone, not the summary as a line")
         b.statusLines["s1"] = nil
         check(line(await s.tick())?.isEmpty == true, "hub status line: gone: an empty push clears it")
         let codex = FakeHubBackend(workspaces: ws(kind: "codex"))
@@ -287,7 +322,7 @@ import Foundation
         let msg = HubStatusLine(pane: "w1:p1", record: b.statusLines["s1"] ?? StatusLineRecord(lines: [[StyledRun("a", fg: "#123456", bold: true)]], info: info, time: Date()))
         check(try Hub.decodeHub(try Hub.encode(HubMessage.statusLine(msg))) == .statusLine(msg), "hub status line: round-trips")
         let json = String(decoding: try Hub.encode(HubMessage.statusLine(HubStatusLine(pane: "w1:p1", record: StatusLineRecord(lines: [[StyledRun("a", fg: "#123456", bold: true)]], info: nil, time: Date())))), as: UTF8.self)
-        check(json.contains(#""lines":[[{"#) && json.contains(##""fg":"#123456""##) && !json.contains("costUSD\":null"), "hub status line: compact JSON (\(json))")
+        check(json.contains(#""segments":[[{"#) && !json.contains(#""lines""#) && json.contains(##""fg":"#123456""##) && !json.contains("costUSD\":null"), "hub status line: compact JSON (\(json))")
     }
 }
 

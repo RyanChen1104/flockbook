@@ -242,13 +242,16 @@ public struct StatusLineRecord: Hashable, Sendable {
     public var time: Date
     public init(lines: [[StyledRun]], info: ClaudeStatusInfo?, time: Date) { self.lines = lines; self.info = info; self.time = time }
 
+    /// The row's tags: Claude Code's facts, then the owner's parts that do not repeat them.
+    public var tags: [StatusTag] { info?.tags ?? [] }
+
     /// No own line and no facts: nothing to show.
     public var isEmpty: Bool { lines.isEmpty && (info?.tags.isEmpty ?? true) }
 }
 
 /// One tag of the status row over the composer: what Claude Code's JSON says, one fact each.
 public struct StatusTag: Hashable, Sendable {
-    public enum Kind: String, Sendable { case model, effort, context, cost }
+    public enum Kind: String, Sendable { case model, effort, context, cost, own }
     public var kind: Kind
     public var text: String
     /// What VoiceOver says.
@@ -257,6 +260,8 @@ public struct StatusTag: Hashable, Sendable {
     public var percent: Int?
     /// The context is nearly full (`warnPercent` and up): orange.
     public var warn: Bool
+    /// An owner's part (`own`): its text in its colours.
+    public var runs: [StyledRun] = []
 
     public static let warnPercent = 80
 
@@ -264,6 +269,9 @@ public struct StatusTag: Hashable, Sendable {
     public static func warnHex(dark: Bool) -> String { dark ? "#ffa04a" : "#a04b00" }
     /// The tag's fill over the pane, light and dark.
     public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
+
+    /// Whether a part's colour reads on the tag (3:1); else the tag's own text colour is used.
+    public static func readable(_ hex: String, dark: Bool) -> Bool { false }
 
     /// WCAG contrast of two `#rrggbb` colours.
     public static func contrast(_ a: String, _ b: String) -> Double {
@@ -292,6 +300,12 @@ extension ClaudeStatusInfo {
         }
         return out
     }
+}
+
+/// The owner's status line as parts, one tag each (appendix D).
+public enum StatusSegments {
+    public static func split(_ lines: [[StyledRun]]) -> [[StyledRun]] { lines }
+    public static func dropRepeats(_ segments: [[StyledRun]], info: ClaudeStatusInfo?) -> [[StyledRun]] { segments }
 }
 
 /// The status row: one line of tags, then the chevron.

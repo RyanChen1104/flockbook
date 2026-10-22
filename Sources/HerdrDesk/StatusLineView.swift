@@ -198,4 +198,6 @@ extension StatusLineProbe {
     static var fit: StatusTagRow.Fit?
     static var plain = false
     static var warn = false
+    /// How many tags the open view drew.
+    static var openTags: Int?
 }

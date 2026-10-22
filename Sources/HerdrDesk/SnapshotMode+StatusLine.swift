@@ -54,9 +54,13 @@ extension SnapshotRunner {
                 let r = await shotBar(record, expanded: expanded, dark: dark, path: "\(dir)/statusline-\(expanded ? "expanded" : "row")-\(dark ? "dark" : "light").png")
                 step("\(n): the window stays off every screen", r.away)
                 step("\(n): right over the composer (gap \(Int(r.gap)) pt), \(Int(r.bar.height)) pt tall",
-                     r.gap >= 0 && r.gap <= 8 && (expanded ? r.bar.height > 60 : r.bar.height > 10 && r.bar.height < 30))
-                if !expanded {
-                    step("\(n): every tag in one row and the chevron (\(String(describing: r.fit)))", r.fit == .init(shown: 4, chevron: true) && !r.plain)
+                     r.gap >= 0 && r.gap <= 8 && (expanded ? r.bar.height > 40 : r.bar.height > 10 && r.bar.height < 30))
+                if expanded {
+                    step("\(n): open, every tag and no raw line (\(StatusLineProbe.openTags.map(String.init) ?? "nil") of \(record.tags.count) tags)",
+                         StatusLineProbe.openTags == record.tags.count && record.tags.count == 10)
+                } else {
+                    step("\(n): Claude Code's tags, then the owner's that fit, and the chevron (\(String(describing: r.fit)))",
+                         (r.fit.map { $0.shown > 4 && $0.shown < record.tags.count && $0.chevron } ?? false) && !r.plain)
                 }
             }
             let hot = StatusLineRecord(lines: record.lines, info: ClaudeStatusInfo(json: Data(#"""
@@ -68,11 +72,12 @@ extension SnapshotRunner {
         }
         let narrow = await shotBar(record, expanded: false, dark: false, width: 380, path: "\(dir)/statusline-narrow-light.png")
         step("narrow pane: the tags that fit, then the chevron (\(String(describing: narrow.fit)))",
-             narrow.away && (narrow.fit.map { $0.shown < 4 && $0.chevron } ?? false) && narrow.bar.height < 30)
+             narrow.away && (narrow.fit.map { $0.shown > 0 && $0.shown < 4 && $0.chevron } ?? false) && narrow.bar.height < 30)
         let factsOnly = await shotBar(StatusLineRecord(lines: [], info: info, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-facts-only-light.png")
         step("facts, no own line: every tag, no chevron (\(String(describing: factsOnly.fit)))", factsOnly.away && factsOnly.fit == .init(shown: 4, chevron: false))
         let plain = await shotBar(StatusLineRecord(lines: record.lines, info: nil, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-plain-light.png")
-        step("no facts: the owner's line, one row, and the chevron", plain.away && plain.plain && plain.bar.height < 30 && plain.fit?.chevron == true)
+        step("no facts: the owner's parts as tags, one row (\(String(describing: plain.fit)))",
+             plain.away && !plain.plain && plain.bar.height < 30 && (plain.fit?.shown ?? 0) > 0)
 
         // Settings > Agents: the switch in each state, and the sheets.
         for dark in [false, true] {
@@ -113,7 +118,7 @@ extension SnapshotRunner {
         }
         .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
         .frame(width: size.width, height: size.height)
-        StatusLineProbe.frame = .zero; StatusLineProbe.fit = nil; StatusLineProbe.plain = false; StatusLineProbe.warn = false
+        StatusLineProbe.frame = .zero; StatusLineProbe.fit = nil; StatusLineProbe.plain = false; StatusLineProbe.warn = false; StatusLineProbe.openTags = nil
         let away = await render(view, size: size, dark: dark, path: path)
         return (StatusLineProbe.frame, composer.minY - StatusLineProbe.frame.maxY, StatusLineProbe.fit, StatusLineProbe.plain, StatusLineProbe.warn, away)
     }

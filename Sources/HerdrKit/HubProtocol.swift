@@ -337,7 +337,8 @@ public struct HubQueued: Codable, Hashable, Sendable {
 /// lines, and Claude Code's facts for the row's tags (cost: its own estimate). No lines and no facts: none to show now.
 public struct HubStatusLine: Codable, Hashable, Sendable {
     public var pane: String
-    public var lines: [[StyledRun]]
+    /// The owner's status line as parts, one tag each, without the ones that repeat the facts (appendix D).
+    public var segments: [[StyledRun]]
     public var model: String?
     public var costUSD: Double?
     public var contextPercent: Int?
@@ -345,17 +346,17 @@ public struct HubStatusLine: Codable, Hashable, Sendable {
     public var effort: String?
     /// When Claude Code last ran the line, seconds since 1970.
     public var time: Double?
-    public init(pane: String, lines: [[StyledRun]], model: String? = nil, costUSD: Double? = nil, contextPercent: Int? = nil, contextSize: Int? = nil,
+    public init(pane: String, segments: [[StyledRun]], model: String? = nil, costUSD: Double? = nil, contextPercent: Int? = nil, contextSize: Int? = nil,
                 effort: String? = nil, time: Double? = nil) {
-        self.pane = pane; self.lines = lines; self.model = model; self.costUSD = costUSD; self.contextPercent = contextPercent; self.contextSize = contextSize
+        self.pane = pane; self.segments = segments; self.model = model; self.costUSD = costUSD; self.contextPercent = contextPercent; self.contextSize = contextSize
         self.effort = effort; self.time = time
     }
     /// Nothing to show: no own line and no facts.
-    public var isEmpty: Bool { lines.isEmpty && model == nil && effort == nil && costUSD == nil && contextPercent == nil }
+    public var isEmpty: Bool { segments.isEmpty && model == nil && effort == nil && costUSD == nil && contextPercent == nil }
     public init(pane: String, record: StatusLineRecord?) {
-        guard let record, !record.isEmpty else { self.init(pane: pane, lines: []); return }
+        guard let record, !record.isEmpty else { self.init(pane: pane, segments: []); return }
         let i = record.info
-        self.init(pane: pane, lines: record.lines, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
+        self.init(pane: pane, segments: record.lines, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
                   effort: i?.effort, time: record.time.timeIntervalSince1970.rounded())
     }
 }
