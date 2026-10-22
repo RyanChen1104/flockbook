@@ -206,6 +206,8 @@ enum SettingsProbe {
     nonisolated(unsafe) static var tabs: [SettingsTab: CGRect] = [:]
     /// The rows on screen now (`settingsControl`).
     nonisolated(unsafe) static var controls: [SettingsControl: CGRect] = [:]
+    /// The terminal colours row's value (the theme's names, or why it is not used).
+    nonisolated(unsafe) static var terminalColors: String?
     /// The Back row (the sidebar's while Settings has it, or the page's own list while the sidebar is hidden).
     nonisolated(unsafe) static var back: CGRect = .zero
     /// The page's own tab list (shown only while the sidebar is hidden); zero while not shown.

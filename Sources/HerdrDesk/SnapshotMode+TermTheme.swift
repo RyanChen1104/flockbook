@@ -153,6 +153,29 @@ extension ContentTests {
         step("a skipped colour: the theme, and the reason names it (\(fresh.problem(.ghostty) ?? "none"))",
              fresh.theme(.ghostty, dark: false) != nil && fresh.problem(.ghostty)?.contains("background = black") == true)
 
+        // Settings > General: the Colors row says why (a skipped value), and after Reload the theme's names.
+        themes.source = .init(home: home, environment: [:], resources: nil)
+        themes.reload()
+        AppDefaults.store.set(TerminalColors.ghostty.rawValue, forKey: TerminalColors.key)
+        SettingsProbe.terminalColors = nil
+        for dark in [false, true] {
+            let (sw, _) = offscreen(SettingsView(tab: .general).environment(model), NSSize(width: 640, height: 420))
+            sw.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try? await Task.sleep(for: .milliseconds(800))
+            if !dark {
+                step("settings: General has the Colors row", SettingsProbe.controls[.terminalColors] != nil)
+                step("settings: the row names the skipped value (\(SettingsProbe.terminalColors ?? "none"))",
+                     SettingsProbe.terminalColors?.contains("background = black") == true)
+                try? "theme = light:Paper,dark:Ink\n".write(toFile: ghostty + "/config", atomically: true, encoding: .utf8)
+                themes.reload()
+                try? await Task.sleep(for: .milliseconds(500))
+                step("settings: after Reload, the theme's names (\(SettingsProbe.terminalColors ?? "none"))",
+                     SettingsProbe.terminalColors == "Paper (light), Ink (dark)")
+            }
+            capture(sw, to: "\(dir)/termtheme-settings\(dark ? "-dark" : "").png")
+            sw.orderOut(nil)
+        }
+
         print("termtheme-test: pictures in \(dir)/termtheme{,-dark,-error-dark}.png")
         print("termtheme-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

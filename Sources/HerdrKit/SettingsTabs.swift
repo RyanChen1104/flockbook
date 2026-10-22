@@ -52,7 +52,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
 
 /// One control (row) of the Settings page.
 public enum SettingsControl: String, CaseIterable, Sendable {
-    case window, textSize, readingWidth
+    case window, textSize, readingWidth, terminalColors
     case allowInput, claudeQuestions
     case remoteAccess, connectWith, tailscaleSteps, address, devices, pictures, phoneNotifications, agentCommand
     case autoUpdate, version
