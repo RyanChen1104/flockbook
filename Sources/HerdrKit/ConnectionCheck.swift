@@ -22,8 +22,10 @@ public enum ConnectionCheck {
         switch e {
         case 0: return nil
         case ENOENT, ENOTDIR, ECONNREFUSED:
-            guard findHerdr(environment: environment, home: home, usual: usual) != nil else { return .herdrMissing }
-            return .notRunning(command: (["herdr"] + session.cliPrefix).joined(separator: " "))
+            guard let found = findHerdr(environment: environment, home: home, usual: usual) else { return .herdrMissing }
+            // HERDR_BIN is often off the Terminal's PATH: start that one by its full path.
+            let program = found == environment["HERDR_BIN"] ? shellQuoted(found) : "herdr"
+            return .notRunning(command: ([program] + session.cliPrefix).joined(separator: " "))
         case EACCES, EPERM: return .noPermission(path: path)
         default: return .failed(path: path, reason: String(cString: strerror(e)))
         }
@@ -53,14 +55,24 @@ public enum ConnectionCheck {
     public static func findHerdr(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
         let onPath = (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/herdr" }
         let usual = (usual ?? usualFolders(home: home)).map { $0 + "/herdr" }
-        return ([environment["HERDR_BIN"]].compactMap { $0 } + onPath + usual).first { FileManager.default.isExecutableFile(atPath: $0) }
+        return ([environment["HERDR_BIN"]].compactMap { $0 } + onPath + usual).first(where: isProgram)
+    }
+
+    /// An executable file (or a symlink to one). A folder named herdr is not: it has the x bit too.
+    static func isProgram(_ path: String) -> Bool {
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &folder) && !folder.boolValue && FileManager.default.isExecutableFile(atPath: path)
     }
 
     /// Where herdr is installed when it is not on `PATH`: its installer's folder first, then Homebrew, then cargo.
     public static func usualFolders(home: String) -> [String] { [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", home + "/.cargo/bin"] }
 
     /// `path` for a shell command line: as is when it has only safe characters, else in single quotes.
-    public static func shellQuoted(_ path: String) -> String { path }
+    public static func shellQuoted(_ path: String) -> String {
+        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+=:@%,")
+        if !path.isEmpty, path.unicodeScalars.allSatisfy(safe.contains) { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 
     /// Why a terminal cannot start when `findHerdr` finds nothing.
     public static let notFound = "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin."

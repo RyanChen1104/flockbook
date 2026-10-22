@@ -246,15 +246,13 @@ public final class TerminalSession: @unchecked Sendable {
         let errReader = LineAccumulator { [cont] line in
             if let s = String(data: line, encoding: .utf8), !s.isEmpty { lastErr.set(s); cont.yield(.notice(s)) }
         }
-        // two things must finish: stdout EOF and process exit
+        // three things must finish: stdout EOF, stderr EOF (herdr's last words are all read) and process exit
         return await withCheckedContinuation { (k: CheckedContinuation<Outcome, Never>) in
-            let pending = Locked(2)
+            let pending = Locked(3)
             let done: @Sendable () -> Void = { [self] in
                 guard pending.update({ $0 -= 1; return $0 }) == 0 else { return }
                 lock.withLock { proc = nil; stdin = nil }
                 if finalReason.get() == nil, status.get() == 127, !framed.get() {
-                    err.fileHandleForReading.readabilityHandler = nil
-                    errReader.feed(err.fileHandleForReading.readDataToEndOfFile())
                     let why = lastErr.get() ?? "herdr could not start (exit 127)."
                     finalReason.set(why)
                     cont.yield(.failed(reason: why))
@@ -268,7 +266,7 @@ public final class TerminalSession: @unchecked Sendable {
             }
             err.fileHandleForReading.readabilityHandler = { h in
                 let d = h.availableData
-                if d.isEmpty { h.readabilityHandler = nil; return }
+                if d.isEmpty { h.readabilityHandler = nil; errReader.feed(Data([0x0A])); done(); return }   // a last line without newline too
                 errReader.feed(d)
             }
             p.terminationHandler = { p in status.set(p.terminationStatus); done() }

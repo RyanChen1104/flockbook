@@ -297,8 +297,11 @@ struct ObservedTerminal: View {
                         Button("Retry") { startError = nil; closedReason = nil; epoch += 1 }.controlSize(.small)
                     }
                     .padding(20)
-                    .onAppear { TerminalProbe.startError = Self.startErrorLine(e); TerminalProbe.retry = { startError = nil; closedReason = nil; epoch += 1 } }
                 }
+            }
+            .onChange(of: startError, initial: true) { _, e in
+                TerminalProbe.startError = e.map(Self.startErrorLine)
+                TerminalProbe.retry = e == nil ? nil : { startError = nil; closedReason = nil; epoch += 1 }
             }
             .overlay(alignment: .top) {
                 if let r = closedReason, r != "detached" {
