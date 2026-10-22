@@ -226,29 +226,28 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
   background: rgba(var(--primary), .06); color: var(--label-2); font: 400 22px/1 var(--font); }
 .composer .attach:disabled { color: var(--label-3); background: none; }
 /* Claude Code's status line: a row of tags over the composer's field, only what fits in one row (the rest wraps onto
-   a hidden second line), the chevron at the right; open, every tag (wrapped), the owner's lines at full length, each scrolling
-   sideways, and when it was updated. A read-only device shows it alone at the foot. The orange of a full context
-   reads on the tag (StatusTag.warnHex/tagHex). */
+   a hidden second line), the chevron at the right; open, every tag (wrapped) and when it was updated. The owner's
+   line is tags too, one per part (appendix D). A read-only device shows it alone at the foot. The orange of a full
+   context reads on the tag (StatusTag.warnHex/tagHex). */
 .statusline { --tag: #f0f0f0; --warn: #a04b00; display: flex; flex-direction: column; gap: 6px; padding: 2px 2px 6px; min-width: 0; }
 .status-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .status-tags { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .status-head > .status-tags:not(.all) { height: 22px; overflow: hidden; }
 .statusline.open > .status-head { align-items: flex-start; }
-.status-tag { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--tag);
-  color: var(--label-2); font: 400 12px/22px var(--font); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status-tag { flex: none; max-width: 100%; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--tag);
+  color: var(--label-2); font: 400 12px/22px var(--font); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .status-tag.tag-model { color: var(--label); font-weight: 700; }
+.status-tag.tag-own { display: inline-block; }
 .status-tag.warn { color: var(--warn); }
 .status-bar { width: 24px; height: 4px; border-radius: 2px; background: rgba(var(--primary), .15); overflow: hidden; }
 .status-fill { display: block; height: 100%; background: rgba(var(--primary), .5); }
 .status-tag.warn .status-fill { background: var(--warn); }
-.status-plain { flex: 1; min-width: 0; font: 400 12px/22px var(--mono); color: var(--label-2); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .status-more { flex: none; width: 28px; height: 24px; min-height: 0; padding: 0; border: none; border-radius: 12px; background: rgba(var(--primary), .06);
-  color: var(--label-2); font: 600 14px/1 var(--font); display: grid; place-items: center; }
+  color: var(--label-2); display: grid; place-items: center; }
 .status-more[hidden] { display: none; }
-.status-detail { display: flex; flex-direction: column; gap: 6px; }
-.status-lines { display: flex; flex-direction: column; gap: 2px; padding: 0 4px; font: 400 12px/18px var(--mono); color: var(--label-2); }
-.status-row { white-space: pre; overflow-x: auto; scrollbar-width: none; }
-.status-row::-webkit-scrollbar { display: none; }
+/* The chevron: two borders of a small square, turned; centred in its button (a text glyph sat low). */
+.chev { width: 7px; height: 7px; border: solid currentColor; border-width: 0 1.75px 1.75px 0; transform: translateY(-2px) rotate(45deg); }
+.chev.up { transform: translateY(2px) rotate(-135deg); }
 .status-time { font: var(--caption); color: var(--label-2); padding: 0 4px; }
 @media (prefers-color-scheme: dark) { .statusline { --tag: #2e2e2e; --warn: #ffa04a; } }
 .status-foot { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 2; margin-top: 8px; padding: 6px; border-radius: 18px; }

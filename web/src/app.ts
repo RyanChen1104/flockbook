@@ -221,7 +221,7 @@ function receive(m: HubMessage): void {
       view(m.pane).screen = m.text;
       break;
     case "statusLine":
-      view(m.pane).statusLine = m.lines.length || statusTags(m).length ? m : undefined;
+      view(m.pane).statusLine = statusTags(m).length ? m : undefined;
       break;
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
@@ -1051,26 +1051,23 @@ function conversationScreen(pane: string): HTMLElement {
   return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
 }
 
-/** Claude Code's status line (appendix C): a row of tags over the composer's field (the model in bold, effort, context
- *  with its bar, orange from 80%, the cost marked as an estimate), only the ones that fit in one row, and a chevron at
- *  the right when one is left out or the owner's lines are there to open. Open: every tag, the owner's lines in their
- *  colours (each scrolling sideways) and when it was updated. Without facts the row is the owner's first line, cut.
- *  Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
+/** Claude Code's status line (appendices C and D): a row of tags over the composer's field (the model in bold, effort,
+ *  context with its bar, orange from 80%, the cost marked as an estimate, then the owner's line cut into parts in their
+ *  colours), only the ones that fit in one row, and a chevron at the right when one is left out. Open: every tag,
+ *  wrapped, and when it was updated. Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
 function statusLineView(pane: string): HTMLElement | null {
   const s = view(pane).statusLine;
   const tags = s ? statusTags(s) : [];
-  if (!s || (!s.lines.length && !tags.length)) return null;
+  if (!s || !tags.length) return null;
   const open = state.statusOpen;
-  const plain = (l: StyledRun[]): string => l.map((r) => r.text).join("");
   const more = h("button", { class: "status-more", type: "button", "aria-expanded": open ? "true" : "false",
     "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { state.statusOpen = !state.statusOpen; render(); } },
-    open ? "⌃" : "⌄");
-  // Open, the row wraps and holds every tag; without facts it is empty (the owner's lines are under it).
-  const row = tags.length ? h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags)
-    : open ? h("div", { class: "status-tags all" }) : h("div", { class: "status-plain" }, plain(s.lines[0] ?? []));
+    h("span", { class: `chev${open ? " up" : ""}`, "aria-hidden": "true" }));
+  // Open, the row wraps and holds every tag.
+  const row = h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags);
   const head = h("div", { class: "status-head" }, row, more);
-  // The chevron stays for own lines or a tag left out of the row (wrapped onto the hidden second line).
-  if (tags.length && !s.lines.length && !open) {
+  // The chevron shows when a tag is left out of the row (wrapped onto the hidden second line).
+  if (!open) {
     const fit = (): void => {
       // Measured without the chevron: with it, its own room could push the last tag out.
       more.hidden = true;
@@ -1080,15 +1077,13 @@ function statusLineView(pane: string): HTMLElement | null {
     new ResizeObserver(fit).observe(row);
   }
   const time = s.time ? new Date(s.time * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
-  const body = open && (s.lines.length || time) ? h("div", { class: "status-detail" },
-    s.lines.length ? h("div", { class: "status-lines" }, ...s.lines.map((l) => h("div", { class: "status-row" }, ...l.map(runView)))) : null,
-    time ? h("div", { class: "status-time" }, `Updated ${time}`) : null) : null;
+  const body = open && time ? h("div", { class: "status-detail" }, h("div", { class: "status-time" }, `Updated ${time}`)) : null;
   return h("div", { class: `statusline${open ? " open" : ""}`, "data-key": JSON.stringify([s, open]) }, head, body);
 }
 
-/** One tag per fact Claude Code's JSON gives; none for a fact it did not send. */
+/** One tag per fact Claude Code's JSON gives (none for a fact it did not send), then one per part of the owner's line. */
 function statusTags(s: StatusLine): HTMLElement[] {
-  const tag = (kind: string, text: string, spoken: string, ...extra: HTMLElement[]): HTMLElement =>
+  const tag = (kind: string, text: string, spoken: string, ...extra: (HTMLElement | string)[]): HTMLElement =>
     h("span", { class: `status-tag tag-${kind}`, role: "text", "aria-label": spoken }, text, ...extra);
   const out: HTMLElement[] = [];
   if (s.model) out.push(tag("model", s.model, `Model ${s.model}`));
@@ -1105,20 +1100,28 @@ function statusTags(s: StatusLine): HTMLElement[] {
     const d = `$${s.costUSD.toFixed(2)}`;
     out.push(tag("cost", `${d} est.`, `Session cost about ${d}, an estimate`));
   }
+  for (const part of s.segments ?? []) {
+    const text = part.map((r) => r.text).join("");
+    out.push(h("span", { class: "status-tag tag-own", role: "text", "aria-label": text }, ...part.map(runView)));
+  }
   return out;
 }
 
 /** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that
- *  would vanish on this background (white on light, black on dark) is left to the line's own. */
+ *  does not read on the tag (under 3:1, StatusTag.readable) is left to the tag's own. */
 function runView(r: StyledRun): HTMLElement {
   const el = h("span", {}, r.text);
   const dark = matchMedia("(prefers-color-scheme: dark)").matches;
   const lum = (hex: string): number => {
     const v = parseInt(hex.slice(1), 16);
-    return (0.2126 * (v >> 16 & 255) + 0.7152 * (v >> 8 & 255) + 0.0722 * (v & 255)) / 255;
+    const lin = (c: number): number => { const x = (c & 255) / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * lin(v >> 16) + 0.7152 * lin(v >> 8) + 0.0722 * lin(v);
   };
-  if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg) && !(dark ? lum(r.fg) < 0.12 : lum(r.fg) > 0.85)) el.style.color = r.fg;
-  if (r.bg && /^#[0-9a-f]{6}$/i.test(r.bg)) el.style.backgroundColor = r.bg;
+  const reads = (hex: string): boolean => {
+    const [a, b] = [lum(hex), lum(dark ? "#2e2e2e" : "#f0f0f0")];
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 3;
+  };
+  if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg) && reads(r.fg)) el.style.color = r.fg;
   if (r.bold) el.style.fontWeight = "700";
   if (r.dim) el.style.opacity = "0.6";
   if (r.italic) el.style.fontStyle = "italic";

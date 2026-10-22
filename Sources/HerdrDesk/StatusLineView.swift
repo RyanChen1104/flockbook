@@ -11,20 +11,18 @@ extension AppModel {
     }
 }
 
-/// Claude Code's status row over the composer (appendix C): one tag per fact Claude Code's JSON gives (the model in
-/// bold, effort, context with its bar, orange from 80%, the cost marked as an estimate), in one row; the tags that do
-/// not fit are left out and a chevron at the right opens the rest. The owner's own lines are only in the open view, so
-/// with them the chevron is always there. Open: every tag, wrapped; the owner's lines in their colours, each scrolling
-/// sideways; when Claude Code last ran the line. Without the JSON's facts the row is the owner's first line, cut.
+/// Claude Code's status row over the composer (appendices C and D): one tag per fact Claude Code's JSON gives (the
+/// model in bold, effort, context with its bar, orange from 80%, the cost marked as an estimate), then one tag per part
+/// of the owner's own line in its colours, without the parts that repeat the facts. One row: the tags that do not fit
+/// are left out and a chevron at the right opens them. Open: every tag, wrapped, and when Claude Code last ran the line.
 struct StatusLineBar: View {
     let record: StatusLineRecord
     @State private var expanded: Bool
     init(record: StatusLineRecord, expanded: Bool = false) { self.record = record; _expanded = State(initialValue: expanded) }
-    @Environment(\.colorScheme) private var scheme
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
-    private var tags: [StatusTag] { record.info?.tags ?? [] }
+    private var tags: [StatusTag] { record.tags }
 
     var body: some View {
         let width = ReadingWidth(rawValue: widthRaw) ?? .medium
@@ -41,42 +39,24 @@ struct StatusLineBar: View {
         }
     }
 
-    /// One row: the tags that fit and the chevron; without facts, the owner's first line.
-    @ViewBuilder private var row: some View {
-        if tags.isEmpty {
-            HStack(spacing: 6) {
-                Text(Self.attributed(record.lines.first ?? [], dark: scheme == .dark))
-                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                chevron
-            }
-            .onAppear { StatusLineProbe.plain = true; StatusLineProbe.fit = .init(shown: 0, chevron: true) }
-        } else {
-            StatusRowLayout(more: !record.lines.isEmpty) {
-                ForEach(tags, id: \.kind) { StatusTagView(tag: $0) }
-                chevron
-            }
-            .clipped()
+    /// One row: the tags that fit and the chevron when one is left out.
+    private var row: some View {
+        StatusRowLayout(more: false) {
+            ForEach(Array(tags.enumerated()), id: \.offset) { StatusTagView(tag: $0.element) }
+            chevron
         }
+        .clipped()
     }
 
     private var open: some View {
         HStack(alignment: .top, spacing: 6) {
             VStack(alignment: .leading, spacing: 6) {
-                if !tags.isEmpty {
-                    FlowLayout(spacing: 6) { ForEach(tags, id: \.kind) { StatusTagView(tag: $0) } }
-                }
-                ForEach(Array(record.lines.enumerated()), id: \.offset) { _, line in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(Self.attributed(line, dark: scheme == .dark)).fixedSize().textSelection(.enabled)
-                    }
-                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                }
+                FlowLayout(spacing: 6) { ForEach(Array(tags.enumerated()), id: \.offset) { StatusTagView(tag: $0.element) } }
                 Text("Updated \(record.time.formatted(date: .omitted, time: .shortened))")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear { StatusLineProbe.openTags = tags.count }
             chevron
         }
     }
@@ -91,31 +71,6 @@ struct StatusLineBar: View {
         .buttonStyle(.plain)
         .help(label)
         .accessibilityLabel(label)
-    }
-
-    static func attributed(_ line: [StyledRun], dark: Bool) -> AttributedString {
-        var out = AttributedString()
-        for r in line {
-            var a = AttributedString(r.text)
-            if let c = color(r.fg, dark: dark) { a.foregroundColor = r.dim ? c.opacity(0.6) : c }
-            else if r.dim { a.foregroundColor = Color(nsColor: .tertiaryLabelColor) }
-            if let b = r.bg.flatMap(rgb) { a.backgroundColor = Color(red: b.r, green: b.g, blue: b.b).opacity(0.85) }
-            var intent: InlinePresentationIntent = []
-            if r.bold { intent.insert(.stronglyEmphasized) }
-            if r.italic { intent.insert(.emphasized) }
-            if !intent.isEmpty { a.inlinePresentationIntent = intent }
-            if r.underline { a.underlineStyle = .single }
-            out += a
-        }
-        return out
-    }
-
-    /// The run's colour, unless it would vanish on this background (white on light, black on dark): then the line's own.
-    static func color(_ hex: String?, dark: Bool) -> Color? {
-        guard let c = hex.flatMap(rgb) else { return nil }
-        let l = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
-        if dark ? l < 0.12 : l > 0.85 { return nil }
-        return Color(red: c.r, green: c.g, blue: c.b)
     }
 
     static func rgb(_ hex: String) -> (r: Double, g: Double, b: Double)? {
@@ -134,9 +89,13 @@ struct StatusTagView: View {
         let warn = StatusLineBar.rgb(StatusTag.warnHex(dark: dark)).map { Color(red: $0.r, green: $0.g, blue: $0.b) } ?? .orange
         let fill = StatusLineBar.rgb(StatusTag.tagHex(dark: dark)).map { Color(red: $0.r, green: $0.g, blue: $0.b) } ?? .clear
         HStack(spacing: 5) {
-            Text(tag.text)
-                .fontWeight(tag.kind == .model ? .bold : .regular)
-                .foregroundStyle(tag.warn ? AnyShapeStyle(warn) : tag.kind == .model ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            if tag.kind == .own {
+                Text(Self.parts(tag.runs, dark: dark)).foregroundStyle(.secondary)
+            } else {
+                Text(tag.text)
+                    .fontWeight(tag.kind == .model ? .bold : .regular)
+                    .foregroundStyle(tag.warn ? AnyShapeStyle(warn) : tag.kind == .model ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            }
             if let p = tag.percent {
                 Capsule().fill(Color.primary.opacity(0.15)).frame(width: 28, height: 4)
                     .overlay(alignment: .leading) {
@@ -153,6 +112,24 @@ struct StatusTagView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tag.spoken)
         .onAppear { if tag.warn { StatusLineProbe.warn = true } }
+    }
+
+    /// An owner's part in its colours where they read on the tag (`StatusTag.readable`); else the tag's text colour.
+    static func parts(_ runs: [StyledRun], dark: Bool) -> AttributedString {
+        var out = AttributedString()
+        for r in runs {
+            var a = AttributedString(r.text)
+            if let hex = r.fg, StatusTag.readable(hex, dark: dark), let c = StatusLineBar.rgb(hex) {
+                a.foregroundColor = Color(red: c.r, green: c.g, blue: c.b).opacity(r.dim ? 0.6 : 1)
+            } else if r.dim { a.foregroundColor = Color(nsColor: .tertiaryLabelColor) }
+            var intent: InlinePresentationIntent = []
+            if r.bold { intent.insert(.stronglyEmphasized) }
+            if r.italic { intent.insert(.emphasized) }
+            if !intent.isEmpty { a.inlinePresentationIntent = intent }
+            if r.underline { a.underlineStyle = .single }
+            out += a
+        }
+        return out
     }
 }
 

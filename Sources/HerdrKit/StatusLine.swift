@@ -243,10 +243,15 @@ public struct StatusLineRecord: Hashable, Sendable {
     public init(lines: [[StyledRun]], info: ClaudeStatusInfo?, time: Date) { self.lines = lines; self.info = info; self.time = time }
 
     /// The row's tags: Claude Code's facts, then the owner's parts that do not repeat them.
-    public var tags: [StatusTag] { info?.tags ?? [] }
+    public var tags: [StatusTag] {
+        (info?.tags ?? []) + parts.map { StatusTag(kind: .own, text: $0.map(\.text).joined(), spoken: $0.map(\.text).joined(), percent: nil, warn: false, runs: $0) }
+    }
+
+    /// The owner's lines as parts, without the ones that repeat the facts.
+    public var parts: [[StyledRun]] { StatusSegments.dropRepeats(StatusSegments.split(lines), info: info) }
 
     /// No own line and no facts: nothing to show.
-    public var isEmpty: Bool { lines.isEmpty && (info?.tags.isEmpty ?? true) }
+    public var isEmpty: Bool { tags.isEmpty }
 }
 
 /// One tag of the status row over the composer: what Claude Code's JSON says, one fact each.
@@ -271,7 +276,7 @@ public struct StatusTag: Hashable, Sendable {
     public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
 
     /// Whether a part's colour reads on the tag (3:1); else the tag's own text colour is used.
-    public static func readable(_ hex: String, dark: Bool) -> Bool { false }
+    public static func readable(_ hex: String, dark: Bool) -> Bool { contrast(hex, tagHex(dark: dark)) >= 3 }
 
     /// WCAG contrast of two `#rrggbb` colours.
     public static func contrast(_ a: String, _ b: String) -> Double {
@@ -304,8 +309,56 @@ extension ClaudeStatusInfo {
 
 /// The owner's status line as parts, one tag each (appendix D).
 public enum StatusSegments {
-    public static func split(_ lines: [[StyledRun]]) -> [[StyledRun]] { lines }
-    public static func dropRepeats(_ segments: [[StyledRun]], info: ClaudeStatusInfo?) -> [[StyledRun]] { segments }
+    /// Parts kept, at most.
+    public static let maxParts = 40
+
+    /// Each line cut at " · ", " | ", " • " (spaces around), "│", or two spaces and more; each part trimmed, an empty
+    /// one or a lone separator dropped; each part keeps its runs' styles.
+    public static func split(_ lines: [[StyledRun]]) -> [[StyledRun]] {
+        var out: [[StyledRun]] = []
+        for line in lines {
+            // One entry per character: the character and the run it came from.
+            let chars = line.enumerated().flatMap { i, r in r.text.map { (c: $0, run: i) } }
+            let text = String(chars.map(\.c))
+            var cuts: [Range<Int>] = []
+            for m in text.matches(of: /\s+[·|•]\s+|\s*│\s*|\s{2,}/) {
+                cuts.append(text.distance(from: text.startIndex, to: m.range.lowerBound) ..< text.distance(from: text.startIndex, to: m.range.upperBound))
+            }
+            var start = 0
+            for r in cuts + [chars.count ..< chars.count] {
+                var part = chars[start ..< r.lowerBound]
+                while let f = part.first, f.c.isWhitespace { part = part.dropFirst() }
+                while let l = part.last, l.c.isWhitespace { part = part.dropLast() }
+                start = r.upperBound
+                guard !part.isEmpty, !part.allSatisfy({ "·|│•".contains($0.c) }) else { continue }
+                // Consecutive characters of one run stay one run.
+                var runs: [StyledRun] = [], from: [Int] = []
+                for (c, i) in part {
+                    if from.last == i { runs[runs.count - 1].text.append(c) } else {
+                        var r = line[i]; r.text = String(c); runs.append(r); from.append(i)
+                    }
+                }
+                out.append(runs)
+                if out.count == maxParts { return out }
+            }
+        }
+        return out
+    }
+
+    /// The parts without those that say exactly what a JSON tag says: the model's name, "ctx|context N%" with its
+    /// percent, "session $X" with its cost. Plain text only; anything else stays.
+    public static func dropRepeats(_ segments: [[StyledRun]], info: ClaudeStatusInfo?) -> [[StyledRun]] {
+        guard let info else { return segments }
+        func norm(_ s: String) -> String { s.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        return segments.filter { seg in
+            let t = norm(seg.map(\.text).joined())
+            if let m = info.model, t == norm(m) { return false }
+            if let p = info.contextPercent, let m = t.wholeMatch(of: /(?:ctx|context) ?:? ?(\d{1,3}) ?%/), Int(m.1) == p { return false }
+            if let c = info.costUSD, let m = t.wholeMatch(of: /session(?: cost)? ?:? ?\$(\d+(?:\.\d+)?)/),
+               let v = Double(m.1), String(format: "%.2f", v) == String(format: "%.2f", c) { return false }
+            return true
+        }
+    }
 }
 
 /// The status row: one line of tags, then the chevron.

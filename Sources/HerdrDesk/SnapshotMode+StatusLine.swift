@@ -43,9 +43,6 @@ extension SnapshotRunner {
         StatusLineProbe.injected = [:]
         model.checkStatusLine(for: claude)
         step("no saved line for the session: no line", model.statusLines[claude.id] == nil)
-        step("colours that vanish on the background use the line's own",
-             StatusLineBar.color("#ffffff", dark: false) == nil && StatusLineBar.color("#000000", dark: true) == nil
-             && StatusLineBar.color("#ffffff", dark: true) != nil && StatusLineBar.color("#00cd00", dark: false) != nil)
 
         // The row over the composer: the tags in one row, the chevron at the right (the own lines are in the open view).
         for dark in [false, true] {

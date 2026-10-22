@@ -356,7 +356,7 @@ public struct HubStatusLine: Codable, Hashable, Sendable {
     public init(pane: String, record: StatusLineRecord?) {
         guard let record, !record.isEmpty else { self.init(pane: pane, segments: []); return }
         let i = record.info
-        self.init(pane: pane, segments: record.lines, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
+        self.init(pane: pane, segments: record.parts, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
                   effort: i?.effort, time: record.time.timeIntervalSince1970.rounded())
     }
 }
