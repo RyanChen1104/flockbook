@@ -109,8 +109,9 @@ struct StatusTagView: View {
         .font(.system(size: 11).monospacedDigit())
         .lineLimit(1)
         .padding(.horizontal, 7).padding(.vertical, 2)
+        .truncationMode(.tail)
         .background(fill, in: Capsule())
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tag.spoken)
         .onAppear { if tag.warn { StatusLineProbe.warn = true } }

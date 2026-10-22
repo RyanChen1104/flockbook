@@ -1108,7 +1108,7 @@ function statusTags(s: StatusLine): HTMLElement[] {
 }
 
 /** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that
- *  does not read on the tag (under 3:1, StatusTag.readable) is left to the tag's own. */
+ *  does not read on the tag (under 4.5:1, StatusTag.readable) is left to the tag's own. */
 function runView(r: StyledRun): HTMLElement {
   const el = h("span", {}, r.text);
   const dark = matchMedia("(prefers-color-scheme: dark)").matches;
@@ -1119,7 +1119,7 @@ function runView(r: StyledRun): HTMLElement {
   };
   const reads = (hex: string): boolean => {
     const [a, b] = [lum(hex), lum(dark ? "#2e2e2e" : "#f0f0f0")];
-    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 3;
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5;
   };
   if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg) && reads(r.fg)) el.style.color = r.fg;
   if (r.bold) el.style.fontWeight = "700";

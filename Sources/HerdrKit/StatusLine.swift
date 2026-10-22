@@ -283,7 +283,7 @@ public struct StatusTag: Hashable, Sendable {
     public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
 
     /// Whether a part's colour reads on the tag (3:1); else the tag's own text colour is used.
-    public static func readable(_ hex: String, dark: Bool) -> Bool { contrast(hex, tagHex(dark: dark)) >= 3 }
+    public static func readable(_ hex: String, dark: Bool) -> Bool { contrast(hex, tagHex(dark: dark)) >= 4.5 }
 
     /// WCAG contrast of two `#rrggbb` colours.
     public static func contrast(_ a: String, _ b: String) -> Double {
@@ -500,7 +500,7 @@ public struct StatusLineFolder: Sendable {
     /// The owner's own command, when their statusLine is a command.
     public func originalCommand() -> String? {
         guard let o = original(), (o["type"] as? String ?? "command") == "command", let c = o["command"] as? String,
-              !c.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+              !c.trimmingCharacters(in: .whitespaces).isEmpty, !ClaudeStatusLineSetting.runsWrapper(c) else { return nil }
         return c
     }
 }
@@ -509,6 +509,9 @@ public struct StatusLineFolder: Sendable {
 public enum StatusLineWrapper {
     /// `stopped`: the command ran over the limit and was stopped.
     public struct Result: Sendable { public var output: Data; public var status: Int32; public var stopped = false }
+
+    /// Set for the owner's command: a wrapper that finds it set runs nothing (no wrapper ever runs itself).
+    public static let guardName = "FLOCKBOOK_STATUSLINE"
 
     /// Longest an owner's command may run before the wrapper stops it.
     public static let timeout: TimeInterval = 10
@@ -524,6 +527,9 @@ public enum StatusLineWrapper {
     /// or when it is stopped (at the limit, or by Claude Code for a newer run), the last one stays. Saving never
     /// changes the output.
     public static func run(input: Data, dir: URL, timeout: TimeInterval = timeout, environment: [String: String]? = nil) -> Result {
+        let env = environment ?? ProcessInfo.processInfo.environment
+        // Run by a wrapper already (another copy's command was kept as the owner's): nothing runs again.
+        if env[guardName] != nil { return Result(output: Data(), status: 0) }
         let folder = StatusLineFolder(url: dir)
         let session = ClaudeStatusInfo(json: input)?.session
         if let session { folder.save(input: input, session: session) }
@@ -531,7 +537,7 @@ public enum StatusLineWrapper {
             if let session { folder.save(output: Data(), session: session) }
             return Result(output: Data(), status: 0)
         }
-        let result = spawn(cmd, input: input, timeout: timeout, environment: environment ?? ProcessInfo.processInfo.environment)
+        let result = spawn(cmd, input: input, timeout: timeout, environment: env.merging([guardName: "1"]) { $1 })
         if let session, !result.stopped, result.status == 0 || !result.output.isEmpty {
             folder.save(output: result.output, session: session)
         }
@@ -689,6 +695,10 @@ public enum StatusLineWrapper {
 public enum ClaudeStatusLineSetting {
     public enum State: Sendable, Hashable { case off, on, replaced, moved }
 
+    /// Our backups of the settings file: `settings.json.flockbook-statusline-<time>.bak`, apart from the hook
+    /// installer's; the first and the newest `ClaudeSettingsHook.keptBackups` stay.
+    static let backupName = "flockbook-statusline"
+
     /// A disk image or a temporary copy (App Translocation): a place the wrapper may not be at later.
     public static func unstable(wrapper: String) -> Bool {
         wrapper.hasPrefix("/Volumes/") || wrapper.contains("/AppTranslocation/")
@@ -708,14 +718,22 @@ public enum ClaudeStatusLineSetting {
     static func isMoved(_ line: Any?, command: String) -> Bool {
         guard let c = (line as? [String: Any])?["command"] as? String, c != command,
               let ours = parts(command), let theirs = parts(c) else { return false }
-        return theirs.dir == ours.dir && theirs.wrapper.hasSuffix("/flockbook-statusline")
+        return theirs.dir == ours.dir && theirs.wrapper.hasSuffix("/" + wrapperName)
     }
 
-    /// The wrapper path and the folder of a command made by `command(wrapper:dir:)`; nil: another shape.
+    /// The wrapper path and the folder of a command made by `command(wrapper:dir:)` (a `'` in them written `'\''`);
+    /// nil: another shape.
     static func parts(_ command: String) -> (wrapper: String, dir: String)? {
-        guard let m = command.wholeMatch(of: /'([^']*)' --dir '([^']*)'/) else { return nil }
-        return (String(m.1), String(m.2))
+        guard let m = command.wholeMatch(of: /((?:'[^']*'|\\')+) --dir ((?:'[^']*'|\\')+)/) else { return nil }
+        func unquoted(_ w: Substring) -> String {
+            w.matches(of: /'([^']*)'|\\(')/).map { String($0.1 ?? $0.2 ?? "") }.joined()
+        }
+        return (unquoted(m.1), unquoted(m.2))
     }
+
+    /// The command runs a Flockbook wrapper (ours, an older copy's, another folder's): never the owner's own line.
+    static func runsWrapper(_ command: String) -> Bool { command.contains(wrapperName) }
+    static let wrapperName = "flockbook-statusline"
 
     /// `settings` with our statusLine, and the owner's to keep (nil: none, or ours was in already). A statusLine
     /// that is not an object is left alone.
@@ -727,6 +745,9 @@ public enum ClaudeStatusLineSetting {
             var s = settings
             s["statusLine"] = line
             return (s, nil)
+        }
+        if let c = (old as? [String: Any])?["command"] as? String, runsWrapper(c) {
+            throw ClaudeSettingsHook.Failure.unexpected("Claude Code's status line runs another copy of Flockbook (\(c)); turn it off in that copy first, or set your own with /statusline")
         }
         let theirs: [String: Any]?
         switch old {
@@ -779,7 +800,7 @@ public enum ClaudeStatusLineSetting {
             var kept: [String: Any]?, taken = false
             let before = folder.original(), had = folder.hasOriginal, wasOn = folder.wasOn
             do {
-                let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, beforeWrite: {
+                let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, backups: backupName, beforeWrite: {
                     // The wrapper finds the owner's command from the moment ours is in.
                     if taken { try folder.saveOriginal(kept, on: false) }
                     beforeWrite?()
@@ -800,7 +821,7 @@ public enum ClaudeStatusLineSetting {
             }
         }
         let original = folder.original(), had = folder.hasOriginal
-        let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, beforeWrite: beforeWrite) { old in
+        let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, backups: backupName, beforeWrite: beforeWrite) { old in
             let line = old["statusLine"]
             guard isOurs(line, command: command) || isMoved(line, command: command) else { return nil }
             guard had else {

@@ -229,17 +229,23 @@ public enum ClaudeSettingsHook {
     /// Backups kept next to the settings file (the newest).
     public static let keptBackups = 5
 
-    /// Removes all but the newest `keptBackups` of `file`'s backups (by the time in their names); `keeping` stays.
-    static func pruneBackups(of file: URL, keeping: URL) {
+    /// Keeps `keptBackups` of `file`'s `<name>-<time>.bak` backups: the first (from before any change) and the newest,
+    /// by modification time; `keeping` (just written) is one of them. Other names (another writer's) are left alone.
+    static func pruneBackups(of file: URL, name: String, keeping: URL) {
         let fm = FileManager.default, dir = file.deletingLastPathComponent()
-        let prefix = file.lastPathComponent + ".flockbook-"
+        let prefix = file.lastPathComponent + "." + name + "-"
         guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
-        let baks = names.filter { $0.hasPrefix(prefix) && $0.hasSuffix(".bak") && $0 != keeping.lastPathComponent }.sorted()
-        for n in baks.dropLast(max(keptBackups - 1, 0)) { try? fm.removeItem(at: dir.appendingPathComponent(n)) }
+        func time(_ n: String) -> Date { (try? fm.attributesOfItem(atPath: dir.appendingPathComponent(n).path))?[.modificationDate] as? Date ?? .distantPast }
+        let baks = names.filter {
+            $0.hasPrefix(prefix) && $0 != keeping.lastPathComponent && $0.dropFirst(prefix.count).wholeMatch(of: /\d{8}-\d{6}(-\d+)?\.bak/) != nil
+        }.map { ($0, time($0)) }.sorted { $0.1 < $1.1 }.map(\.0)
+        guard baks.count > keptBackups - 1 else { return }
+        // The first stays; of the rest, the newest (with the one just written, `keptBackups` in all).
+        for n in baks.dropFirst().dropLast(max(keptBackups - 2, 0)) { try? fm.removeItem(at: dir.appendingPathComponent(n)) }
     }
 
     @discardableResult
-    static func rewrite(file: URL, now: Date = Date(), beforeWrite: (() throws -> Void)? = nil,
+    static func rewrite(file: URL, now: Date = Date(), backups: String = "flockbook", beforeWrite: (() throws -> Void)? = nil,
                         _ change: ([String: Any]) throws -> [String: Any]?) throws -> URL? {
         let fm = FileManager.default
         let attrs = try? fm.attributesOfItem(atPath: file.path)   // the link itself, not its target
@@ -261,14 +267,15 @@ public enum ClaudeSettingsHook {
         if let original {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd-HHmmss"
-            let base = file.lastPathComponent + ".flockbook-\(f.string(from: now))"
+            let base = file.lastPathComponent + ".\(backups)-\(f.string(from: now))"
             var b = file.deletingLastPathComponent().appendingPathComponent(base + ".bak")
             var n = 2
             while fm.fileExists(atPath: b.path) { b = file.deletingLastPathComponent().appendingPathComponent(base + "-\(n).bak"); n += 1 }
             try original.write(to: b, options: .withoutOverwriting)
             try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: b.path)
             backup = b
-            pruneBackups(of: file, keeping: b)
+            // The hook installer's backups are not pruned (as before); ours are.
+            if backups != "flockbook" { pruneBackups(of: file, name: backups, keeping: b) }
         } else {
             try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
