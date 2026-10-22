@@ -431,6 +431,28 @@ import SwiftUI
             win.orderOut(nil)
         }
         step("fresh agent's empty state asks the pane to focus the composer (\(fresh) call)", fresh == 1)
+        // An agent team took the pane's log: no lead log yet waits for it (with the terminal); the last lead says so above.
+        let waiting = ConversationView.EmptyCopy(title: TeamNote.waitingTitle, detail: TeamNote.waitingDetail, terminal: true)
+        step("team, no lead log: Waiting for the lead's log + Show Terminal, whatever the status",
+             ([nil] + [AgentStatus.idle, .working, .blocked, .done]).allSatisfy { ConversationView.emptyCopy(.missing, status: $0, agentName: "tk", team: .waitingForLead) == waiting })
+        step("team, last lead: the empty copy is the usual one",
+             ConversationView.emptyCopy(.missing, status: .done, agentName: "tk", team: .lastLead) == copy(.missing, .done))
+        step("team line: only for the last lead",
+             TeamLine.text(.lastLead) == TeamNote.lastLeadLine && TeamLine.text(.waitingForLead) == nil && TeamLine.text(nil) == nil)
+        for dark in [false, true] {
+            let tail = dark ? "-dark" : ""
+            let (w1, _) = offscreen(ZStack { WindowSurface(glass: .off); ConversationView(items: [], agentName: "claude", agentStatus: .working, loadState: .missing, team: .waitingForLead) }, NSSize(width: 640, height: 360))
+            w1.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try? await Task.sleep(for: .milliseconds(400))
+            capture(w1, to: "\(dir)/team-waiting\(tail).png"); w1.orderOut(nil)
+            let rows = [ConversationItem(id: "u1", kind: .userText("Split the work across the team.")),
+                        ConversationItem(id: "a1", kind: .assistantText("I started three teammates. Their results come back here."))]
+            let (w2, _) = offscreen(ZStack { WindowSurface(glass: .off); ConversationView(items: rows, agentName: "claude", agentStatus: .working, loadState: .ready).paneBar(.top) { TeamLine(team: .lastLead) } }, NSSize(width: 640, height: 360))
+            w2.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try? await Task.sleep(for: .milliseconds(400))
+            capture(w2, to: "\(dir)/team-lastlead\(tail).png"); w2.orderOut(nil)
+        }
+        print("loadstate-test: pictures in \(dir)/team-{waiting,lastlead}{,-dark}.png")
         print("loadstate-test: pictures in \(dir)/empty-{loading,ready,missing,missing-worked,failed}.png")
         print("loadstate-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
