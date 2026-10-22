@@ -439,6 +439,14 @@ extension ChromeTests {
                 c.session = session; c.writable = writable
             } else { step("the hidden terminal sends nothing: no coordinator or handle", false) }
         } else { step("a wheel over the hidden terminal: no terminal", false) }
+        // Return in the hidden composer sends nothing and keeps the draft (its send is gated, so nothing goes out either way).
+        if let composer {
+            composer.string = "a draft"
+            composer.insertNewline(nil)
+            try? await Task.sleep(for: .milliseconds(200))
+            step("Return in the hidden composer keeps the draft (\"\(composer.string)\")", composer.string == "a draft")
+            composer.string = ""
+        } else { step("Return in the hidden composer: no composer", false) }
         // A terminal sheet asked for under Settings (a late approval result) does not open over the page.
         model.showTerminal = true; try? await Task.sleep(for: .milliseconds(800))
         step("no terminal sheet over Settings (\(win.attachedSheet.map { "\(type(of: $0))" } ?? "none"))", win.attachedSheet == nil)
@@ -464,6 +472,15 @@ extension ChromeTests {
         ShortcutsPanel.close(); try? await Task.sleep(for: .milliseconds(600))
         await click(SettingsProbe.back)
         same("Back")
+        // And with the page gone the terminal sends again (no session: the bytes are only counted).
+        if let terminal = terminal as? PasteTerminalView, let c = terminal.coordinator, let h = c.handle {
+            let session = c.session, writable = c.writable, sent = h.sentBytes
+            c.session = nil; c.writable = true
+            c.send(source: terminal, data: ArraySlice(Array("x".utf8)))
+            try? await Task.sleep(for: .milliseconds(300))
+            step("after Back the terminal sends again (\(h.sentBytes - sent) bytes)", h.sentBytes == sent + 1)
+            c.session = session; c.writable = writable
+        } else { step("after Back the terminal sends again: no coordinator or handle", false) }
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
         step("⌘, opens it (\(model.screen))", model.screen == .settings)
         if let cg = CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true), let e = NSEvent(cgEvent: cg) { win.sendEvent(e) }
