@@ -226,6 +226,9 @@ public enum ClaudeSettingsHook {
     /// a linked file is refused, the old file is backed up, the file is read again right before the write and left
     /// alone when it changed since, and the new one is written atomically with the old file's mode. Returns the
     /// backup (nil: no old file, or nothing written). `beforeWrite` throwing: nothing is written.
+    /// Backups kept next to the settings file (the newest).
+    public static let keptBackups = 5
+
     @discardableResult
     static func rewrite(file: URL, now: Date = Date(), beforeWrite: (() throws -> Void)? = nil,
                         _ change: ([String: Any]) throws -> [String: Any]?) throws -> URL? {

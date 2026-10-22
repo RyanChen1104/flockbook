@@ -698,6 +698,19 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline-open");
   await p.shot("statusline-open", true);
+  // Open is per pane: another Claude pane's line starts closed; back here, this one is still open.
+  await p.eval("location.hash = '#pane=w1%3Ap1'");
+  await p.until("location.hash === '#pane=w1%3Ap1' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "status me");
+  await p.click("#composer-send");
+  check(await p.until("!!document.querySelector('.statusline') && !document.querySelector('.statusline.open')") === true,
+    "status line: open is per pane: another pane's line starts closed");
+  await p.type("#composer-text", "status off");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.statusline')");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  check(await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('.statusline.open')") === true,
+    "status line: back to the first pane, its line is still open");
   await p.eval("window.__keptLine = document.querySelector('.statusline')");
   await p.until("false", 1500);
   check(await p.eval("window.__keptLine === document.querySelector('.statusline')") === true, "status line: hub news does not rebuild an unchanged line");

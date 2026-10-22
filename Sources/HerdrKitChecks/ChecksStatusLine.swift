@@ -28,6 +28,8 @@ import Foundation
         check(ANSIText.lines("\(esc)]8;;https://example.com\(esc)\\PR #1\(esc)]8;;\(esc)\\ done") == [[StyledRun("PR #1 done")]],
               "status line ansi: an OSC 8 link keeps its text")
         check(ANSIText.lines("a\(esc)[2Kb\(esc)[?25lc\u{07}d\u{00}e\tf") == [[StyledRun("abcde f")]], "status line ansi: other escapes and control characters go; a tab is a space")
+        check(ANSIText.lines("a\u{202E}b\u{2066}c\u{2069}\u{200B}d\u{200F}\u{FEFF}e\u{061C}👩\u{200D}💻") == [[StyledRun("abcde👩\u{200D}💻")]],
+              "status line ansi: text direction and zero-width marks go (they could reorder what is shown); a joiner in an emoji stays")
         check(ANSIText.lines("\(esc)[1mstill bold\nnext") == [[StyledRun("still bold", bold: true)], [StyledRun("next", bold: true)]],
               "status line ansi: a style goes on over a newline, as in a terminal")
         check(ANSIText.lines("x\(esc)[") == [[StyledRun("x")]] && ANSIText.lines("\(esc)[38;5;999my\(esc)[38;2;300mz") == [[StyledRun("yz")]],
@@ -211,6 +213,24 @@ import Foundation
         check(took < 2 && r.output == Data("early\n".utf8) && r.status != 0, "status line wrapper: a hung command stops at the limit (\(String(format: "%.2f", took)) s), its output so far is printed")
         check(left.isEmpty, "status line wrapper: no process is left behind (\(left))")
 
+        let mark2 = "32.\(Int.random(in: 100_000...999_999))"
+        original("echo shut; exec 1>&-; sleep \(mark2)")
+        let t1 = Date()
+        r = StatusLineWrapper.run(input: input, dir: dir, timeout: 0.5)
+        let took1 = Date().timeIntervalSince(t1)
+        try? await Task.sleep(for: .milliseconds(300))
+        check(took1 < 2 && r.output == Data("shut\n".utf8) && r.stopped && Process.runQuietly("/usr/bin/pgrep", ["-f", "sleep \(mark2)"]).isEmpty,
+              "status line wrapper: a command that closes its output and keeps running still stops at the limit (\(String(format: "%.2f", took1)) s)")
+
+        var fds: [Int32] = [0, 0]
+        _ = pipe(&fds)
+        let wrote = StatusLineWrapper.emit(Data("out".utf8), to: fds[1])
+        var got = [UInt8](repeating: 0, count: 8)
+        check(wrote && read(fds[0], &got, 8) == 3 && got.prefix(3) == Array("out".utf8)[...], "status line wrapper: prints the output, all of it")
+        close(fds[0])
+        check(!StatusLineWrapper.emit(Data("late".utf8), to: fds[1]), "status line wrapper: Claude Code stopped reading: no crash, nothing more")
+        close(fds[1])
+
         original("echo still")
         let bad = Data(#"{"session_id":"../x"}"#.utf8)
         r = StatusLineWrapper.run(input: bad, dir: dir, timeout: 5)
@@ -279,7 +299,11 @@ import Foundation
         check((try? FileManager.default.attributesOfItem(atPath: file.path))?[.posixPermissions] as? Int == 0o644, "status line file: the file's mode is kept")
         check(try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder) == nil && folder.original()?["command"] as? String == "sh line.sh",
               "status line file: on twice changes nothing, the owner's line is not lost")
+        let stale = dir.appendingPathComponent("old-session.json")
+        try Data("{}".utf8).write(to: stale)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * StatusLineFolder.maxAge)], ofItemAtPath: stale.path)
         _ = try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder)
+        check(!FileManager.default.fileExists(atPath: stale.path), "status line file: off also removes old records")
         let after = try ClaudeSettingsHook.read(file)
         check(NSDictionary(dictionary: after).isEqual(to: (try? JSONSerialization.jsonObject(with: Data(before.utf8))) as? [String: Any] ?? [:]) && !folder.wasOn,
               "status line file: off restores the owner's line")
@@ -291,6 +315,28 @@ import Foundation
         } catch { refused = true }
         let meanwhile = try ClaudeSettingsHook.read(file)
         check(refused && meanwhile["model"] as? String == "sonnet" && !folder.wasOn, "status line file: changed meanwhile: nothing written")
+        // Changed while on (padding in ours): off keeps the change in the owner's line.
+        try Data(before.utf8).write(to: file)
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        var edited = try ClaudeSettingsHook.read(file)
+        var l = edited["statusLine"] as? [String: Any] ?? [:]
+        l["padding"] = 4; l["refreshInterval"] = 7
+        edited["statusLine"] = l
+        try JSONSerialization.data(withJSONObject: edited).write(to: file)
+        try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder)
+        let merged = try ClaudeSettingsHook.read(file)["statusLine"] as? [String: Any]
+        check(merged?["command"] as? String == "sh line.sh" && merged?["padding"] as? Int == 4 && merged?["refreshInterval"] as? Int == 7,
+              "status line file: off keeps padding and refresh changed while on (\(String(describing: merged)))")
+
+        // Backups: the newest few are kept, older ones go.
+        let fm = FileManager.default
+        for d in 1...8 { try Data("{}".utf8).write(to: file.deletingLastPathComponent().appendingPathComponent("settings.json.flockbook-2020010\(d)-000000.bak")) }
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        let baks = try fm.contentsOfDirectory(atPath: file.deletingLastPathComponent().path).filter { $0.hasPrefix("settings.json.flockbook-") && $0.hasSuffix(".bak") }.sorted()
+        check(baks.count == ClaudeSettingsHook.keptBackups && !baks.contains("settings.json.flockbook-20200101-000000.bak") && baks.last?.hasPrefix("settings.json.flockbook-20200108") == false,
+              "status line file: only the newest \(ClaudeSettingsHook.keptBackups) backups stay (\(baks.count))")
+        try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder)
+
         let link = home.appendingPathComponent("link.json")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
         refused = false
@@ -427,6 +473,9 @@ import Foundation
         let msg = HubStatusLine(pane: "w1:p1", record: b.statusLines["s1"] ?? StatusLineRecord(lines: [[StyledRun("a", fg: "#123456", bold: true)]], info: info, time: Date()))
         check(try Hub.decodeHub(try Hub.encode(HubMessage.statusLine(msg))) == .statusLine(msg), "hub status line: round-trips")
         let json = String(decoding: try Hub.encode(HubMessage.statusLine(HubStatusLine(pane: "w1:p1", record: StatusLineRecord(lines: [[StyledRun("a", fg: "#123456", bold: true)]], info: nil, time: Date())))), as: UTF8.self)
+        check(ClaudeStatusInfo(json: Data(#"{"session_id":"a","context_window":{"used_percentage":1e300}}"#.utf8))?.contextPercent == 100
+              && ClaudeStatusInfo(json: Data(#"{"session_id":"a","context_window":{"used_percentage":-4}}"#.utf8))?.contextPercent == 0,
+              "status line info: a context percent out of range is clamped, never a crash")
         check(json.contains(#""segments":[[{"#) && !json.contains(#""lines""#) && json.contains(##""fg":"#123456""##) && !json.contains("costUSD\":null"), "hub status line: compact JSON (\(json))")
     }
 }

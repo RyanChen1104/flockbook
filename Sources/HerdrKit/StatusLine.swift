@@ -531,6 +531,9 @@ public enum StatusLineWrapper {
         return result
     }
 
+    /// Writes the output to `fd`; false when it could not all be written.
+    public static func emit(_ data: Data, to fd: Int32 = 1) -> Bool { false }
+
     /// Claude Code stops a run that a newer one replaces: SIGTERM, SIGINT and SIGHUP stop the owner's command too.
     public static func installSignalHandlers() {
         for s in [SIGTERM, SIGINT, SIGHUP] {
