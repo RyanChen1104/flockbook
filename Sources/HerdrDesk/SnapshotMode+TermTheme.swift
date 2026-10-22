@@ -1,5 +1,6 @@
 import AppKit
 import HerdrKit
+import Observation
 import SwiftTerm
 import SwiftUI
 
@@ -47,8 +48,9 @@ extension ContentTests {
         step("dark: Ink's background and cursor (\(hex(tv.nativeBackgroundColor)))",
              same(tv.nativeBackgroundColor, inkBg.ns) && same(tv.caretColor, RGB8(0xff, 0xcc, 0x00).ns))
         TerminalNSView.applyColors(tv, .dark, mode: .flockbook)
-        step("Flockbook again: transparent, default cursor and selection", tv.backgroundOpacity == 0
-             && same(tv.caretColor, NSColor.selectedControlColor) && same(tv.selectedTextBackgroundColor, NSColor(srgbRed: 0, green: 166 / 255, blue: 178 / 255, alpha: 1)))
+        // (The cursor's getter shows nothing: SwiftTerm draws the foreground when no colour was set. Pixels below.)
+        step("Flockbook again: transparent, default selection", tv.backgroundOpacity == 0
+             && same(tv.selectedTextBackgroundColor, NSColor(srgbRed: 0, green: 166 / 255, blue: 178 / 255, alpha: 1)))
 
         // The live terminal: a fake herdr sends one frame with the 8 ANSI colours.
         let script = tmp + "/herdr"
@@ -59,16 +61,47 @@ extension ContentTests {
         TerminalNSView.testLauncher = [script]
         defer { TerminalNSView.testLauncher = nil }
         let model = AppModel(store: .preview)
-        for dark in [false, true] {
-            let size = NSSize(width: 640, height: 300)
+        func terminalView(_ v: NSView) -> TerminalView? { (v as? TerminalView) ?? v.subviews.lazy.compactMap(terminalView).first }
+        for (mode, dark) in [(TerminalColors.ghostty, false), (.ghostty, true), (.flockbook, false), (.flockbook, true)] {
+            AppDefaults.store.set(mode.rawValue, forKey: TerminalColors.key)
+            let size = NSSize(width: 640, height: 300), tag = "\(mode.rawValue) \(dark ? "dark" : "light")"
             let (win, host) = offscreen(ZStack { WindowSurface(glass: .off)
-                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_theme\(dark)", writable: true, focused: false) }, size)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_theme\(mode)\(dark)", writable: true, focused: false) }, size)
             win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             try? await Task.sleep(for: .milliseconds(1500))
-            let path = "\(dir)/termtheme\(dark ? "-dark" : "").png"
+            let path = "\(dir)/termtheme\(mode == .flockbook ? "-flockbook" : "")\(dark ? "-dark" : "").png"
             capture(win, to: path)
-            let px = pixels(path, host)?(size.width / 2, size.height - 12)
+            let at = pixels(path, host), px = at?(size.width / 2, size.height - 12)
+            // The cursor as drawn: in its cell, the pixel farthest from the background.
+            var cursor: NSColor?
+            if let tv = terminalView(host), let at, let bg = srgb(px) {
+                var r = tv.convert(tv.caretFrame, to: host)
+                if !host.isFlipped { r.origin.y = host.bounds.height - r.maxY }
+                var best = -1.0
+                for x in stride(from: r.minX, to: r.maxX, by: 0.5) { for y in stride(from: r.minY, to: r.maxY, by: 0.5) {
+                    guard let c = srgb(at(x, y)) else { continue }
+                    let d = abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent) + abs(c.blueComponent - bg.blueComponent)
+                    if d > best { best = d; cursor = c }
+                } }
+            }
+            let wantCursor = mode == .ghostty ? (dark ? RGB8(0xff, 0xcc, 0x00) : RGB8(0xb8, 0x86, 0x0b)).ns
+                : dark ? NSColor(srgbRed: 0.91, green: 0.91, blue: 0.918, alpha: 1) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1)
+            // The outline is antialiased and the capture is in the display's colours. Ghostty: nearer the theme's cursor
+            // colour than its foreground. Flockbook: grey like the foreground (not the system's blue), nearer it than the
+            // background.
+            func distance(_ a: NSColor?, _ b: NSColor?) -> CGFloat {
+                guard let a = srgb(a), let b = srgb(b) else { return .infinity }
+                return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) + abs(a.blueComponent - b.blueComponent)
+            }
+            let ok: Bool
+            if mode == .ghostty { ok = distance(cursor, wantCursor) < distance(cursor, (dark ? RGB8(0xd0, 0xd6, 0xe0) : RGB8(0x3b, 0x32, 0x28)).ns) }
+            else if let c = srgb(cursor) {
+                let parts = [c.redComponent, c.greenComponent, c.blueComponent]
+                ok = parts.max()! - parts.min()! < 0.08 && distance(c, wantCursor) < distance(c, px)
+            } else { ok = false }
+            step("\(tag): the cursor is drawn in \(mode == .ghostty ? "the theme's cursor colour" : "the foreground") (\(hex(cursor)), want \(hex(wantCursor)))", ok)
             win.orderOut(nil)
+            guard mode == .ghostty else { continue }
             // The same colour as a plain view of the theme's background, through the same capture (display colour space).
             let (ref, refHost) = offscreen(Color(nsColor: (dark ? inkBg : paperBg).ns), NSSize(width: 40, height: 40))
             ref.appearance = win.appearance
@@ -101,7 +134,24 @@ extension ContentTests {
         themes.reload()
         TerminalNSView.applyColors(tv, .dark, mode: .ghostty)
         step("no Ghostty config: Flockbook's colours (opacity \(tv.backgroundOpacity))", tv.backgroundOpacity == 0)
-        step("no Ghostty config: the reason (\(themes.problem ?? "none"))", themes.problem == GhosttyThemeProblem.noConfig.reason)
+        step("no Ghostty config: the reason (\(themes.problem(.ghostty) ?? "none"))", themes.problem(.ghostty) == GhosttyThemeProblem.noConfig.reason)
+        step("Flockbook colours: no reason", themes.problem(.flockbook) == nil)
+
+        // The reason before any terminal read the theme, and Settings told when it changes.
+        let fresh = TerminalThemes()
+        fresh.source = .init(home: tmp + "/nohome", environment: [:], resources: nil)
+        step("never read: the reason reads it (\(fresh.problem(.ghostty) ?? "none"))", fresh.problem(.ghostty) == GhosttyThemeProblem.noConfig.reason)
+        final class Flag: @unchecked Sendable { var on = false }
+        let told = Flag()
+        withObservationTracking { _ = fresh.problem(.ghostty) } onChange: { told.on = true }
+        fresh.source = .init(home: home, environment: [:], resources: nil)
+        fresh.reload()
+        step("a new read tells Settings (told \(told.on), reason \(fresh.problem(.ghostty) ?? "none"))", told.on && fresh.problem(.ghostty) == nil)
+        // A colour Flockbook cannot read: the theme is used, the value named.
+        try? "theme = light:Paper,dark:Ink\nbackground = black\n".write(toFile: ghostty + "/config", atomically: true, encoding: .utf8)
+        fresh.reload()
+        step("a skipped colour: the theme, and the reason names it (\(fresh.problem(.ghostty) ?? "none"))",
+             fresh.theme(.ghostty, dark: false) != nil && fresh.problem(.ghostty)?.contains("background = black") == true)
 
         print("termtheme-test: pictures in \(dir)/termtheme{,-dark,-error-dark}.png")
         print("termtheme-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")

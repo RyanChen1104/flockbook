@@ -31,7 +31,8 @@ func checksGhosttyTheme() async throws {
     // Colours: #RRGGBB or RRGGBB, any case, quoted or not.
     check(c("#AbCdEf") == RGB8(0xab, 0xcd, 0xef) && c("102030") == RGB8(0x10, 0x20, 0x30) && c("\"#010203\"") == RGB8(1, 2, 3),
           "ghostty: hex colours")
-    check(c("nothex") == nil && c("#12345") == nil && c("") == nil, "ghostty: not a colour -> nil")
+    check(c("nothex") == nil && c("#12345") == nil && c("") == nil && c("black") == nil, "ghostty: not a colour -> nil")
+    check(c("#abc") == RGB8(0xaa, 0xbb, 0xcc) && c("F0a") == RGB8(0xff, 0, 0xaa), "ghostty: #rgb is #rrggbb")
 
     // A synthetic theme in the user's themes folder.
     let syn = """
@@ -80,6 +81,10 @@ func checksGhosttyTheme() async throws {
     check(over?.foreground == RGB8(0xff, 0xff, 0xff), "ghostty: an empty value in the config resets to Ghostty's default")
     try write(h.xdg + "/config", "theme = Syn\nbackground = not-a-colour\n")
     check(theme(load(h))?.background == RGB8(0x10, 0x10, 0x10), "ghostty: a bad colour in the config is skipped")
+    check((try? load(h).get())?.skipped == ["background = not-a-colour"], "ghostty: a skipped colour is reported (\(String(describing: (try? load(h).get())?.skipped)))")
+    try write(h.xdg + "/config", "theme = Syn\npalette = 4=blue\n")
+    check((try? load(h).get())?.skipped == ["palette = 4=blue"], "ghostty: a skipped palette colour is reported")
+    check(GhosttyThemeProblem.badColor("background = black").reason.contains("background = black"), "ghostty: the skipped value's reason names it")
     try write(h.xdg + "/config", "background = #0b0b0b\n")
     let only = theme(load(h))
     check(only?.background == RGB8(11, 11, 11) && only?.name == "Ghostty config", "ghostty: colours without a theme -> those colours")
@@ -108,6 +113,17 @@ func checksGhosttyTheme() async throws {
     check(theme(load(h))?.background == RGB8(0x77, 0x77, 0x77), "ghostty: theme as an absolute path")
     try write(h.xdg + "/config", "theme = \(root)/abs/Syn\n")
     check(problem(load(h)) == .themeNotFound(root + "/abs/Syn"), "ghostty: a missing absolute path -> not found, no search")
+    try write(h.home + "/mine/Tilde", "background = #666666\n")
+    try write(h.xdg + "/config", "theme = ~/mine/Tilde\n")
+    check(theme(load(h))?.background == RGB8(0x66, 0x66, 0x66), "ghostty: theme = ~/path is the home folder's")
+    try write(h.xdg + "/config", "theme = light:~/mine/Tilde,dark:Syn\n")
+    check((try? load(h).get())?.light.background == RGB8(0x66, 0x66, 0x66), "ghostty: light:~/path")
+    // Only plain files are read: a device or a FIFO would block, a huge file is not a theme.
+    try write(h.xdg + "/config", "theme = /dev/null\n")
+    check(problem(load(h)) == .themeNotFound("/dev/null"), "ghostty: a device is not read (\(String(describing: problem(load(h)))))")
+    try write(root + "/abs/Huge", "background = #555555\n" + String(repeating: "# padding\n", count: 120_000))
+    try write(h.xdg + "/config", "theme = \(root)/abs/Huge\n")
+    check(problem(load(h)) == .themeNotFound(root + "/abs/Huge"), "ghostty: a file over 1 MB is not read")
     try write(h.xdg + "/config", "theme = Nowhere\n")
     check(problem(load(h)) == .themeNotFound("Nowhere"), "ghostty: unknown name -> themeNotFound")
     try write(h.xdg + "/themes/Junk", "this is not a theme\n\u{0}\u{1}\n")
@@ -142,7 +158,7 @@ func checksGhosttyTheme() async throws {
     check(theme(load(h))?.background == RGB8(0, 0, 2), "ghostty: a quoted config-file path")
 
     // The reasons, for Settings.
-    for p in [GhosttyThemeProblem.noConfig, .noTheme, .themeNotFound("X"), .badTheme("X"), .badValue("x")] {
+    for p in [GhosttyThemeProblem.noConfig, .noTheme, .themeNotFound("X"), .badTheme("X"), .badValue("x"), .badColor("x")] {
         check(!p.reason.isEmpty, "ghostty: \(p) has a reason")
     }
     check(GhosttyThemeProblem.themeNotFound("Nord").reason.contains("Nord"), "ghostty: the reason names the theme")

@@ -39,8 +39,8 @@ enum TerminalColors: String, CaseIterable, Identifiable {
     }
 
     /// Why the Ghostty theme is not used, for Settings. Nil: it is used, or the setting is Flockbook.
-    var problem: String? {
-        guard TerminalColors.current == .ghostty, case .failure(let p) = loaded else { return nil }
+    func problem(_ mode: TerminalColors) -> String? {
+        guard mode == .ghostty, case .failure(let p) = loaded else { return nil }
         return p.reason
     }
 

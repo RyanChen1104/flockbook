@@ -23,6 +23,8 @@ public struct TerminalTheme: Sendable, Hashable {
 public struct GhosttyThemes: Sendable, Hashable {
     public var light: TerminalTheme
     public var dark: TerminalTheme
+    /// Colour lines that were not a colour, skipped (`key = value`).
+    public var skipped: [String] = []
     public func theme(dark: Bool) -> TerminalTheme { dark ? self.dark : light }
 }
 
@@ -33,6 +35,7 @@ public enum GhosttyThemeProblem: Error, Sendable, Hashable {
     case themeNotFound(String)
     case badTheme(String)
     case badValue(String)
+    case badColor(String)
 
     /// One line for Settings.
     public var reason: String {
@@ -42,6 +45,7 @@ public enum GhosttyThemeProblem: Error, Sendable, Hashable {
         case .themeNotFound(let name): "Ghostty theme “\(name)” not found."
         case .badTheme(let name): "Ghostty theme “\(name)” has no colors."
         case .badValue(let value): "Ghostty's theme setting “\(value)” is not valid."
+        case .badColor: ""
         }
     }
 }
