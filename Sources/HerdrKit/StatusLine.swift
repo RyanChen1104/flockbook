@@ -248,6 +248,52 @@ public struct StatusLineRecord: Hashable, Sendable {
         guard let s = info?.summary, !s.isEmpty else { return [] }
         return [[StyledRun(s)]]
     }
+
+    /// No own line and no facts: nothing to show.
+    public var isEmpty: Bool { shown.isEmpty }
+}
+
+/// One tag of the status row over the composer: what Claude Code's JSON says, one fact each.
+public struct StatusTag: Hashable, Sendable {
+    public enum Kind: String, Sendable { case model, effort, context, cost }
+    public var kind: Kind
+    public var text: String
+    /// What VoiceOver says.
+    public var spoken: String
+    /// The context used, for its bar.
+    public var percent: Int?
+    /// The context is nearly full (`warnPercent` and up): orange.
+    public var warn: Bool
+
+    public static let warnPercent = 80
+
+    /// The orange of a full context, light and dark (text on the tag: 4.5:1 or more).
+    public static func warnHex(dark: Bool) -> String { dark ? "#ffa04a" : "#a04b00" }
+    /// The tag's fill over the pane, light and dark.
+    public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
+
+    /// WCAG contrast of two `#rrggbb` colours.
+    public static func contrast(_ a: String, _ b: String) -> Double { 0 }
+}
+
+extension ClaudeStatusInfo {
+    /// The row's tags: model, effort, context, cost; a field Claude Code did not send has none.
+    public var tags: [StatusTag] { [] }
+}
+
+/// The status row: one line of tags, then the chevron.
+public enum StatusTagRow {
+    public struct Fit: Hashable, Sendable {
+        public var shown: Int
+        public var chevron: Bool
+        public init(shown: Int, chevron: Bool) { self.shown = shown; self.chevron = chevron }
+    }
+
+    /// How many tags fit on one row, in order, and whether the chevron shows: when a tag is left out, or `more` (own
+    /// lines that only the open view shows). The chevron takes its width and a spacing.
+    public static func fit(widths: [CGFloat], chevron: CGFloat, spacing: CGFloat, available: CGFloat, more: Bool) -> Fit {
+        Fit(shown: 0, chevron: false)
+    }
 }
 
 /// The wrapper's folder in the app's support folder: per session `<id>.json` (the input) and `<id>.out` (the owner's

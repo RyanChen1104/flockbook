@@ -111,4 +111,8 @@ struct StatusLineBar: View {
 extension StatusLineProbe {
     /// The bar's frame on screen (offscreen checks).
     static var frame = CGRect.zero
+    /// What fit in the row; whether the owner's line stands in for the tags; whether the context tag is orange.
+    static var fit: StatusTagRow.Fit?
+    static var plain = false
+    static var warn = false
 }

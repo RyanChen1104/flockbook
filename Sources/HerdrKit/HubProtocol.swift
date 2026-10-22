@@ -342,9 +342,16 @@ public struct HubStatusLine: Codable, Hashable, Sendable {
     public var costUSD: Double?
     public var contextPercent: Int?
     public var contextSize: Int?
-    public init(pane: String, lines: [[StyledRun]], model: String? = nil, costUSD: Double? = nil, contextPercent: Int? = nil, contextSize: Int? = nil) {
+    public var effort: String?
+    /// When Claude Code last ran the line, seconds since 1970.
+    public var time: Double?
+    public init(pane: String, lines: [[StyledRun]], model: String? = nil, costUSD: Double? = nil, contextPercent: Int? = nil, contextSize: Int? = nil,
+                effort: String? = nil, time: Double? = nil) {
         self.pane = pane; self.lines = lines; self.model = model; self.costUSD = costUSD; self.contextPercent = contextPercent; self.contextSize = contextSize
+        self.effort = effort; self.time = time
     }
+    /// Nothing to show: no own line and no facts.
+    public var isEmpty: Bool { lines.isEmpty }
     public init(pane: String, record: StatusLineRecord?) {
         let lines = record?.shown ?? []
         let i = lines.isEmpty ? nil : record?.info

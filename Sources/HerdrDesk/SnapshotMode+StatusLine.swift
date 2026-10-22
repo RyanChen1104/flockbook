@@ -2,9 +2,10 @@ import AppKit
 import HerdrKit
 import SwiftUI
 
-/// `--snapshot-statusline <dir>`: Claude Code's status line under the composer (StatusLineBar), offscreen, light and
-/// dark, one line and expanded; the Agents tab's switch in each state and its sheets. Also checks the model side: a
-/// Claude pane's line is read, other agents and empty lines show nothing. Reads and writes no settings file.
+/// `--snapshot-statusline <dir>`: Claude Code's status row over the composer (StatusLineBar), offscreen, light and
+/// dark, one row and open, a nearly full context, a narrow pane, and a line without Claude Code's facts; the Agents
+/// tab's switch in each state and its sheets. Also checks the model side: a Claude pane's line is read, other agents
+/// and empty lines show nothing. Reads and writes no settings file.
 extension SnapshotRunner {
     static func runStatusLine(dir: String) {
         Task { @MainActor in await statusLine(dir: dir) }
@@ -45,18 +46,33 @@ extension SnapshotRunner {
         step("colours that vanish on the background use the line's own",
              StatusLineBar.color("#ffffff", dark: false) == nil && StatusLineBar.color("#000000", dark: true) == nil
              && StatusLineBar.color("#ffffff", dark: true) != nil && StatusLineBar.color("#00cd00", dark: false) != nil)
-        step("facts: model, context, cost marked as an estimate (\(StatusLineBar.facts(info) ?? "nil"))",
-             StatusLineBar.facts(info) == "Opus 5.5 · context 42% of 1M · session $3.27 (estimate)")
 
-        // The bar under the composer.
+        // The row over the composer: the tags in one row, the chevron at the right (the own lines are in the open view).
         for dark in [false, true] {
             for expanded in [false, true] {
-                let r = await shotBar(record, expanded: expanded, dark: dark, path: "\(dir)/statusline-\(expanded ? "expanded" : "line")-\(dark ? "dark" : "light").png")
-                step("\(expanded ? "expanded" : "one line") \(dark ? "dark" : "light"): the window stays off every screen", r.away)
-                step("\(expanded ? "expanded" : "one line") \(dark ? "dark" : "light"): right under the composer (gap \(Int(r.gap)) pt), \(Int(r.bar.height)) pt tall",
-                     r.gap >= 0 && r.gap <= 4 && (expanded ? r.bar.height > 30 : r.bar.height < 20))
+                let n = "\(expanded ? "expanded" : "row") \(dark ? "dark" : "light")"
+                let r = await shotBar(record, expanded: expanded, dark: dark, path: "\(dir)/statusline-\(expanded ? "expanded" : "row")-\(dark ? "dark" : "light").png")
+                step("\(n): the window stays off every screen", r.away)
+                step("\(n): right over the composer (gap \(Int(r.gap)) pt), \(Int(r.bar.height)) pt tall",
+                     r.gap >= 0 && r.gap <= 8 && (expanded ? r.bar.height > 60 : r.bar.height > 10 && r.bar.height < 30))
+                if !expanded {
+                    step("\(n): every tag in one row and the chevron (\(String(describing: r.fit)))", r.fit == .init(shown: 4, chevron: true) && !r.plain)
+                }
             }
+            let hot = StatusLineRecord(lines: record.lines, info: ClaudeStatusInfo(json: Data(#"""
+                {"session_id":"s-shot","model":{"display_name":"Opus 5.5"},"effort":{"level":"high"},"cost":{"total_cost_usd":7.91},
+                 "context_window":{"context_window_size":1000000,"used_percentage":86.2}}
+                """#.utf8)), time: Date())
+            let r = await shotBar(hot, expanded: false, dark: dark, path: "\(dir)/statusline-hot-\(dark ? "dark" : "light").png")
+            step("context 86% \(dark ? "dark" : "light"): off every screen, the context tag is orange", r.away && r.warn)
         }
+        let narrow = await shotBar(record, expanded: false, dark: false, width: 380, path: "\(dir)/statusline-narrow-light.png")
+        step("narrow pane: the tags that fit, then the chevron (\(String(describing: narrow.fit)))",
+             narrow.away && (narrow.fit.map { $0.shown < 4 && $0.chevron } ?? false) && narrow.bar.height < 30)
+        let factsOnly = await shotBar(StatusLineRecord(lines: [], info: info, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-facts-only-light.png")
+        step("facts, no own line: every tag, no chevron (\(String(describing: factsOnly.fit)))", factsOnly.away && factsOnly.fit == .init(shown: 4, chevron: false))
+        let plain = await shotBar(StatusLineRecord(lines: record.lines, info: nil, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-plain-light.png")
+        step("no facts: the owner's line, one row, and the chevron", plain.away && plain.plain && plain.bar.height < 30 && plain.fit?.chevron == true)
 
         // Settings > Agents: the switch in each state, and the sheets.
         for dark in [false, true] {
@@ -73,10 +89,12 @@ extension SnapshotRunner {
         exit(failures == 0 ? 0 : 1)
     }
 
-    /// The bottom of a pane: a reply, the composer and the status line. Returns the bar's frame, its gap under the
-    /// composer, and whether the window touched no screen.
-    @MainActor private static func shotBar(_ record: StatusLineRecord, expanded: Bool, dark: Bool, path: String) async -> (bar: CGRect, gap: CGFloat, away: Bool) {
-        let size = NSSize(width: 900, height: 360)
+    /// The bottom of a pane: a reply, the status row and the composer. Returns the row's frame, its gap over the
+    /// composer, what fit in one row, whether the owner's line stands in for the tags, whether the context tag is
+    /// orange, and whether the window touched no screen.
+    @MainActor private static func shotBar(_ record: StatusLineRecord, expanded: Bool, dark: Bool, width: CGFloat = 900, path: String) async
+        -> (bar: CGRect, gap: CGFloat, fit: StatusTagRow.Fit?, plain: Bool, warn: Bool, away: Bool) {
+        let size = NSSize(width: width, height: 360)
         var composer = CGRect.zero
         let view = ZStack(alignment: .bottom) {
             Color(nsColor: .textBackgroundColor)
@@ -87,17 +105,17 @@ extension SnapshotRunner {
                     UserBubble(text: "Show me what the deploy will cost.", size: .m)
                 }
                 .readingColumn(.m, .medium).padding(.bottom, 14)
+                StatusLineBar(record: record, expanded: expanded)
                 ComposerView(agentName: "claude", draft: ComposerDraft(), onSend: { _ in })
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composer = $0 }
                     .inputColumn()
-                StatusLineBar(record: record, expanded: expanded)
             }
         }
         .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
         .frame(width: size.width, height: size.height)
-        StatusLineProbe.frame = .zero
+        StatusLineProbe.frame = .zero; StatusLineProbe.fit = nil; StatusLineProbe.plain = false; StatusLineProbe.warn = false
         let away = await render(view, size: size, dark: dark, path: path)
-        return (StatusLineProbe.frame, StatusLineProbe.frame.minY - composer.maxY, away)
+        return (StatusLineProbe.frame, composer.minY - StatusLineProbe.frame.maxY, StatusLineProbe.fit, StatusLineProbe.plain, StatusLineProbe.warn, away)
     }
 
     @MainActor private static func shotView(_ v: some View, width: CGFloat, dark: Bool, path: String) async -> Bool {

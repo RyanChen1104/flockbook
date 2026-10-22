@@ -58,6 +58,41 @@ import Foundation
               "status line info: no usable session id: nil")
     }
 
+    // The row's tags (appendix C): model, effort, context with its bar (orange from 80%), the cost marked as an estimate;
+    // a field Claude Code did not send has no tag. The orange reads on the tag in light and dark (text: 4.5:1).
+    do {
+        let tags = ClaudeStatusInfo(json: input)?.tags ?? []
+        check(tags.map(\.kind) == [.model, .effort, .context, .cost] && tags.map(\.text) == ["Opus 5.5", "high", "ctx 37%", "$0.42 est."]
+              && tags.count == 4 && tags[2].percent == 37 && !tags[2].warn,
+              "status tags: model, effort, context, cost (\(tags.map(\.text)))")
+        check(tags.map(\.spoken) == ["Model Opus 5.5", "Effort high", "Context 37% used", "Session cost about $0.42, an estimate"],
+              "status tags: spoken labels (\(tags.map(\.spoken)))")
+        let hot = ClaudeStatusInfo(json: Data(#"{"session_id":"a","context_window":{"used_percentage":80}}"#.utf8))?.tags ?? []
+        let cool = ClaudeStatusInfo(json: Data(#"{"session_id":"a","context_window":{"used_percentage":79.4}}"#.utf8))?.tags ?? []
+        check(hot.map(\.kind) == [.context] && hot.first?.warn == true && cool.first?.warn == false,
+              "status tags: context from 80% is a warning, under it not; no other tags (\(hot.map(\.text)))")
+        check(ClaudeStatusInfo(json: Data(#"{"session_id":"a"}"#.utf8))?.tags == [], "status tags: nothing sent, no tags")
+        for dark in [false, true] {
+            let r = StatusTag.contrast(StatusTag.warnHex(dark: dark), StatusTag.tagHex(dark: dark))
+            check(r >= 4.5, "status tags: the orange on a \(dark ? "dark" : "light") tag reads (\(String(format: "%.2f", r)):1)")
+        }
+    }
+
+    // One row: the tags that fit, in order; the chevron at the right when one is left out or there is more to open.
+    do {
+        let w: [CGFloat] = [60, 40, 70, 60]   // 60+6+40+6+70 = 182, +6+60 = 248; the chevron takes 6+20
+        func fit(_ available: CGFloat, more: Bool = false) -> StatusTagRow.Fit {
+            StatusTagRow.fit(widths: w, chevron: 20, spacing: 6, available: available, more: more)
+        }
+        check(fit(400) == .init(shown: 4, chevron: false), "status row: all fit, nothing more: no chevron (\(fit(400)))")
+        check(fit(248) == .init(shown: 4, chevron: false), "status row: exactly fits (\(fit(248)))")
+        check(fit(400, more: true) == .init(shown: 4, chevron: true), "status row: all fit, own lines to open: the chevron (\(fit(400, more: true)))")
+        check(fit(247) == .init(shown: 3, chevron: true), "status row: one left out: three and the chevron (\(fit(247)))")
+        check(fit(30) == .init(shown: 0, chevron: true), "status row: none fits: the chevron alone (\(fit(30)))")
+        check(StatusTagRow.fit(widths: [], chevron: 20, spacing: 6, available: 400, more: true) == .init(shown: 0, chevron: true),
+              "status row: no tags, own lines: the chevron")
+    }
+
     // The folder: the wrapper saves, the app reads one session's record.
     do {
         let dir = tmp("folder")
@@ -71,8 +106,10 @@ import Foundation
         let mode = (try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("\(sid).out").path))?[.posixPermissions] as? Int
         check(mode == 0o600, "status line folder: files are mode 600 (\(String(mode ?? 0, radix: 8)))")
         f.save(input: input, output: Data(), session: sid)
-        check(f.record(session: sid)?.lines == [] && f.record(session: sid)?.shown == [[StyledRun("Opus 5.5 · high · ctx 37% · $0.42")]],
-              "status line folder: no own line: the info's summary is shown")
+        check(f.record(session: sid)?.lines == [] && f.record(session: sid)?.isEmpty == false,
+              "status line folder: no own line: still shown (the info's tags)")
+        check(StatusLineRecord(lines: [], info: ClaudeStatusInfo(json: Data(#"{"session_id":"a"}"#.utf8)), time: Date()).isEmpty,
+              "status line folder: no own line and no facts: nothing to show")
         check(f.record(session: "../\(sid)") == nil && f.record(session: "") == nil, "status line folder: a session id that is not a plain name is not read")
         let old = dir.appendingPathComponent("\(sid).out")
         try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * StatusLineFolder.maxAge)], ofItemAtPath: old.path)
@@ -231,13 +268,17 @@ import Foundation
         b.statusLines["s1"] = StatusLineRecord(lines: [[StyledRun("main", fg: "#00ff00")]], info: info, time: Date())
         let s = await session(b)
         let l = line(await s.receive(watch))
-        check(l?.pane == "w1:p1" && l?.lines == [[StyledRun("main", fg: "#00ff00")]] && l?.costUSD == 0.4213 && l?.contextPercent == 37 && l?.model == "Opus 5.5",
-              "hub status line: watch pushes the line, cost, context and model (\(String(describing: l)))")
+        check(l?.pane == "w1:p1" && l?.lines == [[StyledRun("main", fg: "#00ff00")]] && l?.costUSD == 0.4213 && l?.contextPercent == 37 && l?.model == "Opus 5.5"
+              && l?.effort == "high" && l?.time != nil,
+              "hub status line: watch pushes the line, cost, context, model, effort and time (\(String(describing: l)))")
         check(line(await s.tick()) == nil, "hub status line: no change, no push")
         b.statusLines["s1"] = StatusLineRecord(lines: [[StyledRun("dev")]], info: info, time: Date())
         check(line(await s.tick())?.lines == [[StyledRun("dev")]], "hub status line: a change is pushed")
+        b.statusLines["s1"] = StatusLineRecord(lines: [], info: info, time: Date())
+        let bare = line(await s.tick())
+        check(bare?.lines == [] && bare?.model == "Opus 5.5" && bare?.isEmpty == false, "hub status line: no own line: the facts alone, not the summary as a line")
         b.statusLines["s1"] = nil
-        check(line(await s.tick())?.lines == [], "hub status line: gone: an empty push clears it")
+        check(line(await s.tick())?.isEmpty == true, "hub status line: gone: an empty push clears it")
         let codex = FakeHubBackend(workspaces: ws(kind: "codex"))
         codex.statusLines["s1"] = StatusLineRecord(lines: [[StyledRun("x")]], info: nil, time: Date())
         check(line(await (await session(codex)).receive(watch)) == nil, "hub status line: only Claude panes")

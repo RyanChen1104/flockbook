@@ -657,34 +657,70 @@ async function fakeRun() {
   check(await p.until("!document.querySelector('.queue')") === true, "queue: the bubbles go when the agent's queue is empty");
   await p.shot("queue-pulled");
   await p.shot("queue-pulled", true);
-  // Claude Code's status line (the Mac's switch on): a chip under the composer's field; a tap opens every line, each
-  // scrolling sideways, and Claude Code's facts with the cost marked as an estimate.
+  // Claude Code's status line (the Mac's switch on): a row of tags over the composer's field (model, effort, context
+  // with its bar, cost marked as an estimate), the chevron at the right; open: every tag, the owner's lines (each
+  // scrolling sideways, in their colours) and when it was updated.
   await p.type("#composer-text", "status me");
   await p.click("#composer-send");
-  const chip = "document.querySelector('form.composer > .statusline > .status-chip')";
-  check(await p.until(`${chip}?.textContent.startsWith('Opus 5.5 · ⎇ main · ctx 42%')`) === true,
-    `status line: a chip with the first line, in the composer (${await p.eval(`${chip}?.textContent`)})`);
-  check(await p.eval(`!document.querySelector('.status-lines') && ${chip}.scrollWidth > ${chip}.clientWidth && ${noScroll}`) === true,
-    "status line: closed, the chip cuts the line; the page does not scroll sideways");
+  const sline = "document.querySelector('form.composer > .statusline')";
+  const rowTags = `[...document.querySelectorAll('form.composer > .statusline > .status-head > .status-tags > .status-tag')]`;
+  const shownTags = `${rowTags}.filter((t) => t.offsetTop === t.parentElement.firstElementChild.offsetTop).map((t) => t.textContent)`;
+  const more = "document.querySelector('form.composer > .statusline > .status-head > .status-more')";
+  check(await p.until(`${shownTags}.join('|') === 'Opus 5.5|high|ctx 42%|$3.27 est.'`) === true,
+    `status line: the tags in one row (${await p.eval(`JSON.stringify(${shownTags})`)})`);
+  check(await p.eval(`${sline} === document.querySelector('form.composer').firstElementChild
+    && ${sline}.getBoundingClientRect().bottom <= document.querySelector('form.composer > .composer-row').getBoundingClientRect().top
+    && ${sline}.getBoundingClientRect().height < 34 && !document.querySelector('.status-detail') && ${noScroll}`) === true,
+    `status line: one row over the composer's field (${await p.eval(`${sline}?.getBoundingClientRect().height`)} px); the page does not scroll sideways`);
+  check(await p.eval(`+getComputedStyle(${rowTags}[0]).fontWeight >= 600 && ${rowTags}[2].querySelector('.status-fill')?.style.width === '42%'`) === true,
+    "status line: the model in bold; the context's bar at 42%");
+  check(await p.eval(`!!${more} && !${more}.hidden && ${more}.getAttribute('aria-label') === 'Show the whole status line' && ${more}.getAttribute('aria-expanded') === 'false'`) === true,
+    "status line: own lines to open: the chevron at the right, with a label");
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline");
   await p.shot("statusline", true);
-  await p.click("form.composer .status-chip");
-  const statusRows = "[...document.querySelectorAll('.status-lines > .status-row')]";
+  await p.click("form.composer .status-more");
+  const statusRows = "[...document.querySelectorAll('.status-detail > .status-lines > .status-row')]";
   check(await p.until(`${statusRows}.length === 2`) === true && await p.eval(`${statusRows}[0].scrollWidth > ${statusRows}[0].clientWidth && ${noScroll}`) === true,
     "status line: open, two lines; the long one scrolls sideways, not the page");
   check(await p.eval(`getComputedStyle(${statusRows}[0].firstElementChild).color`) === "rgb(175, 135, 255)" && await p.eval(`getComputedStyle(${statusRows}[1].firstElementChild).opacity`) === "0.6",
     "status line: the line's colours and dim text");
-  check(await p.eval("document.querySelector('.status-facts')?.textContent") === "Opus 5.5 · context 42% of 1M · session $3.27 (estimate)",
-    `status line: Claude Code's facts, the cost marked as an estimate (${await p.eval("document.querySelector('.status-facts')?.textContent")})`);
+  check(await p.eval("[...document.querySelectorAll('.status-detail > .status-tags > .status-tag')].map((t) => t.textContent).join('|')") === "Opus 5.5|high|ctx 42%|$3.27 est."
+    && /^Updated \d/.test(await p.eval("document.querySelector('.status-detail > .status-time')?.textContent ?? ''")),
+    `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
+  check(await p.eval(`${more}.getAttribute('aria-expanded') === 'true' && ${more}.getAttribute('aria-label') === 'Hide the whole status line'`) === true,
+    "status line: open, the chevron says it hides");
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline-open");
   await p.shot("statusline-open", true);
   await p.eval(`${statusRows}[0].scrollLeft = 60`);
   await p.until("false", 1500);
   check(await p.eval(`${statusRows}[0].scrollLeft`) === 60, "status line: hub news does not reset the sideways scroll");
-  await p.click("form.composer .status-chip");
-  check(await p.until("!document.querySelector('.status-lines')") === true, "status line: a second tap closes it");
+  await p.click("form.composer .status-more");
+  check(await p.until("!document.querySelector('.status-detail')") === true, "status line: a second tap closes it");
+  // A narrow phone: the tags that fit, then the chevron.
+  await p.scale(3, 300, 844);
+  check(await p.until(`${shownTags}.length > 0 && ${shownTags}.length < 4 && !${more}.hidden && ${noScroll}`) === true,
+    `status line: narrow, the tags that fit and the chevron (${await p.eval(`JSON.stringify(${shownTags})`)})`);
+  await p.scale(3);
+  // A nearly full context: the context tag and its bar orange (the light orange that reads on the tag).
+  await p.type("#composer-text", "status hot");
+  await p.click("#composer-send");
+  check(await p.until(`${rowTags}[2]?.classList.contains('warn') && ${rowTags}[2].textContent === 'ctx 86%'`) === true
+    && await p.eval(`getComputedStyle(${rowTags}[2]).color`) === "rgb(160, 75, 0)",
+    `status line: context 86%, orange (${await p.eval(`getComputedStyle(${rowTags}[2]).color`)})`);
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("statusline-hot");
+  await p.shot("statusline-hot", true);
+  // Facts, no own line: every tag fits, nothing more to open, no chevron.
+  await p.type("#composer-text", "status tags");
+  await p.click("#composer-send");
+  check(await p.until(`${shownTags}.length === 4 && ${more}?.hidden === true`) === true, "status line: facts only, all fit: no chevron");
+  // No facts (Claude Code's JSON not read): the owner's first line in the row, and the chevron.
+  await p.type("#composer-text", "status plain");
+  await p.click("#composer-send");
+  check(await p.until(`${rowTags}.length === 0 && document.querySelector('.statusline .status-plain')?.textContent.startsWith('Opus 5.5 · ⎇ main') && !${more}.hidden`) === true,
+    "status line: no facts: the owner's line, and the chevron");
   await p.type("#composer-text", "status off");
   await p.click("#composer-send");
   check(await p.until("!document.querySelector('.statusline')") === true, "status line: none from the hub: nothing shown");
