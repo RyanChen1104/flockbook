@@ -176,7 +176,8 @@ struct SettingsSplit: View {
     }
 }
 
-/// The tabs as sidebar rows: a coloured icon tile and the name, the chosen row filled with the accent colour.
+/// The tabs as the window sidebar draws them (`SettingsSidebar`): the line symbol and the name, the chosen row on a light
+/// grey fill. Shown in the page only while the window sidebar is hidden.
 struct SettingsTabList: View {
     @Binding var selection: SettingsTab
     var back: (() -> Void)? = nil
@@ -193,20 +194,16 @@ struct SettingsTabList: View {
                 .onDisappear { SettingsProbe.back = .zero }
                 .padding(.bottom, 6)
             }
+            Text("Settings").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.horizontal, 8).padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
             ForEach(SettingsTab.allCases) { t in
                 let on = t == selection
                 Button { selection = t } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: t.symbol)
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 20, height: 20)
-                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Self.tint(t).gradient))
-                        Text(t.title).foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 8).frame(height: 30)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear)))
-                    .contentShape(Rectangle())
+                    SidebarLine(title: t.title, symbol: t.symbol)
+                        .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
@@ -214,15 +211,6 @@ struct SettingsTabList: View {
             }
         }
         .padding(.horizontal, 10).padding(.top, 12)
-    }
-
-    static func tint(_ t: SettingsTab) -> Color {
-        switch t {
-        case .general: .gray
-        case .agents: .indigo
-        case .remote: .blue
-        case .updates: .green
-        }
     }
 }
 

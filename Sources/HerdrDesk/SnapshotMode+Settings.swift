@@ -83,7 +83,8 @@ extension SnapshotRunner {
             }
         }
 
-        // One still per tab; each tab shows its own controls and no other tab's.
+        // One still per tab; each tab shows its own controls and no other tab's. Updates has one row and line symbols only:
+        // about 1% ink, so the floor here is lower than the full window's.
         var seen: Set<SettingsControl> = []
         for tab in SettingsTab.allCases {
             for dark in [false, true] {
@@ -95,7 +96,7 @@ extension SnapshotRunner {
                 }
                 seen.formUnion(here)
                 step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): \(Int(r.size.width))x\(Int(r.size.height)) pt, \(r.bytes / 1024) KB, \(String(format: "%.1f", r.ink * 100))% ink",
-                     r.ink > 0.02 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 1500)
+                     r.ink > 0.008 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 1500)
                 step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): shows [\(names(here))], all in the tab, list of \(selected.count) tabs",
                      !here.isEmpty && here.isSubset(of: Set(tab.controls)) && selected == SettingsTab.allCases)
             }
@@ -368,6 +369,9 @@ extension ChromeTests {
              own.width > 0 && own.minX - page2.minX < 20 && SettingsProbe.back.width > 0 && own.contains(CGPoint(x: SettingsProbe.back.midX, y: SettingsProbe.back.midY)))
         step("sidebar hidden: still no tab row in the toolbar (\(TabProbe.rowsShown))", TabProbe.rowsShown == 0)
         ContentTests.capture(win, to: "\(dir)/settings-page-sidebar-hidden-light.png")
+        win.appearance = NSAppearance(named: .darkAqua); try? await Task.sleep(for: .milliseconds(500))
+        ContentTests.capture(win, to: "\(dir)/settings-page-sidebar-hidden-dark.png")
+        win.appearance = NSAppearance(named: .aqua); try? await Task.sleep(for: .milliseconds(300))
         await click(SettingsProbe.back)
         step("sidebar hidden: Back returns (\(model.screen)), the sidebar stays hidden (\(model.sidebarVisibility))", model.screen == .tab && model.sidebarVisibility == .detailOnly)
         model.sidebarVisibility = .all; try? await Task.sleep(for: .milliseconds(600))
