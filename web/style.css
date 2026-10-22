@@ -238,6 +238,8 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
   color: var(--label-2); font: 400 12px/22px var(--font); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .status-tag.tag-model { color: var(--label); font-weight: 700; }
 .status-tag.tag-own { display: inline-block; }
+.status-tag.tag-own > span { color: var(--fg-light, inherit); }
+@media (prefers-color-scheme: dark) { .status-tag.tag-own > span { color: var(--fg-dark, inherit); } }
 .status-tag.warn { color: var(--warn); }
 .status-bar { width: 24px; height: 4px; border-radius: 2px; background: rgba(var(--primary), .15); overflow: hidden; }
 .status-fill { display: block; height: 100%; background: rgba(var(--primary), .5); }
