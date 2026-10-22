@@ -237,3 +237,29 @@ extension View {
             .onDisappear { SettingsProbe.controls[c] = nil }
     }
 }
+
+/// Keys while Settings shows go to Settings, not to the hidden screen under it: opening it takes the window's first
+/// responder (the composer, say) away and keeps it; Back gives that same responder its focus again.
+struct SettingsFocus: NSViewRepresentable {
+    let open: Bool
+    final class Coordinator { weak var saved: NSResponder?; var open = false }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        let c = context.coordinator
+        guard open != c.open else { return }
+        c.open = open
+        guard let win = view.window else { return }
+        if open {
+            c.saved = win.firstResponder === win ? nil : win.firstResponder
+            win.makeFirstResponder(nil)
+        } else if let saved = c.saved {
+            c.saved = nil
+            // After this update: the screen under Settings is enabled again first.
+            DispatchQueue.main.async { [weak win, weak saved] in
+                guard let win, let saved, (saved as? NSView)?.window === win else { return }
+                win.makeFirstResponder(saved)
+            }
+        }
+    }
+}

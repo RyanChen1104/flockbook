@@ -351,8 +351,9 @@ extension ChromeTests {
         let ws = model.workspaceID, tab = model.tabID
         // The reading place and the typing focus too: the conversation scrolled up from the bottom, the composer focused.
         // Back must show that same conversation view (not a new one at the bottom) and the same composer, still focused.
-        // A short window, so the preview conversation can scroll.
-        win.setContentSize(NSSize(width: size.width, height: 280)); try? await Task.sleep(for: .milliseconds(800))
+        // A short window, so the preview conversation can scroll; not below the height Settings needs (464), or opening it
+        // grows the window and the conversation lays out again.
+        win.setContentSize(NSSize(width: size.width, height: 470)); try? await Task.sleep(for: .milliseconds(1000))
         func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
         let root = win.contentView?.superview ?? host
         let conversation = views(root, NSScrollView.self)

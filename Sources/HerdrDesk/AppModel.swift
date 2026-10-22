@@ -30,7 +30,8 @@ final class AppModel {
         guard screen == .settings else { return }
         screen = screenBeforeSettings
     }
-    private var screenBeforeSettings: Screen = .tab
+    /// The screen Settings was opened from: it stays in the window under Settings (hidden), so Back finds it as it was.
+    private(set) var screenBeforeSettings: Screen = .tab
     var splitDirection: String = "down"
     var searchText = ""
     /// Width of the tab row toolbar item. Follows the detail column, never the tab count (see `setDetailWidth`).

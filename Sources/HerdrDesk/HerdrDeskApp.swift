@@ -499,13 +499,26 @@ struct DetailView: View {
             if model.screen != .settings, !model.store.connected, model.store.workspaces.isEmpty, let problem = model.store.problem {
                 ConnectionProblemView(problem: problem) { await model.store.refresh() }
             } else {
-                switch model.screen {
-                case .tab: TabScreen()
-                case .inbox: InboxView()
-                case .overview: OverviewView()
-                case .search: SearchView()
-                case .settings: SettingsPage()
+                // Settings covers the screen it was opened from and leaves it in place (hidden, inert), not rebuilt: Back
+                // shows the conversation at the same place, older messages still open, the composer still focused.
+                let settings = model.screen == .settings
+                ZStack {
+                    Group {
+                        switch settings ? model.screenBeforeSettings : model.screen {
+                        case .tab: TabScreen()
+                        case .inbox: InboxView()
+                        case .overview: OverviewView()
+                        case .search: SearchView()
+                        case .settings: EmptyView()
+                        }
+                    }
+                    .opacity(settings ? 0 : 1)
+                    .allowsHitTesting(!settings)
+                    .disabled(settings)
+                    .accessibilityHidden(settings)
+                    if settings { SettingsPage() }
                 }
+                .background { SettingsFocus(open: settings) }
             }
         }
         // The window's surface again: the split view's detail column paints its own system background over the window's.
