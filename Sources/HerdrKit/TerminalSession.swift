@@ -39,6 +39,7 @@ public final class TerminalSession: @unchecked Sendable {
     private var wantCols: Int?
     private var wantRows: Int?
     private var lastSize: (cols: Int, rows: Int)?
+    private var showed = false        // a frame came in some run: from then on a missing herdr is a moment (an upgrade), not final
     private var bracketed = true      // herdr frames do not carry DEC private modes (see README); assume yes until a frame says ?2004l
 
     /// `launcher` replaces `<herdr> --session <name>` (tests use a fake script). `find` gives herdr's full path.
@@ -198,6 +199,7 @@ public final class TerminalSession: @unchecked Sendable {
     private func runOnce(onFrame: @escaping @Sendable () -> Void) async -> Outcome {
         let (cols, rows) = lock.withLock { () -> (Int?, Int?) in (wantCols, wantRows) }
         guard let argvPrefix = launcher ?? find().map({ [$0] + cliPrefix }) else {
+            if lock.withLock({ showed }) { cont.yield(.notice(ConnectionCheck.notFound)); return .retry }
             cont.yield(.failed(reason: ConnectionCheck.notFound))
             return .final
         }
@@ -234,6 +236,7 @@ public final class TerminalSession: @unchecked Sendable {
                     } else if bytes.range(of: Data("\u{1b}[?2004l".utf8)) != nil { bracketed = false }
                 }
                 framed.set(true)
+                lock.withLock { showed = true }
                 onFrame()
                 cont.yield(.frame(f))
             case "terminal.closed":
@@ -252,7 +255,7 @@ public final class TerminalSession: @unchecked Sendable {
             let done: @Sendable () -> Void = { [self] in
                 guard pending.update({ $0 -= 1; return $0 }) == 0 else { return }
                 lock.withLock { proc = nil; stdin = nil }
-                if finalReason.get() == nil, status.get() == 127, !framed.get() {
+                if finalReason.get() == nil, status.get() == 127, !framed.get(), !lock.withLock({ showed }) {
                     let why = lastErr.get() ?? "herdr could not start (exit 127)."
                     finalReason.set(why)
                     cont.yield(.failed(reason: why))
@@ -264,12 +267,28 @@ public final class TerminalSession: @unchecked Sendable {
                 if d.isEmpty { h.readabilityHandler = nil; done(); return }
                 outReader.feed(d)
             }
+            // stderr ends once: at EOF, or a second after exit when a child of herdr still holds it open
+            let errEnded = Locked(false)
+            let endErr: @Sendable () -> Void = {
+                guard errEnded.update({ let was = $0; $0 = true; return !was }) else { return }
+                errReader.feed(Data([0x0A]))   // a last line without newline too
+                done()
+            }
             err.fileHandleForReading.readabilityHandler = { h in
                 let d = h.availableData
-                if d.isEmpty { h.readabilityHandler = nil; errReader.feed(Data([0x0A])); done(); return }   // a last line without newline too
-                errReader.feed(d)
+                if d.isEmpty { h.readabilityHandler = nil; endErr(); return }
+                errEnded.update { ended in if !ended { errReader.feed(d) } }
             }
-            p.terminationHandler = { p in status.set(p.terminationStatus); done() }
+            p.terminationHandler = { p in
+                status.set(p.terminationStatus)
+                DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                    guard !errEnded.get() else { return }
+                    err.fileHandleForReading.readabilityHandler = nil
+                    endErr()
+                    try? err.fileHandleForReading.close()
+                }
+                done()
+            }
             do {
                 lock.withLock { proc = p; stdin = inp.fileHandleForWriting }
                 try p.run()
