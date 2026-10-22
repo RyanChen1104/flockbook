@@ -9,9 +9,12 @@ struct StatusLineRow: View {
     @State private var sheet = false
 
     var body: some View {
-        Toggle(isOn: Binding(get: { setup.state == .on }, set: { _ in sheet = true })) {
+        Toggle(isOn: Binding(get: { setup.state == .on || setup.state == .moved }, set: { _ in sheet = true })) {
             Text("Show Claude Code status line")
-            Text(note).foregroundStyle(isProblem ? AnyShapeStyle(.red) : setup.state == .replaced ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            Text(note).foregroundStyle(isProblem ? AnyShapeStyle(.red) : setup.state == .replaced || setup.state == .moved ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            if setup.state == .moved {
+                Button("Fix…") { sheet = true }.controlSize(.small)
+            }
         }
         .sheet(isPresented: $sheet) { StatusLineSheet(setup: setup) }
         .onAppear { setup.refresh() }
@@ -24,6 +27,7 @@ struct StatusLineRow: View {
         case .off: "Off. Shows the line Claude Code draws under its prompt under each Claude composer, and on the phone."
         case .on: "On. Claude Code runs your own status line through Flockbook, and shows it as before."
         case .replaced: "Claude Code's status line was changed since (for example with /statusline). Switch this on again to show the new one."
+        case .moved: "Needs fixing: Flockbook moved since this was switched on, and Claude Code still runs the old copy's command."
         case .problem(let m): "Could not read Claude Code's settings: \(m)."
         }
     }
@@ -35,11 +39,13 @@ struct StatusLineSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let on = setup.state == .on
+        let moved = setup.state == .moved
+        let on = setup.state == .on || moved
         let tilde = ClaudeHookSheet.tilde
         VStack(alignment: .leading, spacing: 12) {
-            Text(on ? "Stop Showing the Status Line" : "Show Claude Code's Status Line").font(.title3.weight(.semibold))
-            Text(on ? "Turning this off puts your own status line back in the file below, as it was. Everything else stays."
+            Text(moved ? "Fix the Status Line Command" : on ? "Stop Showing the Status Line" : "Show Claude Code's Status Line").font(.title3.weight(.semibold))
+            Text(moved ? "Flockbook was moved since the status line was switched on. Claude Code still runs the command at the old place, which may be gone. Fix puts this copy's path in its place; your own status line and everything else stay."
+                    : on ? "Turning this off puts your own status line back in the file below, as it was. Everything else stays."
                     : "Claude Code runs a status line command and shows its output under the prompt. Flockbook puts a small command of its own in that place: it runs your command with the same input, shows its output in Claude Code unchanged, and keeps a copy for Flockbook.")
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 6) {
@@ -61,18 +67,23 @@ struct StatusLineSheet: View {
                 Text(preview(on: on)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     .padding(10).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 190)
+            .frame(height: moved ? 150 : 190)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
             Text("Command: \(tilde(setup.wrapperURL.path))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(on ? "Turn Off" : "Turn On") {
-                    if on { setup.turnOff() } else { setup.turnOn() }
-                    dismiss()
+                if moved {
+                    Button("Turn Off") { setup.turnOff(); dismiss() }
+                    Button("Fix") { setup.turnOn(); dismiss() }.keyboardShortcut(.defaultAction)
+                } else {
+                    Button(on ? "Turn Off" : "Turn On") {
+                        if on { setup.turnOff() } else { setup.turnOn() }
+                        dismiss()
+                    }
+                    .keyboardShortcut(.defaultAction)
                 }
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
@@ -87,6 +98,9 @@ struct StatusLineSheet: View {
             guard let v else { return "(none)" }
             let d = (try? JSONSerialization.data(withJSONObject: ["statusLine": v], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
             return String(decoding: d, as: UTF8.self).replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+        }
+        if setup.state == .moved {
+            return "Now:\n\(json(setup.currentCommand.map { ["type": "command", "command": $0] }))\n\nAfter:\n\(json(ours))"
         }
         return on ? "Now:\n\(json(ours))\n\nAfter:\n\(json(theirs))" : "Now:\n\(json(theirs))\n\nAfter:\n\(json(ours))"
     }

@@ -78,11 +78,11 @@ extension SnapshotRunner {
 
         // Settings > Agents: the switch in each state, and the sheets.
         for dark in [false, true] {
-            for (n, st) in [("off", StatusLineSetup.State.off), ("on", .on), ("replaced", .replaced)] {
+            for (n, st) in [("off", StatusLineSetup.State.off), ("on", .on), ("replaced", .replaced), ("moved", .moved)] {
                 step("settings \(n) \(dark ? "dark" : "light"): off every screen",
                      await shotView(SettingsView(tab: .agents, statusLine: .preview(st)), width: 520, dark: dark, path: "\(dir)/settings-statusline-\(n)-\(dark ? "dark" : "light").png"))
             }
-            for (n, st) in [("on", StatusLineSetup.State.off), ("off", .on)] {
+            for (n, st) in [("on", StatusLineSetup.State.off), ("off", .on), ("fix", .moved)] {
                 step("sheet turn \(n) \(dark ? "dark" : "light"): off every screen",
                      await shotView(StatusLineSheet(setup: .preview(st)), width: 520, dark: dark, path: "\(dir)/statusline-sheet-turn-\(n)-\(dark ? "dark" : "light").png"))
             }

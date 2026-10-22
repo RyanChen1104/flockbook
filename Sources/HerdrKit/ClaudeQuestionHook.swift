@@ -225,9 +225,9 @@ public enum ClaudeSettingsHook {
     /// Changes the settings `file` as `change` says (nil: nothing to change, nothing written), with Install's care:
     /// a linked file is refused, the old file is backed up, the file is read again right before the write and left
     /// alone when it changed since, and the new one is written atomically with the old file's mode. Returns the
-    /// backup (nil: no old file, or nothing written).
+    /// backup (nil: no old file, or nothing written). `beforeWrite` throwing: nothing is written.
     @discardableResult
-    static func rewrite(file: URL, now: Date = Date(), beforeWrite: (() -> Void)? = nil,
+    static func rewrite(file: URL, now: Date = Date(), beforeWrite: (() throws -> Void)? = nil,
                         _ change: ([String: Any]) throws -> [String: Any]?) throws -> URL? {
         let fm = FileManager.default
         let attrs = try? fm.attributesOfItem(atPath: file.path)   // the link itself, not its target
@@ -240,7 +240,7 @@ public enum ClaudeSettingsHook {
         var data = try JSONSerialization.data(withJSONObject: new, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         data.append(0x0a)
         let mode = attrs?[.posixPermissions] as? Int ?? 0o600
-        beforeWrite?()
+        try beforeWrite?()
         let again = fm.fileExists(atPath: file.path) ? try? Data(contentsOf: file) : nil
         guard again == original, (try? fm.attributesOfItem(atPath: file.path))?[.type] as? FileAttributeType != .typeSymbolicLink else {
             throw Failure.unexpected("the settings file changed meanwhile; try again")

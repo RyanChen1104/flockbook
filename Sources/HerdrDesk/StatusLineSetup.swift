@@ -6,7 +6,8 @@ import Observation
 /// only when the owner switches it on or off. The wrapper ships inside the app (Contents/MacOS/flockbook-statusline)
 /// and saves its records in the app's own Application Support folder.
 @MainActor @Observable final class StatusLineSetup {
-    enum State: Equatable { case off, on, replaced, problem(String) }
+    /// `moved`: the settings run an older copy's wrapper (the app moved since); On fixes the path.
+    enum State: Equatable { case off, on, replaced, moved, problem(String) }
 
     let settingsFile: URL
     let wrapperURL: URL
@@ -47,7 +48,8 @@ import Observation
         do {
             let s = try ClaudeSettingsHook.read(settingsFile)
             let now: State = switch ClaudeStatusLineSetting.state(s, command: command, wasOn: folder.wasOn) {
-            case .on, .moved: .on
+            case .on: .on
+            case .moved: .moved
             case .off: .off
             case .replaced: .replaced
             }
@@ -63,7 +65,7 @@ import Observation
     }
 
     /// The owner switched it on (or on again after `/statusline` replaced ours): their statusLine is kept and ours
-    /// goes in its place (the file backed up first).
+    /// goes in its place (the file backed up first). Moved: only the path changes.
     func turnOn() {
         guard previewState == nil else { return }
         guard FileManager.default.isExecutableFile(atPath: wrapperURL.path) else {
@@ -88,8 +90,13 @@ import Observation
     /// What the owner's statusLine is now, for the sheet.
     var originalSummary: String? {
         guard previewState == nil else { return "sh ~/.claude/statusline.sh" }
-        return state == .on ? folder.originalCommand() : (try? ClaudeSettingsHook.read(settingsFile))
-            .flatMap { ($0["statusLine"] as? [String: Any])?["command"] as? String }
+        return state == .on || state == .moved ? folder.originalCommand() : currentCommand
+    }
+
+    /// The statusLine command in the settings file now.
+    var currentCommand: String? {
+        guard previewState == nil else { return state == .moved ? "'/Volumes/Flockbook/Flockbook.app/Contents/MacOS/flockbook-statusline' --dir '…'" : nil }
+        return (try? ClaudeSettingsHook.read(settingsFile)).flatMap { ($0["statusLine"] as? [String: Any])?["command"] as? String }
     }
 
     /// A session's saved line, while ours is on.
@@ -97,7 +104,7 @@ import Observation
         if let r = StatusLineProbe.injected[session] { return r }   // offscreen shots only (empty in the app)
         guard previewState == nil else { return nil }
         refreshIfStale()
-        guard state == .on else { return nil }
+        guard state == .on || state == .moved else { return nil }
         return folder.record(session: session)
     }
 }

@@ -420,8 +420,18 @@ public struct StatusLineFolder: Sendable {
     /// Saves one run: the input and the output (cut at `maxBytes`). Errors are ignored: saving never changes what the
     /// wrapper prints.
     public func save(input: Data, output: Data, session: String) {
+        save(input: input, session: session)
+        save(output: output, session: session)
+    }
+
+    /// Saves the input alone; the last output stays until the command gives a new one.
+    public func save(input: Data, session: String) {
         guard Self.plainName(session) else { return }
         try? write(input.prefix(ClaudeStatusInfo.maxBytes), to: file(session, "json"))
+    }
+
+    public func save(output: Data, session: String) {
+        guard Self.plainName(session) else { return }
         try? write(output.prefix(Self.maxBytes), to: file(session, "out"))
     }
 
@@ -462,18 +472,17 @@ public struct StatusLineFolder: Sendable {
     }
 
     /// Keeps the owner's statusLine (nil: they had none) for the wrapper and for turning ours off; `on`: ours is in
-    /// Claude Code's settings.
+    /// Claude Code's settings. Throws when it cannot be kept: ours must not go in then.
     public func saveOriginal(_ line: [String: Any]?, on: Bool = true) throws {
         let o: [String: Any] = ["on": on, "statusLine": line ?? NSNull()]
-        guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else { return }
-        try? write(d, to: originalFile)
+        try write(try JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]), to: originalFile)
     }
 
     /// The owner's statusLine as it was before ours went in; nil: none.
     public func original() -> [String: Any]? { originalObject()?["statusLine"] as? [String: Any] }
 
-    /// The owner's statusLine is kept (a line, or "none").
-    public var hasOriginal: Bool { originalObject() != nil }
+    /// The owner's statusLine is kept (a line, or "none"). False: nothing kept, or the file is gone.
+    public var hasOriginal: Bool { originalObject()?["statusLine"] != nil }
 
     /// Ours was put in the settings and not taken out by the owner's switch since.
     public var wasOn: Bool { originalObject()?["on"] as? Bool == true }
@@ -491,7 +500,8 @@ public struct StatusLineFolder: Sendable {
 
 /// What the wrapper does for one run of Claude Code's statusLine command.
 public enum StatusLineWrapper {
-    public struct Result: Sendable { public var output: Data; public var status: Int32 }
+    /// `stopped`: the command ran over the limit and was stopped.
+    public struct Result: Sendable { public var output: Data; public var status: Int32; public var stopped = false }
 
     /// Longest an owner's command may run before the wrapper stops it.
     public static let timeout: TimeInterval = 10
@@ -503,16 +513,21 @@ public enum StatusLineWrapper {
     /// Saves the input, runs the owner's command (from `dir`'s `.original`) with the same input on stdin and the
     /// given environment, and returns its output and exit status, as Claude Code would have had them. No own command:
     /// nothing, status 0. Over `timeout`: the command's process group is stopped, its output so far kept, status 124.
-    /// Saving never changes the output.
+    /// The saved output changes only when the command ends by itself with status 0 or some output: while it runs,
+    /// or when it is stopped (at the limit, or by Claude Code for a newer run), the last one stays. Saving never
+    /// changes the output.
     public static func run(input: Data, dir: URL, timeout: TimeInterval = timeout, environment: [String: String]? = nil) -> Result {
         let folder = StatusLineFolder(url: dir)
         let session = ClaudeStatusInfo(json: input)?.session
-        if let session { folder.save(input: input, output: Data(), session: session) }
-        var result = Result(output: Data(), status: 0)
-        if let cmd = folder.originalCommand() {
-            result = spawn(cmd, input: input, timeout: timeout, environment: environment ?? ProcessInfo.processInfo.environment)
+        if let session { folder.save(input: input, session: session) }
+        guard let cmd = folder.originalCommand() else {
+            if let session { folder.save(output: Data(), session: session) }
+            return Result(output: Data(), status: 0)
         }
-        if let session { folder.save(input: input, output: result.output, session: session) }
+        let result = spawn(cmd, input: input, timeout: timeout, environment: environment ?? ProcessInfo.processInfo.environment)
+        if let session, !result.stopped, result.status == 0 || !result.output.isEmpty {
+            folder.save(output: result.output, session: session)
+        }
         return result
     }
 
@@ -614,7 +629,7 @@ public enum StatusLineWrapper {
             }
         }
         running = 0
-        if timedOut { return Result(output: out, status: 124) }
+        if timedOut { return Result(output: out, status: 124, stopped: true) }
         let code: Int32 = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
         return Result(output: out, status: code)
     }
@@ -630,23 +645,38 @@ public enum StatusLineWrapper {
 /// Our statusLine in Claude Code's user settings (`~/.claude/settings.json`). Changed only on the owner's switch: On
 /// keeps the owner's statusLine (in the wrapper's folder) and puts ours in its place, with their padding and refresh
 /// settings; Off puts theirs back, or removes ours when they had none. If the owner sets another statusLine later
-/// (`/statusline`), ours is gone: the state is `replaced` and Settings asks them to switch it on again. Writes go
-/// through `ClaudeSettingsHook.rewrite` (backup, re-read before the write, atomic, mode kept, links refused).
+/// (`/statusline`), ours is gone: the state is `replaced` and Settings asks them to switch it on again. If the app
+/// moved since, the command is an older copy's: `moved`, and On fixes the path in place. Writes go through
+/// `ClaudeSettingsHook.rewrite` (backup, re-read before the write, atomic, mode kept, links refused).
 public enum ClaudeStatusLineSetting {
     public enum State: Sendable, Hashable { case off, on, replaced, moved }
 
-    /// A disk image or a temporary copy: a place the wrapper may not be at later.
-    public static func unstable(wrapper: String) -> Bool { false }
+    /// A disk image or a temporary copy (App Translocation): a place the wrapper may not be at later.
+    public static func unstable(wrapper: String) -> Bool {
+        wrapper.hasPrefix("/Volumes/") || wrapper.contains("/AppTranslocation/")
+    }
 
     /// The wrapper's command line: its path and the folder, quoted.
     public static func command(wrapper: String, dir: String) -> String {
         ClaudeQuestionHook.shellQuoted(wrapper) + " --dir " + ClaudeQuestionHook.shellQuoted(dir)
     }
 
-    /// The statusLine's command is ours: this command, or the wrapper of a copy of the app that moved since.
+    /// The statusLine's command is ours: exactly this command.
     static func isOurs(_ line: Any?, command: String) -> Bool {
-        guard let c = (line as? [String: Any])?["command"] as? String else { return false }
-        return c == command || c.contains("/flockbook-statusline' --dir ")
+        (line as? [String: Any])?["command"] as? String == command
+    }
+
+    /// The statusLine's command is an older copy's: another wrapper path with the same folder.
+    static func isMoved(_ line: Any?, command: String) -> Bool {
+        guard let c = (line as? [String: Any])?["command"] as? String, c != command,
+              let ours = parts(command), let theirs = parts(c) else { return false }
+        return theirs.dir == ours.dir && theirs.wrapper.hasSuffix("/flockbook-statusline")
+    }
+
+    /// The wrapper path and the folder of a command made by `command(wrapper:dir:)`; nil: another shape.
+    static func parts(_ command: String) -> (wrapper: String, dir: String)? {
+        guard let m = command.wholeMatch(of: /'([^']*)' --dir '([^']*)'/) else { return nil }
+        return (String(m.1), String(m.2))
     }
 
     /// `settings` with our statusLine, and the owner's to keep (nil: none, or ours was in already). A statusLine
@@ -654,6 +684,12 @@ public enum ClaudeStatusLineSetting {
     public static func enabling(_ settings: [String: Any], command: String) throws -> (settings: [String: Any], original: [String: Any]?) {
         let old = settings["statusLine"]
         if isOurs(old, command: command) { return (settings, nil) }
+        if isMoved(old, command: command), var line = old as? [String: Any] {
+            line["command"] = command
+            var s = settings
+            s["statusLine"] = line
+            return (s, nil)
+        }
         let theirs: [String: Any]?
         switch old {
         case nil: theirs = nil
@@ -668,10 +704,10 @@ public enum ClaudeStatusLineSetting {
         return (s, theirs)
     }
 
-    /// `settings` without ours: the owner's `original` back, or no statusLine. Another statusLine (the owner set it
-    /// since) stays.
+    /// `settings` without ours (or an older copy's): the owner's `original` back, or no statusLine. Another
+    /// statusLine (the owner set it since) stays.
     public static func disabling(_ settings: [String: Any], command: String, original: [String: Any]?) -> [String: Any] {
-        guard isOurs(settings["statusLine"], command: command) else { return settings }
+        guard isOurs(settings["statusLine"], command: command) || isMoved(settings["statusLine"], command: command) else { return settings }
         var s = settings
         s["statusLine"] = original
         return s
@@ -680,38 +716,53 @@ public enum ClaudeStatusLineSetting {
     /// `wasOn`: the owner switched ours on and not off since.
     public static func state(_ settings: [String: Any], command: String, wasOn: Bool) -> State {
         if isOurs(settings["statusLine"], command: command) { return .on }
+        if isMoved(settings["statusLine"], command: command) { return .moved }
         return wasOn ? .replaced : .off
     }
 
     /// On or Off in the settings `file`, keeping the owner's statusLine in `folder`. Returns the backup (nil: nothing
-    /// written). On while ours is in already changes nothing (the kept statusLine stays).
+    /// written). On while ours is in already changes nothing; on over an older copy's command fixes the path and
+    /// keeps the kept statusLine. On from a disk image or a temporary copy is refused; so is on when the owner's
+    /// statusLine cannot be kept. Off when the kept statusLine is gone is refused too: ours stays rather than the
+    /// owner's line being lost.
     @discardableResult
     public static func apply(on: Bool, file: URL, command: String, folder: StatusLineFolder, now: Date = Date(),
                              beforeWrite: (() -> Void)? = nil) throws -> URL? {
         if on {
-            var kept: [String: Any]?, changed = false
-            let before = folder.original(), wasOn = folder.wasOn
+            if let w = parts(command)?.wrapper, unstable(wrapper: w) {
+                throw ClaudeSettingsHook.Failure.unexpected("Flockbook is running from a disk image or a temporary copy; move it to Applications and open it from there")
+            }
+            var kept: [String: Any]?, taken = false
+            let before = folder.original(), had = folder.hasOriginal, wasOn = folder.wasOn
             do {
                 let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, beforeWrite: {
                     // The wrapper finds the owner's command from the moment ours is in.
-                    try? folder.saveOriginal(kept, on: false)
+                    if taken { try folder.saveOriginal(kept, on: false) }
                     beforeWrite?()
                 }) { old in
                     if isOurs(old["statusLine"], command: command) { return nil }
+                    let moved = isMoved(old["statusLine"], command: command)
                     let e = try enabling(old, command: command)
-                    kept = e.original; changed = true
+                    if !moved { kept = e.original; taken = true }
                     return e.settings
                 }
-                try? folder.saveOriginal(changed ? kept : before, on: true)
+                // The owner's line is kept already; only "on" is recorded here, and a lost line is never recorded
+                // as "none". Failing, Settings still shows On (ours is in the file).
+                if taken || had { try? folder.saveOriginal(taken ? kept : before, on: true) }
                 return backup
             } catch {
-                if changed { if wasOn { try? folder.saveOriginal(before, on: true) } else { folder.forgetOriginal() } }
+                if taken { if had { try? folder.saveOriginal(before, on: wasOn) } else { folder.forgetOriginal() } }
                 throw error
             }
         }
-        let original = folder.original()
+        let original = folder.original(), had = folder.hasOriginal
         let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, beforeWrite: beforeWrite) { old in
-            isOurs(old["statusLine"], command: command) ? disabling(old, command: command, original: original) : nil
+            let line = old["statusLine"]
+            guard isOurs(line, command: command) || isMoved(line, command: command) else { return nil }
+            guard had else {
+                throw ClaudeSettingsHook.Failure.unexpected("Flockbook's copy of your own status line is gone, so it cannot be put back; set it again with /statusline in Claude Code")
+            }
+            return disabling(old, command: command, original: original)
         }
         folder.forgetOriginal()
         return backup
