@@ -463,7 +463,7 @@ public struct StatusLineFolder: Sendable {
 
     /// Keeps the owner's statusLine (nil: they had none) for the wrapper and for turning ours off; `on`: ours is in
     /// Claude Code's settings.
-    public func saveOriginal(_ line: [String: Any]?, on: Bool = true) {
+    public func saveOriginal(_ line: [String: Any]?, on: Bool = true) throws {
         let o: [String: Any] = ["on": on, "statusLine": line ?? NSNull()]
         guard let d = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) else { return }
         try? write(d, to: originalFile)
@@ -471,6 +471,9 @@ public struct StatusLineFolder: Sendable {
 
     /// The owner's statusLine as it was before ours went in; nil: none.
     public func original() -> [String: Any]? { originalObject()?["statusLine"] as? [String: Any] }
+
+    /// The owner's statusLine is kept (a line, or "none").
+    public var hasOriginal: Bool { originalObject() != nil }
 
     /// Ours was put in the settings and not taken out by the owner's switch since.
     public var wasOn: Bool { originalObject()?["on"] as? Bool == true }
@@ -630,7 +633,10 @@ public enum StatusLineWrapper {
 /// (`/statusline`), ours is gone: the state is `replaced` and Settings asks them to switch it on again. Writes go
 /// through `ClaudeSettingsHook.rewrite` (backup, re-read before the write, atomic, mode kept, links refused).
 public enum ClaudeStatusLineSetting {
-    public enum State: Sendable, Hashable { case off, on, replaced }
+    public enum State: Sendable, Hashable { case off, on, replaced, moved }
+
+    /// A disk image or a temporary copy: a place the wrapper may not be at later.
+    public static func unstable(wrapper: String) -> Bool { false }
 
     /// The wrapper's command line: its path and the folder, quoted.
     public static func command(wrapper: String, dir: String) -> String {
@@ -688,7 +694,7 @@ public enum ClaudeStatusLineSetting {
             do {
                 let backup = try ClaudeSettingsHook.rewrite(file: file, now: now, beforeWrite: {
                     // The wrapper finds the owner's command from the moment ours is in.
-                    folder.saveOriginal(kept, on: false)
+                    try? folder.saveOriginal(kept, on: false)
                     beforeWrite?()
                 }) { old in
                     if isOurs(old["statusLine"], command: command) { return nil }
@@ -696,10 +702,10 @@ public enum ClaudeStatusLineSetting {
                     kept = e.original; changed = true
                     return e.settings
                 }
-                folder.saveOriginal(changed ? kept : before, on: true)
+                try? folder.saveOriginal(changed ? kept : before, on: true)
                 return backup
             } catch {
-                if changed { if wasOn { folder.saveOriginal(before, on: true) } else { folder.forgetOriginal() } }
+                if changed { if wasOn { try? folder.saveOriginal(before, on: true) } else { folder.forgetOriginal() } }
                 throw error
             }
         }

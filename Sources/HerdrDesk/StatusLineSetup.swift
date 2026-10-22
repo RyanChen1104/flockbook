@@ -47,7 +47,7 @@ import Observation
         do {
             let s = try ClaudeSettingsHook.read(settingsFile)
             let now: State = switch ClaudeStatusLineSetting.state(s, command: command, wasOn: folder.wasOn) {
-            case .on: .on
+            case .on, .moved: .on
             case .off: .off
             case .replaced: .replaced
             }

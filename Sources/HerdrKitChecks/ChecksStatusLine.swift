@@ -161,7 +161,7 @@ import Foundation
         let dir = tmp("wrap")
         let sid = "5ad83985-b099-4ce9-82e6-85dd73af9b4a"
         func original(_ command: String?) {
-            StatusLineFolder(url: dir).saveOriginal(command.map { ["type": "command", "command": $0, "padding": 1] as [String: Any] })
+            try? StatusLineFolder(url: dir).saveOriginal(command.map { ["type": "command", "command": $0, "padding": 1] as [String: Any] })
         }
         original(#"printf 'hi \033[32mok\033[0m'"#)
         var r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
@@ -175,10 +175,27 @@ import Foundation
         r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5, environment: ["COLUMNS": "123", "PATH": "/usr/bin:/bin"])
         check(r.output == Data("123\n".utf8), "status line wrapper: the command gets Claude Code's environment (COLUMNS)")
 
+        // While the command runs, the last output stays saved: the app and the phone never read an empty one.
+        let outFile = dir.appendingPathComponent("\(sid).out").path
+        original("printf before")
+        _ = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
+        original("printf seen:; cat '\(outFile)'")
+        r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
+        check(r.output == Data("seen:before".utf8), "status line wrapper: the last output stays while the command runs (\(String(decoding: r.output, as: UTF8.self)))")
+        original("printf kept")
+        _ = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
+        original("printf partial; sleep 5")
+        _ = StatusLineWrapper.run(input: input, dir: dir, timeout: 0.3)
+        check(StatusLineFolder(url: dir).record(session: sid)?.lines == [[StyledRun("kept")]], "status line wrapper: stopped at the limit: the last output stays")
+        original("exit 4")
+        _ = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
+        check(StatusLineFolder(url: dir).record(session: sid)?.lines == [[StyledRun("kept")]], "status line wrapper: failed with no output: the last output stays")
+
         original(nil)
         r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
         check(r.output.isEmpty && r.status == 0 && StatusLineFolder(url: dir).record(session: sid)?.info?.model == "Opus 5.5",
               "status line wrapper: no own command: prints nothing, still saves the input")
+        check(StatusLineFolder(url: dir).record(session: sid)?.lines == [], "status line wrapper: no own command: the saved output is empty")
 
         original("echo partial; exit 3")
         r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5)
@@ -200,7 +217,7 @@ import Foundation
         check(r.output == Data("still\n".utf8) && !FileManager.default.fileExists(atPath: dir.deletingLastPathComponent().appendingPathComponent("x.json").path),
               "status line wrapper: a bad session id: output unchanged, nothing saved")
         let ro = tmp("ro")
-        StatusLineFolder(url: ro).saveOriginal(["type": "command", "command": "echo fine"])
+        try? StatusLineFolder(url: ro).saveOriginal(["type": "command", "command": "echo fine"])
         try? FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ro.path)
         r = StatusLineWrapper.run(input: input, dir: ro, timeout: 5)
         check(r.output == Data("fine\n".utf8) && r.status == 0, "status line wrapper: cannot save: output unchanged")
@@ -279,6 +296,94 @@ import Foundation
         refused = false
         do { _ = try ClaudeStatusLineSetting.apply(on: true, file: link, command: ours, folder: folder) } catch { refused = true }
         check(refused, "status line file: a linked settings file is refused")
+        try? FileManager.default.removeItem(at: home)
+    }
+
+    // Off never loses the owner's line: no kept line, nothing written; on stops when the line cannot be kept.
+    do {
+        let home = tmp("keep")
+        let file = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let theirs = #"{"statusLine":{"type":"command","command":"sh line.sh"}}"#
+        try Data(theirs.utf8).write(to: file)
+        let ro = home.appendingPathComponent("ro")
+        try FileManager.default.createDirectory(at: ro, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ro.path)
+        let stuck = StatusLineFolder(url: ro.appendingPathComponent("statusline"))
+        var threw = false
+        do { try stuck.saveOriginal(nil) } catch { threw = true }
+        check(threw, "status line keep: a line that cannot be kept is an error, not ignored")
+        threw = false
+        let stuckOurs = ClaudeStatusLineSetting.command(wrapper: "/bin/flockbook-statusline", dir: stuck.url.path)
+        do { try ClaudeStatusLineSetting.apply(on: true, file: file, command: stuckOurs, folder: stuck) } catch { threw = true }
+        check(threw && (try? Data(contentsOf: file)) == Data(theirs.utf8), "status line keep: on stops, the file unchanged, when the owner's line cannot be kept")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ro.path)
+
+        let dir = home.appendingPathComponent("statusline")
+        let folder = StatusLineFolder(url: dir)
+        let ours = ClaudeStatusLineSetting.command(wrapper: "/bin/flockbook-statusline", dir: dir.path)
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        check(folder.hasOriginal, "status line keep: on keeps the owner's line")
+        folder.forgetOriginal()   // the folder was cleaned up while on
+        check(!folder.hasOriginal, "status line keep: a kept line that is gone is not a kept 'none'")
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        check(!folder.hasOriginal, "status line keep: on again does not record 'none' in place of a lost line")
+        threw = false
+        do { try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder) } catch { threw = true }
+        let still = try ClaudeSettingsHook.read(file)
+        check(threw && (still["statusLine"] as? [String: Any])?["command"] as? String == ours,
+              "status line keep: off without the kept line: an error, ours stays, the statusLine is not removed")
+
+        try Data(#"{"model":"opus"}"#.utf8).write(to: file)
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        check(folder.hasOriginal && folder.original() == nil, "status line keep: 'had none' is kept as none")
+        try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder)
+        check(try ClaudeSettingsHook.read(file)["statusLine"] == nil, "status line keep: off after 'had none' removes ours")
+        try? FileManager.default.removeItem(at: home)
+    }
+
+    // The app moved (or ran from a disk image): only this copy's exact command is ours; an older copy's is "moved",
+    // fixed in place; a disk image or a temporary copy is refused.
+    do {
+        let home = tmp("moved")
+        let file = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dir = home.appendingPathComponent("statusline")
+        let folder = StatusLineFolder(url: dir)
+        let old = ClaudeStatusLineSetting.command(wrapper: "/Applications/Old/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: dir.path)
+        let ours = ClaudeStatusLineSetting.command(wrapper: "/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: dir.path)
+        let other = ClaudeStatusLineSetting.command(wrapper: "/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: "/elsewhere")
+        check(!ClaudeStatusLineSetting.isOurs(["command": old], command: ours) && !ClaudeStatusLineSetting.isOurs(["command": other], command: ours),
+              "status line moved: only the exact command is ours")
+        let movedSettings: [String: Any] = ["statusLine": ["type": "command", "command": old, "padding": 3]]
+        check(ClaudeStatusLineSetting.state(movedSettings, command: ours, wasOn: true) == .moved
+              && ClaudeStatusLineSetting.state(["statusLine": ["type": "command", "command": other]], command: ours, wasOn: true) == .replaced,
+              "status line moved: an older copy's command is 'moved'; another folder's is not ours")
+        let theirs: [String: Any] = ["type": "command", "command": "sh line.sh"]
+        check(NSDictionary(dictionary: ClaudeStatusLineSetting.disabling(movedSettings, command: ours, original: theirs)).isEqual(to: ["statusLine": theirs]),
+              "status line moved: off puts the owner's line back")
+        let e = try ClaudeStatusLineSetting.enabling(movedSettings, command: ours)
+        check(e.original == nil && (e.settings["statusLine"] as? [String: Any])?["command"] as? String == ours,
+              "status line moved: on never keeps an older copy's command as the owner's")
+
+        try JSONSerialization.data(withJSONObject: movedSettings).write(to: file)
+        try folder.saveOriginal(theirs, on: true)
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        let fixed = try ClaudeSettingsHook.read(file)["statusLine"] as? [String: Any]
+        check(fixed?["command"] as? String == ours && fixed?["padding"] as? Int == 3 && folder.original()?["command"] as? String == "sh line.sh" && folder.wasOn,
+              "status line moved: fix: the path in place, padding and the owner's kept line unchanged")
+
+        for w in ["/Volumes/Flockbook/Flockbook.app/Contents/MacOS/flockbook-statusline",
+                  "/private/var/folders/ab/xyz/T/AppTranslocation/1234/d/Flockbook.app/Contents/MacOS/flockbook-statusline"] {
+            check(ClaudeStatusLineSetting.unstable(wrapper: w), "status line moved: \(w.prefix(30))… is not a lasting place")
+            var threw = false
+            let before = try? Data(contentsOf: file)
+            do { try ClaudeStatusLineSetting.apply(on: true, file: file, command: ClaudeStatusLineSetting.command(wrapper: w, dir: dir.path), folder: folder) }
+            catch { threw = true }
+            check(threw && (try? Data(contentsOf: file)) == before, "status line moved: on from a disk image or a temporary copy is refused")
+        }
+        check(!ClaudeStatusLineSetting.unstable(wrapper: "/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline"),
+              "status line moved: /Applications is a lasting place")
         try? FileManager.default.removeItem(at: home)
     }
 
