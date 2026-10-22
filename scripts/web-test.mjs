@@ -141,6 +141,10 @@ async function page(context) {
     },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
     async scale(dpr, width = 390, height = 844) { await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: true }, sessionId); },
+    /** The page's colour scheme, as the phone's setting would switch it. */
+    async scheme(dark) {
+      await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
+    },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -690,6 +694,13 @@ async function fakeRun() {
   check(dark ? cyan === "rgb(0, 205, 205)" && red !== "rgb(205, 0, 0)" : red === "rgb(205, 0, 0)" && cyan !== "rgb(0, 205, 205)",
     `status line: a part's colour where it reads on the tag, else the tag's text colour (${dark ? "dark" : "light"}: red ${red}, cyan ${cyan})`);
   check(await p.eval(`getComputedStyle(${part("rate limit 5h: 23%")}.firstElementChild).opacity`) === "0.6", "status line: dim text stays dim");
+  // The phone switches light or dark with the line kept (not rebuilt): the parts' colours follow.
+  await p.scheme(!dark);
+  await p.until("false", 200);
+  const red2 = await p.eval(`getComputedStyle(${part("month $212/$300")}.children[1]).color`), cyan2 = await p.eval(`getComputedStyle(${part("⎇ main")}.firstElementChild).color`);
+  check(!dark ? cyan2 === "rgb(0, 205, 205)" && red2 !== "rgb(205, 0, 0)" : red2 === "rgb(205, 0, 0)" && cyan2 !== "rgb(0, 205, 205)",
+    `status line: switched to ${dark ? "light" : "dark"}, the parts' colours follow (red ${red2}, cyan ${cyan2})`);
+  await p.scheme(dark);
   check(await p.eval(`${openTags}.map((t) => t.textContent).join('|')`) === "Opus 5.5|high|ctx 42%|$3.27 est.|⎇ main|turn $0.18|day $11.40/$25|month $212/$300|rate limit 5h: 23%"
     && /^Updated \d/.test(await p.eval("document.querySelector('.status-detail > .status-time')?.textContent ?? ''")),
     `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
