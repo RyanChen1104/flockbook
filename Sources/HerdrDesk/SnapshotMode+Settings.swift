@@ -210,6 +210,10 @@ enum SettingsProbe {
     nonisolated(unsafe) static var back: CGRect = .zero
     /// The page's own tab list (shown only while the sidebar is hidden); zero while not shown.
     nonisolated(unsafe) static var pageList: CGRect = .zero
+    /// The page's title block (icon, title, summary line).
+    nonisolated(unsafe) static var header: CGRect = .zero
+    /// The Tailscale steps shown now, by step number (1...5); empty while the checks are one summary row.
+    nonisolated(unsafe) static var steps: [Int: CGRect] = [:]
 }
 
 extension ChromeTests {
@@ -286,12 +290,20 @@ extension ChromeTests {
 
         // It scrolls: the page is taller than the column (with the remote section, even here); a wheel over it moves it.
         func scrollViews(_ v: NSView) -> [NSScrollView] { ((v as? NSScrollView).map { [$0] } ?? []) + v.subviews.flatMap(scrollViews) }
-        // At the top of the page: the Remote tab's first row starts below the toolbar (the detail column's top, under its
-        // safe area), and the rows' column is centred in the form beside the tab list.
+        // At the top of the page: the Remote tab's title block, then its first row, start just below the toolbar (the
+        // detail column's top, under its safe area). The rows' column keeps to the left, about 40 pt from the tab list, at
+        // most 760 pt wide; each row is one compact line.
         func topCheck(_ tag: String) {
             let row = SettingsProbe.controls[.remoteAccess] ?? .zero, detail = ChromeProbe.detail, content = SettingsProbe.content
-            step("\(tag): first row y \(Int(row.minY)) below the toolbar (\(Int(detail.minY))), column midX \(Int(row.midX)) = form midX \(Int(content.midX))",
-                 row.width > 0 && row.minY >= detail.minY && abs(row.midX - content.midX) <= 2)
+            let head = SettingsProbe.header
+            step("\(tag): title y \(Int(head.minY)) (toolbar \(Int(detail.minY))), first row y \(Int(row.minY)) under it",
+                 head.width > 0 && head.minY >= detail.minY && head.minY - detail.minY <= 40 && head.maxY <= row.minY && row.minY - head.maxY <= 48)
+            step("\(tag): rows from x \(Int(row.minX - content.minX)) of the form (about 40), \(Int(row.width)) pt wide (at most 760), \(Int(row.height)) pt high",
+                 row.width > 0 && abs(row.minX - content.minX - 40) <= 2 && row.width <= 760 && row.height <= 44)
+            let rows: [SettingsControl] = [.devices, .pictures, .phoneNotifications, .tailscaleSteps]
+            let tall = rows.filter { (SettingsProbe.controls[$0]?.height ?? 99) > 44 }
+            step("\(tag): compact rows, the Tailscale checks one row (taller than 44 pt: [\(tall.map(\.rawValue).joined(separator: ","))], steps shown \(SettingsProbe.steps.keys.sorted()))",
+                 tall.isEmpty && SettingsProbe.steps.isEmpty)
         }
         let p = NSPoint(x: content.midX, y: content.midY)
         let hit = host.hitTest(host.convert(NSPoint(x: p.x, y: host.isFlipped ? p.y : host.bounds.height - p.y), to: host.superview))

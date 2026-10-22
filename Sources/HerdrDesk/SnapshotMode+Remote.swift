@@ -121,6 +121,23 @@ extension SnapshotRunner {
             win.orderOut(nil)
         }
 
+        // The Tailscale checks: all five passed -> one row ("All 5 checks passed", Details, Check Again); Details shows
+        // them. Any not passed -> every step shows, those not passed first, with their actions.
+        for (name, hub, details, want) in [("all passed", tsOn, false, [Int]()), ("all passed, Details", tsOn, true, [1, 2, 3, 4, 5]),
+                                           ("setup", tsSetup, false, [3, 4, 5, 1, 2]), ("serve taken", tsTaken, false, [5, 1, 2, 3, 4])] {
+            let host = NSHostingView(rootView: SettingsView(tab: .remote, remote: hub, stepDetails: details))
+            let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+            win.contentView = host
+            win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(700))
+            let order = SettingsProbe.steps.sorted { $0.value.minY < $1.value.minY }.map(\.key)
+            let block = SettingsProbe.controls[.tailscaleSteps] ?? .zero
+            step("checks \(name): steps top to bottom \(order), want \(want); block \(Int(block.height)) pt",
+                 order == want && (want.isEmpty ? block.height > 0 && block.height <= 44 : block.height > 44))
+            win.orderOut(nil); win.contentView = nil
+            SettingsProbe.steps = [:]
+        }
+
         let shots: [(String, AnyView, CGFloat)] = [
             ("settings-off", AnyView(SettingsView(tab: .remote, remote: off)), 520),
             ("settings-on", AnyView(SettingsView(tab: .remote, remote: on)), 520),

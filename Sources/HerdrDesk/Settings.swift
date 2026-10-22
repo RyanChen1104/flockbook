@@ -21,6 +21,8 @@ struct SettingsView: View {
     /// The Settings page: fills its column and scrolls, so a long page (Remote access) never runs off the screen.
     /// Snapshots keep the full height at a fixed width.
     var scrolls = false
+    /// Snapshots only: the Tailscale checks open as after a click on Details.
+    var stepDetails = false
 
     var body: some View {
         Form {

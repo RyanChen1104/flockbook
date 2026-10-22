@@ -57,3 +57,15 @@ public enum SettingsControl: String, CaseIterable, Sendable {
     case remoteAccess, connectWith, tailscaleSteps, address, devices, pictures, phoneNotifications, agentCommand
     case autoUpdate, version
 }
+
+extension SettingsTab {
+    /// One line under the page's title: what the tab is for.
+    public var summary: String { "" }
+}
+
+/// Settings > Remote: the Tailscale checks.
+public enum SetupChecks {
+    public static func collapsed(_ done: [Bool], details: Bool) -> Bool { false }
+    public static func order(_ done: [Bool]) -> [Int] { [] }
+    public static func summary(_ done: [Bool]) -> String { "" }
+}
