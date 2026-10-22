@@ -27,7 +27,7 @@ extension SnapshotRunner {
         /// Shows `view` in an offscreen window, saves the composed still to `path` (when given), and returns its size
         /// and whether it drew; the window stays up for `inspect`, which reads the probes.
         func shoot(_ view: some View, glass: WindowGlass = .full, reduce: Bool = false, dark: Bool, to path: String?,
-                   inspect: (NSWindow) async -> Void = { _ in }) async -> (size: NSSize, ink: Double, bytes: Int) {
+                   inspect: (NSWindow) async -> Void = { _ in }) async -> (size: NSSize, ink: Double, formInk: Double, bytes: Int) {
             AppDefaults.store.set(glass.rawValue, forKey: WindowGlass.key)
             // In the app the page sits on the main window's surface (WindowSurface); here its blur is the blurred wallpaper
             // below (offscreen the material view paints solid), so only its tint goes here.
@@ -49,7 +49,7 @@ extension SnapshotRunner {
             if bar > 0 { win.setContentSize(NSSize(width: size.width, height: size.height + bar)) }
             win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
             try? await Task.sleep(for: .milliseconds(900))
-            var ink = 1.0, bytes = 0
+            var ink = 1.0, formInk = 1.0, bytes = 0
             if let path {
                 // The window's own capture must show content: a blank one (no screen-capture permission) is a FAIL,
                 // not a wallpaper-only PASS.
@@ -61,11 +61,16 @@ extension SnapshotRunner {
                     ink = compose(win, over: wallpaper(win.frame.size, dark: dark), blur: surface != .off, to: path)
                 }
                 bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+                // The form alone (the tab list and the window chrome draw without it).
+                formInk = windowImage(win).flatMap { img in
+                    let scale = CGFloat(img.width) / win.frame.width, f = SettingsProbe.content
+                    return img.cropping(to: CGRect(x: f.minX * scale, y: f.minY * scale, width: f.width * scale, height: f.height * scale))
+                }.map { Pixels($0).ink } ?? 0
             }
             await inspect(win)
             win.orderOut(nil); win.contentView = nil
             try? await Task.sleep(for: .milliseconds(100))
-            return (size, ink, bytes)
+            return (size, ink, formInk, bytes)
         }
         func shown() -> Set<SettingsControl> { Set(SettingsProbe.controls.filter { $0.value.width > 0 }.keys) }
         func names(_ s: Set<SettingsControl>) -> String { s.map(\.rawValue).sorted().joined(separator: ",") }
@@ -83,8 +88,8 @@ extension SnapshotRunner {
             }
         }
 
-        // One still per tab; each tab shows its own controls and no other tab's. Updates has one row and line symbols only:
-        // about 1% ink, so the floor here is lower than the full window's.
+        // One still per tab; each tab shows its own controls and no other tab's. The form's own ink: the tab list and the
+        // window chrome draw even when the form does not.
         var seen: Set<SettingsControl> = []
         for tab in SettingsTab.allCases {
             for dark in [false, true] {
@@ -95,8 +100,8 @@ extension SnapshotRunner {
                     selected = SettingsTab.allCases.filter { SettingsProbe.tabs[$0].map { $0.width > 0 } ?? false }
                 }
                 seen.formUnion(here)
-                step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): \(Int(r.size.width))x\(Int(r.size.height)) pt, \(r.bytes / 1024) KB, \(String(format: "%.1f", r.ink * 100))% ink",
-                     r.ink > 0.008 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 1500)
+                step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): \(Int(r.size.width))x\(Int(r.size.height)) pt, \(r.bytes / 1024) KB, \(String(format: "%.1f", r.ink * 100))% ink, form \(String(format: "%.2f", r.formInk * 100))%",
+                     r.formInk > 0.01 && r.bytes > 5_000 && abs(r.size.width - width) < 4 && r.size.height >= 420 && r.size.height < 1500)
                 step("tab \(tab.rawValue)-\(dark ? "dark" : "light"): shows [\(names(here))], all in the tab, list of \(selected.count) tabs",
                      !here.isEmpty && here.isSubset(of: Set(tab.controls)) && selected == SettingsTab.allCases)
             }
@@ -140,6 +145,12 @@ extension SnapshotRunner {
     /// The stand-in wallpaper (blurred like the behind-window material when the window is see-through), then the window's
     /// own pixels over it. The capture is of this one window only.
     /// Returns the share of the window capture that is not background (0 = blank capture).
+    /// The capture of this one window (nil without screen-capture permission).
+    @MainActor static func windowImage(_ win: NSWindow) -> CGImage? {
+        typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil }
+        return unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue()
+    }
     @discardableResult
     @MainActor private static func compose(_ win: NSWindow, over paper: NSImage, blur: Bool, to path: String) -> Double {
         typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
@@ -216,8 +227,9 @@ extension ChromeTests {
         model.remote = RemoteHub.preview(running: true, devices: [(HubDevice(id: "d1", name: "Phone", level: .input), Date(timeIntervalSince1970: 1_790_000_000))],
                                          offer: false, tailscale: ts, serve: .ours, mode: .tailscale)
         let size = NSSize(width: 1200, height: 600)
-        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
-        host.frame = NSRect(origin: .zero, size: size)
+        // The window's size, not a fixed frame: the reading-place checks make it short for a while.
+        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(maxWidth: .infinity, maxHeight: .infinity))
+        host.frame = NSRect(origin: .zero, size: size); host.autoresizingMask = [.width, .height]
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         // Light stills light even on a Mac set to dark.
@@ -335,14 +347,36 @@ extension ChromeTests {
              AppDefaults.store.string(forKey: SettingsTab.key) == SettingsTab.agents.rawValue && SettingsProbe.controls[.allowInput] != nil)
 
         // Back, Esc and ⌘, again: the screen, workspace and tab from before, unchanged.
-        model.screen = .tab
+        model.screen = .tab; try? await Task.sleep(for: .milliseconds(800))
         let ws = model.workspaceID, tab = model.tabID
+        // The reading place and the typing focus too: the conversation scrolled up from the bottom, the composer focused.
+        // Back must show that same conversation view (not a new one at the bottom) and the same composer, still focused.
+        // A short window, so the preview conversation can scroll.
+        win.setContentSize(NSSize(width: size.width, height: 280)); try? await Task.sleep(for: .milliseconds(800))
+        func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
+        let root = win.contentView?.superview ?? host
+        let conversation = views(root, NSScrollView.self)
+            .filter { ($0.documentView?.frame.height ?? 0) + $0.contentInsets.top + $0.contentInsets.bottom - $0.bounds.height > 60 && $0.frame.width > 400 }
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+        let composer = views(root, ComposerTextView.SubmitTextView.self).first
+        if let sv = conversation {
+            sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: sv.contentView.bounds.minY - 50)); sv.reflectScrolledClipView(sv.contentView)
+        }
+        if let composer { win.makeFirstResponder(composer) }
+        try? await Task.sleep(for: .milliseconds(400))
+        let readAt = conversation?.contentView.bounds.minY ?? .nan
+        step("a conversation to scroll (\(conversation.map { "\(Int($0.documentView?.frame.height ?? 0)) pt doc, at \(Int(readAt))" } ?? "none")) and a focused composer (\(win.firstResponder === composer))",
+             conversation != nil && composer != nil && win.firstResponder === composer)
         func same(_ how: String) {
             step("\(how) returns to the tab screen as it was (\(model.screen), \(model.workspaceID ?? "nil")/\(model.tabID ?? "nil")), the sidebar's rows again, the tab row again (\(TabProbe.rowsShown))",
                  model.screen == .tab && model.workspaceID == ws && model.tabID == tab && ChromeProbe.rowsShown["Overview"] == true && TabProbe.rowsShown > 0 && SettingsProbe.page == .zero)
+            let at = conversation?.contentView.bounds.minY ?? .nan
+            step("\(how): the same conversation view, in the window (\(conversation?.window != nil)), still at \(Int(readAt)) (\(at.isNaN ? "none" : "\(Int(at))")), the same composer focused (\(win.firstResponder === composer))",
+                 conversation?.window != nil && abs(at - readAt) < 2 && composer?.window != nil && win.firstResponder === composer)
         }
         model.showSettings(); try? await Task.sleep(for: .milliseconds(600))
         step("⌘, opens the page from the tab screen (\(model.screen))", model.screen == .settings && SettingsProbe.page.width > 0)
+        step("while Settings shows, keys do not go to the composer (first responder \(win.firstResponder.map { "\(type(of: $0))" } ?? "nil"))", win.firstResponder !== composer)
         await click(SettingsProbe.back)
         same("Back")
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
@@ -354,6 +388,7 @@ extension ChromeTests {
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(400))
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
         same("⌘, again")
+        win.setContentSize(size); try? await Task.sleep(for: .milliseconds(600))
         // From another screen: back to that screen.
         model.screen = .overview
         model.showSettings(); try? await Task.sleep(for: .milliseconds(400))
