@@ -351,6 +351,15 @@ extension ContentTests {
         await digit(bwin, 1); await returnKey(bwin)
         step("came under Settings, after Back: 1 and Return answer (\(backSent.map { "\($0.map(\.picks))" } ?? "nothing"))", backSent == [QuestionAnswer(picks: [0])])
         bwin.orderOut(nil)
+        // A send held back under the page (the screen's answer gate) is not "Sent": the card says so and keeps the picks.
+        var reports: [String] = []
+        QuestionProbe.report = { if case .sent = $0 { reports.append("sent") } else if case .failed(let why) = $0 { reports.append(why) } }
+        let (hwin, _) = window(scene(items(single("q-held")), canSend: true, onSend: { _ in throw QuestionCard.HeldUnderSettings() }), NSSize(width: 1200, height: 760))
+        try? await Task.sleep(for: .seconds(1.2))
+        await digit(hwin, 1); await returnKey(hwin)
+        QuestionProbe.report = nil
+        step("a send held under Settings is not Sent (\(reports))", reports.count == 1 && reports[0].hasPrefix("Not sent while Settings"))
+        hwin.orderOut(nil)
 
         // Answered and declined rows in the transcript; the composer is back.
         var multiAnswered = three(); multiAnswered.toolUseId = "q-three-ans"

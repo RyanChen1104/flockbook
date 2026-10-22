@@ -25,4 +25,18 @@ func checksSettingsTabs() async throws {
     check(SettingsTab(stored: nil) == .general, "settings tabs: nothing stored opens General")
     check(SettingsTab(stored: "") == .general && SettingsTab(stored: "Remote") == .general && SettingsTab(stored: "privacy") == .general,
           "settings tabs: an unknown stored value opens General")
+
+    // Each page opens with its icon, its title and one line on what it is for.
+    check(SettingsTab.allCases.allSatisfy { !$0.summary.isEmpty && !$0.summary.contains("\n") && $0.summary.count <= 60 && $0.summary.hasSuffix(".") },
+          "settings tabs: each has a one-line summary (\(SettingsTab.allCases.map(\.summary)))")
+    check(SettingsTab.remote.summary == "Use your agents from your phone.", "settings tabs: Remote's summary")
+
+    // The Tailscale checks: all passed -> one row until Details; any not passed -> every step, those not passed first.
+    let all = [true, true, true, true, true], some = [true, true, false, false, true]
+    check(SetupChecks.collapsed(all, details: false), "setup checks: all passed -> one summary row")
+    check(!SetupChecks.collapsed(all, details: true), "setup checks: all passed, Details -> every step")
+    check(!SetupChecks.collapsed(some, details: false) && !SetupChecks.collapsed(some, details: true), "setup checks: one not passed -> every step, Details or not")
+    check(SetupChecks.order(some) == [2, 3, 0, 1, 4], "setup checks: not passed first, each part in its own order (\(SetupChecks.order(some)))")
+    check(SetupChecks.order(all) == [0, 1, 2, 3, 4] && SetupChecks.order([false, false]) == [0, 1], "setup checks: all alike -> the steps' own order")
+    check(SetupChecks.summary(all) == "All 5 checks passed" && SetupChecks.summary(some) == "3 of 5 checks passed", "setup checks: the summary line (\(SetupChecks.summary(some)))")
 }

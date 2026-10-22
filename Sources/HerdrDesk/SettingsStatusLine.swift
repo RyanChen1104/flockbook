@@ -9,15 +9,28 @@ struct StatusLineRow: View {
     @State private var sheet = false
 
     var body: some View {
-        Toggle(isOn: Binding(get: { setup.state == .on || setup.state == .moved }, set: { _ in sheet = true })) {
-            Text("Show Claude Code status line")
-            Text(note).foregroundStyle(isProblem ? AnyShapeStyle(.red) : setup.state == .replaced || setup.state == .moved ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-            if setup.state == .moved {
-                Button("Fix…") { sheet = true }.controlSize(.small)
+        SettingsGroup("Status line", note: note, noteColor: isProblem ? .red : setup.state == .replaced || setup.state == .moved ? .orange : nil) {
+            SettingsRow("Show Claude Code status line", value: value, valueColor: isProblem ? .red : nil) {
+                if setup.state == .moved {
+                    Button("Fix…") { sheet = true }
+                }
+                Toggle("Show Claude Code status line", isOn: Binding(get: { setup.state == .on || setup.state == .moved }, set: { _ in sheet = true }))
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
+            .settingsControl(.statusLine)
         }
         .sheet(isPresented: $sheet) { StatusLineSheet(setup: setup) }
         .onAppear { setup.refresh() }
+    }
+
+    private var value: String {
+        switch setup.state {
+        case .off: "Off"
+        case .on: "On"
+        case .replaced: "Changed"
+        case .moved: "Needs fixing"
+        case .problem: "Problem"
+        }
     }
 
     private var isProblem: Bool { if case .problem = setup.state { true } else { false } }

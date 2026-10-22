@@ -242,7 +242,8 @@ extension PaneView {
     }
 
     private func answer(_ q: QuestionRequest, _ answers: [QuestionAnswer]) async throws {
-        guard Self.canAnswer(q, writes: model.writesEnabled), !model.coveredBySettings else { return }
+        guard Self.canAnswer(q, writes: model.writesEnabled) else { return }
+        guard !model.coveredBySettings else { throw QuestionCard.HeldUnderSettings() }   // not "Sent": nothing went
         let request = screenQuestion?.toolUseId == q.toolUseId ? screenQuestion ?? q : q   // the fully read one
         do {
             try await model.store.client.answerQuestion(paneId: pane.id, request: request, answers: answers)
