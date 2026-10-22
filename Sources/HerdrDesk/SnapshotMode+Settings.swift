@@ -2,6 +2,7 @@ import AppKit
 import CoreImage
 import HerdrKit
 import SwiftUI
+import SwiftTerm
 
 /// Settings (the tab list and a tab's form) in a window of its own, offscreen, in every look it must survive:
 ///   .build/debug/HerdrDesk --snapshot-settings <dir>
@@ -220,7 +221,7 @@ extension ChromeTests {
     static func runSettingsPageTest() async {
         let dir = "build/snapshots-settings-page"
         AppDefaults.store.set(SettingsTab.remote.rawValue, forKey: SettingsTab.key)
-        let model = AppModel(store: .preview)
+        let model = AppModel(store: .previewWithSessions)   // session ids: which logs count as on screen
         // Tailscale on: the long Remote tab, taller than the column.
         let ts = TailscaleSetup.Status(signedIn: true, backendState: "Running", dnsName: "mac.example.ts.net", magicDNS: true, certificates: true,
                                        peers: [TailscaleSetup.Peer(name: "Phone", os: "iOS", online: true)])
@@ -351,9 +352,10 @@ extension ChromeTests {
         let ws = model.workspaceID, tab = model.tabID
         // The reading place and the typing focus too: the conversation scrolled up from the bottom, the composer focused.
         // Back must show that same conversation view (not a new one at the bottom) and the same composer, still focused.
-        // A short window, so the preview conversation can scroll; not below the height Settings needs (464), or opening it
-        // grows the window and the conversation lays out again.
-        win.setContentSize(NSSize(width: size.width, height: 470)); try? await Task.sleep(for: .milliseconds(1000))
+        // The app's smallest window (960 x 600) with the largest, narrowest text, so the preview conversation can scroll.
+        AppDefaults.store.set(ReadingSize.xl.rawValue, forKey: ReadingSize.key)
+        AppDefaults.store.set(ReadingWidth.narrow.rawValue, forKey: ReadingWidth.key)
+        win.setContentSize(NSSize(width: 960, height: 600)); try? await Task.sleep(for: .milliseconds(1200))
         func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
         let root = win.contentView?.superview ?? host
         let conversation = views(root, NSScrollView.self)
@@ -375,9 +377,27 @@ extension ChromeTests {
             step("\(how): the same conversation view, in the window (\(conversation?.window != nil)), still at \(Int(readAt)) (\(at.isNaN ? "none" : "\(Int(at))")), the same composer focused (\(win.firstResponder === composer))",
                  conversation?.window != nil && abs(at - readAt) < 2 && composer?.window != nil && win.firstResponder === composer)
         }
+        // The logs on screen stay on screen under Settings: they keep their full depth (and the older messages read).
+        let onScreen = model.store.visibleSessions ?? []
         model.showSettings(); try? await Task.sleep(for: .milliseconds(600))
         step("⌘, opens the page from the tab screen (\(model.screen))", model.screen == .settings && SettingsProbe.page.width > 0)
-        step("while Settings shows, keys do not go to the composer (first responder \(win.firstResponder.map { "\(type(of: $0))" } ?? "nil"))", win.firstResponder !== composer)
+        step("the tab's logs still count as on screen under Settings (\(onScreen.sorted()) -> \((model.store.visibleSessions ?? []).sorted()))",
+             !onScreen.isEmpty && model.store.visibleSessions == onScreen)
+        // Keys while Settings shows go to Settings: the hidden screen cannot take them back, by a focus call (a fresh
+        // session focuses its composer, a focused pane its terminal) or by the Tab key.
+        func typing(_ r: NSResponder?) -> Bool { r is NSText || r is TerminalView }
+        func name(_ r: NSResponder?) -> String { r.map { "\(type(of: $0))" } ?? "nil" }
+        step("while Settings shows, keys do not go to the composer (first responder \(name(win.firstResponder)))", !typing(win.firstResponder))
+        if let composer { win.makeFirstResponder(composer) }
+        try? await Task.sleep(for: .milliseconds(300))
+        step("a focus call on the hidden composer does not take the keys (\(name(win.firstResponder)))", composer != nil && !typing(win.firstResponder))
+        let terminal = views(root, TerminalView.self).first
+        if let terminal { win.makeFirstResponder(terminal) }
+        try? await Task.sleep(for: .milliseconds(300))
+        step("a focus call on the hidden terminal does not take the keys (\(terminal.map { "\(type(of: $0))" } ?? "no terminal"): \(name(win.firstResponder)))", terminal != nil && !typing(win.firstResponder))
+        for _ in 0..<4 { win.selectNextKeyView(nil) }
+        try? await Task.sleep(for: .milliseconds(300))
+        step("Tab does not reach the hidden screen (\(name(win.firstResponder)))", !typing(win.firstResponder))
         await click(SettingsProbe.back)
         same("Back")
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
@@ -389,6 +409,7 @@ extension ChromeTests {
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(400))
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
         same("⌘, again")
+        AppDefaults.store.removeObject(forKey: ReadingSize.key); AppDefaults.store.removeObject(forKey: ReadingWidth.key)
         win.setContentSize(size); try? await Task.sleep(for: .milliseconds(600))
         // From another screen: back to that screen.
         model.screen = .overview
