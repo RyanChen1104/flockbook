@@ -17,6 +17,7 @@ struct SettingsView: View {
     private var reduce: Bool { reduceTransparency ?? systemReduce }
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
+    @AppStorage(TerminalColors.key, store: AppDefaults.store) private var terminalColors = TerminalColors.flockbook.rawValue
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
@@ -98,6 +99,22 @@ struct SettingsView: View {
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
             }
             .settingsControl(.readingWidth)
+        }
+        let colors = TerminalColors(rawValue: terminalColors) ?? .flockbook, themes = TerminalThemes.shared
+        // The theme in use, or why not, goes in the line under the group: a reason does not fit in the row.
+        let problem = themes.problem(colors), value = problem ?? themes.names(colors)
+        let note = problem ?? themes.names(colors).map { "Ghostty theme: \($0). Reload after you change it in Ghostty." }
+            ?? "Ghostty theme: your Ghostty config's theme, its own background too."
+        SettingsGroup("Terminal", note: note, noteColor: problem == nil ? nil : .orange) {
+            SettingsRow("Colors") {
+                if colors == .ghostty { Button("Reload") { themes.reload() }.controlSize(.small) }
+                Picker("Colors", selection: $terminalColors) {
+                    ForEach(TerminalColors.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            .settingsControl(.terminalColors)
+            .onChange(of: value, initial: true) { _, v in SettingsProbe.terminalColors = v }
         }
     }
 

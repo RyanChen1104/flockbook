@@ -51,6 +51,13 @@ enum TerminalColors: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The theme's names for Settings: one name, or the light and the dark one. Nil: not read, or not usable.
+    func names(_ mode: TerminalColors) -> String? {
+        _ = generation
+        guard mode == .ghostty, case .success(let t) = loaded else { return nil }
+        return t.light.name == t.dark.name ? t.light.name : "\(t.light.name) (light), \(t.dark.name) (dark)"
+    }
+
     /// Ghostty.app's resources folder, wherever the app is installed. Nil: no Ghostty.app.
     nonisolated static func ghosttyResources() -> String? {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty")?
