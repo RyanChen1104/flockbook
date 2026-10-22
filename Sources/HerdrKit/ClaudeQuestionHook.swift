@@ -229,6 +229,15 @@ public enum ClaudeSettingsHook {
     /// Backups kept next to the settings file (the newest).
     public static let keptBackups = 5
 
+    /// Removes all but the newest `keptBackups` of `file`'s backups (by the time in their names); `keeping` stays.
+    static func pruneBackups(of file: URL, keeping: URL) {
+        let fm = FileManager.default, dir = file.deletingLastPathComponent()
+        let prefix = file.lastPathComponent + ".flockbook-"
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+        let baks = names.filter { $0.hasPrefix(prefix) && $0.hasSuffix(".bak") && $0 != keeping.lastPathComponent }.sorted()
+        for n in baks.dropLast(max(keptBackups - 1, 0)) { try? fm.removeItem(at: dir.appendingPathComponent(n)) }
+    }
+
     @discardableResult
     static func rewrite(file: URL, now: Date = Date(), beforeWrite: (() throws -> Void)? = nil,
                         _ change: ([String: Any]) throws -> [String: Any]?) throws -> URL? {
@@ -259,6 +268,7 @@ public enum ClaudeSettingsHook {
             try original.write(to: b, options: .withoutOverwriting)
             try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: b.path)
             backup = b
+            pruneBackups(of: file, keeping: b)
         } else {
             try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         }

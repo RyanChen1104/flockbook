@@ -69,8 +69,8 @@ const state = {
   revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
-  /** Claude Code's status line is open: every tag, the owner's lines and when it was updated. */
-  statusOpen: false,
+  /** Panes whose Claude Code status line is open: every tag and when it was updated. */
+  statusOpen: new Set<string>(),
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -1059,9 +1059,9 @@ function statusLineView(pane: string): HTMLElement | null {
   const s = view(pane).statusLine;
   const tags = s ? statusTags(s) : [];
   if (!s || !tags.length) return null;
-  const open = state.statusOpen;
+  const open = state.statusOpen.has(pane);
   const more = h("button", { class: "status-more", type: "button", "aria-expanded": open ? "true" : "false",
-    "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { state.statusOpen = !state.statusOpen; render(); } },
+    "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { if (open) state.statusOpen.delete(pane); else state.statusOpen.add(pane); render(); } },
     h("span", { class: `chev${open ? " up" : ""}`, "aria-hidden": "true" }));
   // Open, the row wraps and holds every tag.
   const row = h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags);

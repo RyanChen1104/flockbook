@@ -86,6 +86,10 @@ public enum ANSIText {
         }
     }
 
+    /// Marks that change the text's direction or take no width (they could make what is shown read differently).
+    /// The joiner (U+200D) stays: emoji sequences need it.
+    static let hidden = Set<UInt32>([0x061C, 0x200B, 0x200E, 0x200F, 0x2060, 0xFEFF]).union(0x202A...0x202E).union(0x2066...0x2069)
+
     public static func lines(_ text: String) -> [[StyledRun]] {
         var out: [[StyledRun]] = []
         var line: [StyledRun] = []
@@ -138,6 +142,7 @@ public enum ANSIText {
             case "\n": endLine()
             case "\t": buf.unicodeScalars.append(" ")
             case _ where c.value < 0x20 || (0x7F...0x9F).contains(c.value): break
+            case _ where hidden.contains(c.value): break
             default: buf.unicodeScalars.append(c)
             }
         }
@@ -220,7 +225,9 @@ public struct ClaudeStatusInfo: Codable, Hashable, Sendable {
         effort = ((o["effort"] as? [String: Any])?["level"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         costUSD = ((o["cost"] as? [String: Any])?["total_cost_usd"] as? NSNumber)?.doubleValue
         let ctx = o["context_window"] as? [String: Any]
-        contextPercent = (ctx?["used_percentage"] as? NSNumber).map { Int($0.doubleValue.rounded()) }
+        contextPercent = (ctx?["used_percentage"] as? NSNumber).flatMap { n in
+            n.doubleValue.isFinite ? Int(min(max(n.doubleValue, 0), 100).rounded()) : nil
+        }
         contextSize = (ctx?["context_window_size"] as? NSNumber)?.intValue
     }
 
@@ -532,7 +539,20 @@ public enum StatusLineWrapper {
     }
 
     /// Writes the output to `fd`; false when it could not all be written.
-    public static func emit(_ data: Data, to fd: Int32 = 1) -> Bool { false }
+    /// Claude Code may stop reading first: no SIGPIPE, no exception, the rest is dropped.
+    public static func emit(_ data: Data, to fd: Int32 = 1) -> Bool {
+        signal(SIGPIPE, SIG_IGN)
+        return data.withUnsafeBytes { raw in
+            var off = 0
+            while off < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress! + off, raw.count - off)
+                if n < 0, errno == EINTR { continue }
+                if n <= 0 { return false }
+                off += n
+            }
+            return true
+        }
+    }
 
     /// Claude Code stops a run that a newer one replaces: SIGTERM, SIGINT and SIGHUP stop the owner's command too.
     public static func installSignalHandlers() {
@@ -573,10 +593,16 @@ public enum StatusLineWrapper {
         let args = ["/bin/sh", "-c", cmd]
         let env = environment.map { "\($0.key)=\($0.value)" }
         var pid: pid_t = 0
+        // A stop between the spawn and `running` would leave the command behind: the stop waits until it is set.
+        var stops = sigset_t(), was = sigset_t()
+        sigemptyset(&stops)
+        for s in [SIGTERM, SIGINT, SIGHUP] { sigaddset(&stops, s) }
+        sigprocmask(SIG_BLOCK, &stops, &was)
         let rc = withCStrings(args) { argv in withCStrings(env) { envp in posix_spawn(&pid, "/bin/sh", &actions, &attr, argv, envp) } }
+        if rc == 0 { running = pid }
+        sigprocmask(SIG_SETMASK, &was, nil)
         close(inPipe[0]); close(outPipe[1])
         guard rc == 0 else { close(inPipe[1]); close(outPipe[0]); return Result(output: Data(), status: 127) }
-        running = pid
 
         // The input goes in from another thread: a command that does not read it must not block us.
         let writer = inPipe[1]
@@ -607,7 +633,16 @@ public enum StatusLineWrapper {
             let r = poll(&fds, 1, Int32(wait * 1000) + 1)
             if r > 0 {
                 let n = read(outPipe[0], &buf, buf.count)
-                if n <= 0 { break }
+                if n <= 0 {
+                    // Its output closed: it still gets the time left to exit, no more.
+                    var st: Int32 = 0
+                    while !exited {
+                        if waitpid(pid, &st, WNOHANG) == pid { exited = true; status = st; break }
+                        if deadline.timeIntervalSinceNow <= 0 { timedOut = true; break }
+                        usleep(10_000)
+                    }
+                    break
+                }
                 if out.count < maxOutput { out.append(contentsOf: buf[0..<min(n, maxOutput - out.count)]) }
                 continue
             }
@@ -712,7 +747,13 @@ public enum ClaudeStatusLineSetting {
     public static func disabling(_ settings: [String: Any], command: String, original: [String: Any]?) -> [String: Any] {
         guard isOurs(settings["statusLine"], command: command) || isMoved(settings["statusLine"], command: command) else { return settings }
         var s = settings
-        s["statusLine"] = original
+        // Keys changed in ours while on (padding, refreshInterval) stay in the owner's line.
+        if var back = original, let now = settings["statusLine"] as? [String: Any] {
+            for (k, v) in now where k != "type" && k != "command" { back[k] = v }
+            s["statusLine"] = back
+        } else {
+            s["statusLine"] = original
+        }
         return s
     }
 
@@ -768,6 +809,7 @@ public enum ClaudeStatusLineSetting {
             return disabling(old, command: command, original: original)
         }
         folder.forgetOriginal()
+        folder.clean()
         return backup
     }
 }

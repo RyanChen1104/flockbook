@@ -19,5 +19,5 @@ guard let i = args.firstIndex(of: "--dir"), args.indices.contains(i + 1), !args[
 StatusLineWrapper.installSignalHandlers()
 let input = FileHandle.standardInput.readDataToEndOfFile()
 let r = StatusLineWrapper.run(input: input, dir: URL(fileURLWithPath: args[i + 1], isDirectory: true))
-FileHandle.standardOutput.write(r.output)
+_ = StatusLineWrapper.emit(r.output)
 exit(r.status)

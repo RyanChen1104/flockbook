@@ -56,7 +56,15 @@ import Observation
             if now != state { state = now }
         } catch { state = .problem("\(error)") }
         checked = Date()
+        if checked.timeIntervalSince(cleaned) > 24 * 3600 {
+            // Old records go once a day, the first time at start.
+            cleaned = checked
+            let f = folder
+            Task.detached(priority: .utility) { f.clean() }
+        }
     }
+
+    @ObservationIgnored private var cleaned = Date.distantPast
 
     @ObservationIgnored private var checked = Date.distantPast
     /// `refresh` at most every few seconds: the panes ask on each read, and `/statusline` may change the file any time.
@@ -81,7 +89,7 @@ import Observation
     func turnOff() {
         guard previewState == nil else { return }
         do {
-            if state == .replaced { folder.forgetOriginal() }   // theirs is in already; only our note goes
+            if state == .replaced { folder.forgetOriginal(); folder.clean() }   // theirs is in already; only our note goes
             else { lastBackup = try ClaudeStatusLineSetting.apply(on: false, file: settingsFile, command: command, folder: folder) ?? lastBackup }
             refresh()
         } catch { state = .problem("\(error)") }

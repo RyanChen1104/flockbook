@@ -406,8 +406,9 @@ import Foundation
               && ClaudeStatusLineSetting.state(["statusLine": ["type": "command", "command": other]], command: ours, wasOn: true) == .replaced,
               "status line moved: an older copy's command is 'moved'; another folder's is not ours")
         let theirs: [String: Any] = ["type": "command", "command": "sh line.sh"]
-        check(NSDictionary(dictionary: ClaudeStatusLineSetting.disabling(movedSettings, command: ours, original: theirs)).isEqual(to: ["statusLine": theirs]),
-              "status line moved: off puts the owner's line back")
+        check(NSDictionary(dictionary: ClaudeStatusLineSetting.disabling(movedSettings, command: ours, original: theirs))
+                .isEqual(to: ["statusLine": theirs.merging(["padding": 3]) { $1 }]),
+              "status line moved: off puts the owner's line back (with the padding set while on)")
         let e = try ClaudeStatusLineSetting.enabling(movedSettings, command: ours)
         check(e.original == nil && (e.settings["statusLine"] as? [String: Any])?["command"] as? String == ours,
               "status line moved: on never keeps an older copy's command as the owner's")

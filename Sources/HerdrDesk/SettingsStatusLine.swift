@@ -40,6 +40,8 @@ struct StatusLineSheet: View {
 
     var body: some View {
         let moved = setup.state == .moved
+        // Replaced (or the file unreadable): Stop is the way out; nothing of ours may be in the file.
+        let stop = setup.state == .replaced || { if case .problem = setup.state { true } else { false } }()
         let on = setup.state == .on || moved
         let tilde = ClaudeHookSheet.tilde
         VStack(alignment: .leading, spacing: 12) {
@@ -58,7 +60,11 @@ struct StatusLineSheet: View {
                           systemImage: "square.stack.3d.up")
                     Label("If you set another status line later (/statusline), Settings asks you to switch this on again.", systemImage: "arrow.triangle.2.circlepath")
                 }
-                Label("A copy of the file is kept next to it before any change.", systemImage: "doc.on.doc")
+                if !on {
+                    Label("Your status line's text is also sent to your paired phones while this is on.", systemImage: "iphone")
+                }
+                Label("A copy of the file is kept next to it before any change (the newest \(ClaudeSettingsHook.keptBackups)). The settings keep their content; their formatting and key order may change.",
+                      systemImage: "doc.on.doc")
             }
             .font(.callout).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -74,6 +80,9 @@ struct StatusLineSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                if stop {
+                    Button("Stop") { setup.turnOff(); dismiss() }
+                }
                 if moved {
                     Button("Turn Off") { setup.turnOff(); dismiss() }
                     Button("Fix") { setup.turnOn(); dismiss() }.keyboardShortcut(.defaultAction)
