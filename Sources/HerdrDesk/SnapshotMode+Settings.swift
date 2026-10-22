@@ -229,7 +229,7 @@ extension ChromeTests {
                                          offer: false, tailscale: ts, serve: .ours, mode: .tailscale)
         let size = NSSize(width: 1200, height: 600)
         // The window's size, not a fixed frame: the reading-place checks make it short for a while.
-        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(maxWidth: .infinity, maxHeight: .infinity))
+        let host = NSHostingView(rootView: RootView(flat: false).environment(model).shortcutsPanelHost().frame(maxWidth: .infinity, maxHeight: .infinity))
         host.frame = NSRect(origin: .zero, size: size); host.autoresizingMask = [.width, .height]
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
@@ -398,6 +398,16 @@ extension ChromeTests {
         for _ in 0..<4 { win.selectNextKeyView(nil) }
         try? await Task.sleep(for: .milliseconds(300))
         step("Tab does not reach the hidden screen (\(name(win.firstResponder)))", !typing(win.firstResponder))
+        // Only the hidden screen loses the keys: a field over Settings (the ⌘/ panel's search) keeps them.
+        ShortcutsPanel.open(); try? await Task.sleep(for: .seconds(1))
+        let search = views(root, NSSearchField.self).first
+        let editor = win.firstResponder as? NSTextView
+        step("⌘/ over Settings: its search field has the keys (\(search == nil ? "no field" : name(win.firstResponder)))",
+             search != nil && editor != nil && search?.currentEditor() === editor)
+        editor?.insertText("split", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try? await Task.sleep(for: .milliseconds(300))
+        step("⌘/ over Settings: typing goes into its search field (\"\(ShortcutsPanel.state.query)\")", ShortcutsPanel.state.query == "split")
+        ShortcutsPanel.close(); try? await Task.sleep(for: .milliseconds(600))
         await click(SettingsProbe.back)
         same("Back")
         model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
