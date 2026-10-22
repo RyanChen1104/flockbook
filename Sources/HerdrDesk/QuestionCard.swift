@@ -151,8 +151,12 @@ struct QuestionCard: View {
     }
 
     /// Words for a failed send or read. Nothing was typed for `.notOnScreen` and `.unsupported`.
+    /// The answer was held back: the Settings page covered the card when it was to be sent.
+    struct HeldUnderSettings: Error {}
+
     static func problemText(_ error: Error) -> String {
-        switch error as? QuestionAdapter.Failure {
+        if error is HeldUnderSettings { return "Not sent while Settings was open. Press Return to send." }
+        return switch error as? QuestionAdapter.Failure {
         case .notOnScreen?: "The question is no longer on screen. Nothing was sent."
         case .unsupported(let why)?: "Desk cannot send this answer (\(why)). Nothing was sent. Answer in the terminal."
         case .stuck?: "The terminal did not move on as expected. Check it before you try again."

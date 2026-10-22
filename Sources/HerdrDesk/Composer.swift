@@ -205,7 +205,7 @@ struct ComposerView: View {
                 }
                 ComposerTextView(text: $text, height: $height, composing: $composing, pasteboard: pasteboard,
                                  onPasteImages: { images.append(contentsOf: $0) },
-                                 onSubmit: { send() }, canSubmit: !readOnly, handle: handle)
+                                 onSubmit: { send() }, canSubmit: !readOnly && !underSettings, handle: handle)
                     .frame(height: height)
             }
             if let sendError {
