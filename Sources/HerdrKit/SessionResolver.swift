@@ -1,5 +1,12 @@
 import Foundation
 
+/// A Claude pane whose herdr session is not shown: `teammate` is herdr's session, `lead` the log shown instead.
+public struct LeadSwap: Sendable, Hashable {
+    public var teammate: String
+    public var lead: String?
+    public init(teammate: String, lead: String?) { self.teammate = teammate; self.lead = lead }
+}
+
 /// Finds the log of an agent pane that herdr reports without `agent_session` (seen with Codex on herdr 0.9.1).
 /// Read-only: one `ps`, one `lsof`, and the first line of candidate logs. It never sends anything to a pane.
 ///
@@ -30,14 +37,161 @@ public actor SessionResolver {
     private var cache: [String: Entry] = [:]
     private let socketPath: String
     private let codexDir: String
+    private let projectsDir: String
+    /// The most bytes read of one log to judge it.
+    private let verdictCap: Int
+    /// How many times a log was read to judge it.
+    public private(set) var verdictReads = 0
     /// Unresolved panes are tried again after this; resolved ones are re-checked (pid still the same) after `recheck`.
     private let retry: TimeInterval
     private let recheck: TimeInterval
 
     public init(socketPath: String, codexDir: String = SessionLog.defaultDir(agent: "codex"),
-                retry: TimeInterval = 5, recheck: TimeInterval = 30) {
-        self.socketPath = socketPath; self.codexDir = codexDir; self.retry = retry; self.recheck = recheck
+                projectsDir: String = SessionLog.defaultDir(agent: "claude"),
+                retry: TimeInterval = 5, recheck: TimeInterval = 30, verdictCap: Int = 8 << 20) {
+        self.socketPath = socketPath; self.codexDir = codexDir; self.projectsDir = projectsDir; self.verdictCap = verdictCap
+        self.retry = retry; self.recheck = recheck
     }
+
+    // MARK: - Teammates
+
+    /// A Claude pane and the session herdr names for it.
+    public struct LeadAsk: Sendable, Hashable {
+        public var paneId: String
+        public var sessionId: String
+        public init(paneId: String, sessionId: String) { self.paneId = paneId; self.sessionId = sessionId }
+    }
+
+    /// One pass over the Claude panes: the panes whose log is not shown (paneId → swap), and the sessions judged to
+    /// be a lead's log, which the panes show as herdr names them.
+    public struct LeadPass: Sendable, Hashable {
+        public var swaps: [String: LeadSwap] = [:]
+        public var leads: Set<String> = []
+        public init(swaps: [String: LeadSwap] = [:], leads: Set<String> = []) { self.swaps = swaps; self.leads = leads }
+    }
+
+    /// `mate` nil: undecided. `final`: decided, or undecided after `verdictCap` bytes; read again only if it shrinks.
+    private struct Verdict { var file: Int; var size: UInt64; var mate: Bool?; var final: Bool }
+    /// Standardized path → whether the log is a teammate's, while it is the same file and has not shrunk since last
+    /// seen. An undecided log that is not final is read again once its size changes.
+    private var verdicts: [String: Verdict] = [:]
+    /// paneId → the standardized path of the last lead log herdr gave for the pane.
+    private var lastLead: [String: String] = [:]
+
+    /// Judges the log herdr names for each Claude pane. A lead's log is shown as it is and becomes the pane's last
+    /// lead. A teammate's log, an undecided one or one not found is never shown: the pane gets its last lead (judged
+    /// again, and unless another pane shows that log), else no log.
+    public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> LeadPass {
+        let ids = Set(asks.map(\.paneId))
+        lastLead = lastLead.filter { ids.contains($0.key) }
+        var pass = LeadPass()
+        var asked: Set<String> = []
+        for a in asks {
+            let p = path(a.sessionId)
+            if let p { asked.insert(p) }
+            if let p, judge(p) == false {
+                lastLead[a.paneId] = p
+                pass.leads.insert(a.sessionId)
+            }
+        }
+        asked.formUnion(lastLead.values)
+        verdicts = verdicts.filter { asked.contains($0.key) }
+        located = located.filter { id in asks.contains { $0.sessionId == id.key } }
+        let shown = Set(claimed.map { $0.hasPrefix("/") ? ($0 as NSString).standardizingPath : $0 })
+        for a in asks where !pass.leads.contains(a.sessionId) {
+            let lead = lastLead[a.paneId].flatMap { l in
+                judge(l) != false || Self.isClaimed(l, shown) || lastLead.contains { $0.key != a.paneId && $0.value == l } ? nil : l
+            }
+            pass.swaps[a.paneId] = LeadSwap(teammate: a.sessionId, lead: lead)
+        }
+        return pass
+    }
+
+    /// Whether the log at `path` is a teammate's, nil while undecided. A decided verdict is kept for the same file
+    /// (file number) while it does not shrink.
+    private func judge(_ path: String) -> Bool? {
+        let a = try? FileManager.default.attributesOfItem(atPath: path)
+        guard let file = a?[.systemFileNumber] as? Int, let size = a?[.size] as? UInt64 else { return nil }
+        if var v = verdicts[path], v.file == file, size >= v.size, v.final || size == v.size {
+            v.size = size
+            verdicts[path] = v
+            return v.mate
+        }
+        verdictReads += 1
+        let r = Self.teammateVerdict(path: path, cap: verdictCap)
+        verdicts[path] = Verdict(file: file, size: size, mate: r.mate, final: r.mate != nil || r.capped)
+        return r.mate
+    }
+
+    /// Session id → its log's standardized path, kept while the file is there.
+    private var located: [String: String] = [:]
+
+    private func path(_ idOrPath: String) -> String? {
+        if idOrPath.hasPrefix("/") { return (idOrPath as NSString).standardizingPath }
+        if let p = located[idOrPath], FileManager.default.fileExists(atPath: p) { return p }
+        let p = SessionLog.locate(agent: "claude", sessionId: idOrPath, dir: projectsDir).map { ($0.path as NSString).standardizingPath }
+        located[idOrPath] = p
+        return p
+    }
+
+    /// Whether a Claude log is a teammate's: its first message line (`user` or `assistant`) carries `teamName` and
+    /// `agentName`. Nil while no message line decides, such as a first line not yet whole.
+    public static func teammateVerdict(_ data: Data) -> Bool? {
+        for line in data.split(separator: 0x0A) {
+            switch lineVerdict(line) {
+            case .skip: continue
+            case .decided(let mate): return mate
+            case .undecided: return nil
+            }
+        }
+        return nil
+    }
+
+    /// `teammateVerdict` of the log at `path`, read line by line: at most 64 KB of each line and `cap` bytes in all.
+    /// `capped`: the read stopped at `cap`.
+    static func teammateVerdict(path: String, cap: Int) -> (mate: Bool?, capped: Bool) {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return (nil, false) }
+        defer { try? fh.close() }
+        let keep = 64 << 10
+        var line = Data(), cut = false, read = 0
+        while read < cap, let d = try? fh.read(upToCount: min(64 << 10, cap - read)), !d.isEmpty {
+            read += d.count
+            var rest = d[...]
+            while let nl = rest.firstIndex(of: 0x0A) {
+                if !cut { line.append(rest[..<nl].prefix(keep - line.count)) }
+                switch lineVerdict(line) {
+                case .skip: break
+                case .decided(let mate): return (mate, false)
+                case .undecided: return (nil, false)
+                }
+                line = Data(); cut = false
+                rest = rest[rest.index(after: nl)...]
+            }
+            if !cut { line.append(rest.prefix(keep - line.count)); cut = line.count >= keep }
+        }
+        return (line.isEmpty ? nil : teammateVerdict(line), read >= cap)
+    }
+
+    private enum LineVerdict { case skip, decided(Bool), undecided }
+
+    /// One log line. A line cut off (by the 64 KB limit, or not yet whole) is judged by its keys: one that begins
+    /// with a `type` other than `user` or `assistant` is skipped; else the keys before `"message":`, where Claude Code
+    /// writes `teamName`, `agentName` and then `type`, decide: `type` without `teamName` is not a teammate's.
+    private static func lineVerdict(_ line: Data) -> LineVerdict {
+        if let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
+            guard let type = o["type"] as? String, type == "user" || type == "assistant" else { return .skip }
+            func named(_ k: String) -> Bool { !((o[k] as? String) ?? "").isEmpty }
+            return .decided(named("teamName") && named("agentName"))
+        }
+        let s = String(decoding: line, as: UTF8.self)
+        if s.hasPrefix(#"{"type":""#), !s.hasPrefix(#"{"type":"user""#), !s.hasPrefix(#"{"type":"assistant""#) { return .skip }
+        let keys = s.range(of: #""message":"#).map { s[..<$0.lowerBound] } ?? s[...]
+        guard keys.contains(#""type":"user""#) || keys.contains(#""type":"assistant""#) else { return .undecided }
+        func named(_ k: String) -> Bool { keys.range(of: "\"\(k)\":\"[^\"]", options: .regularExpression) != nil }
+        if !keys.contains(#""teamName":"#) { return .decided(false) }
+        return named("teamName") && named("agentName") ? .decided(true) : .undecided
+    }
+
 
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.

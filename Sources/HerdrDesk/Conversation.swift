@@ -18,6 +18,8 @@ struct ConversationView: View {
     /// Load state of the agent's session log (from the store). nil: older callers; `hasLog` then means "may still load".
     var loadState: ConversationLoadState? = nil
     var hasLog = false
+    /// An agent team took the pane's log (`Agent.team`): no lead log yet reads "Waiting for the lead's log".
+    var team: TeamNote? = nil
     /// Changes when the user sends a message: back to the bottom whatever the position, following from there
     /// (the log shows the sent message a moment later).
     var scrollToken = 0
@@ -64,9 +66,10 @@ struct ConversationView: View {
 
     /// Words for an empty conversation. A new agent has no session log until its first message: that is not an error, so it
     /// reads "No messages yet" with what to do. "No conversation log" + Show Terminal only when the agent has worked
-    /// (working, blocked, done) and its log still cannot be found.
-    static func emptyCopy(_ state: ConversationLoadState, status: AgentStatus?, agentName: String) -> EmptyCopy {
+    /// (working, blocked, done) and its log still cannot be found. An agent team with no lead log known waits for it.
+    static func emptyCopy(_ state: ConversationLoadState, status: AgentStatus?, agentName: String, team: TeamNote? = nil) -> EmptyCopy {
         let first = "Send your first message to see the session conversation."
+        if team == .waitingForLead { return EmptyCopy(title: TeamNote.waitingTitle, detail: TeamNote.waitingDetail, terminal: true) }
         switch (state, status) {
         case (.missing, .idle?), (.missing, nil):
             return EmptyCopy(title: "No messages yet", detail: first, fresh: true)
@@ -94,7 +97,7 @@ struct ConversationView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task { try? await Task.sleep(for: .milliseconds(500)); spinnerDue = true }
         case .ready, .missing:
-            let copy = Self.emptyCopy(state, status: agentStatus, agentName: agentName)
+            let copy = Self.emptyCopy(state, status: agentStatus, agentName: agentName, team: team)
             if copy.terminal {
                 ContentUnavailableView {
                     Label(copy.title, systemImage: "doc.text.magnifyingglass")
@@ -936,5 +939,17 @@ struct FlowLayout: Layout {
             x += sz.width + spacing; rowH = max(rowH, sz.height); maxW = max(maxW, x - spacing)
         }
         return (CGSize(width: maxW, height: y + rowH), pts)
+    }
+}
+
+/// One line of small text over the conversation when it is the lead's last known log, not the one herdr names.
+struct TeamLine: View {
+    let team: TeamNote?
+    static func text(_ team: TeamNote?) -> String? { team == .lastLead ? TeamNote.lastLeadLine : nil }
+    var body: some View {
+        if let t = Self.text(team) {
+            Text(t).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .frame(maxWidth: .infinity).padding(.vertical, 4)
+        }
     }
 }

@@ -126,7 +126,7 @@ struct SettingsView: View {
     @ViewBuilder private var updates: some View {
         let updater = AppUpdater.shared.updater != nil
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        SettingsGroup("Updates", note: updater ? "Once a day. Flockbook asks before it installs an update." : nil) {
+        SettingsGroup("Updates", note: updater ? "Once an hour. Flockbook asks before it installs an update." : nil) {
             if updater {
                 SettingsRow("Check for updates automatically") {
                     Toggle("Check for updates automatically", isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },

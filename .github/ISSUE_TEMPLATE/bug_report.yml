@@ -1,0 +1,96 @@
+name: Bug report
+description: Something in Flockbook does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. For questions and feature ideas, use Discussions. For a security problem, see SECURITY.md.
+  - type: input
+    id: flockbook-version
+    attributes:
+      label: Flockbook version
+      description: Flockbook > About Flockbook.
+      placeholder: "0.4.1"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "macOS 26.1"
+    validations:
+      required: true
+  - type: input
+    id: herdr-version
+    attributes:
+      label: Herdr version
+      description: The output of `herdr --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: herdr-install
+    attributes:
+      label: How did you install Herdr?
+      options:
+        - Homebrew
+        - Install script
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: which-herdr
+    attributes:
+      label: Output of `which herdr`
+      placeholder: "/opt/homebrew/bin/herdr"
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent?
+      description: The agent in the pane where the bug shows. Choose all that apply.
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - pi
+        - No agent (a shell pane)
+        - Other
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a new tab with ⌘T.
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include any error text exactly as shown.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images here. Hide anything private in them first.
+  - type: dropdown
+    id: appearance
+    attributes:
+      label: Appearance
+      options:
+        - Light
+        - Dark
+        - Both
+        - Not sure
