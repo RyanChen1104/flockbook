@@ -693,7 +693,9 @@ async function fakeRun() {
   const red = await p.eval(`getComputedStyle(${part("month $212/$300")}.children[1]).color`), cyan = await p.eval(`getComputedStyle(${part("⎇ main")}.firstElementChild).color`);
   check(dark ? cyan === "rgb(0, 205, 205)" && red !== "rgb(205, 0, 0)" : red === "rgb(205, 0, 0)" && cyan !== "rgb(0, 205, 205)",
     `status line: a part's colour where it reads on the tag, else the tag's text colour (${dark ? "dark" : "light"}: red ${red}, cyan ${cyan})`);
-  check(await p.eval(`getComputedStyle(${part("rate limit 5h: 23%")}.firstElementChild).opacity`) === "0.6", "status line: dim text stays dim");
+  const dimEl = `${part("rate limit 5h: 23%")}.firstElementChild`;
+  const dimSeen = await p.eval(`[getComputedStyle(${dimEl}).color, getComputedStyle(${dimEl}).opacity].join(' ')`);
+  check(dimSeen === (dark ? "rgb(150, 150, 150) 1" : "rgb(107, 107, 107) 1"), `status line: dim text is a fixed grey that reads on the tag (${dimSeen})`);
   // The phone switches light or dark with the line kept (not rebuilt): the parts' colours follow.
   await p.scheme(!dark);
   await p.until("false", 200);

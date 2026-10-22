@@ -282,7 +282,17 @@ public struct StatusTag: Hashable, Sendable {
     /// The tag's fill over the pane, light and dark.
     public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
 
-    /// Whether a part's colour reads on the tag (3:1); else the tag's own text colour is used.
+    /// Dim text (ANSI 2) on the tag, light and dark: a fixed grey that still reads (4.5:1 or more).
+    public static func dimHex(dark: Bool) -> String { dark ? "#999999" : "#999999" }
+
+    /// The colour a run of an owner's part is drawn in: dim, the fixed grey; its own colour where it reads on the
+    /// tag; else nil (the tag's own text colour). The Mac and the phone use the same rule.
+    public static func runHex(_ run: StyledRun, dark: Bool) -> String? {
+        if let fg = run.fg, readable(fg, dark: dark) { return fg }
+        return nil
+    }
+
+    /// Whether a part's colour reads on the tag (4.5:1); else the tag's own text colour is used.
     public static func readable(_ hex: String, dark: Bool) -> Bool { contrast(hex, tagHex(dark: dark)) >= 4.5 }
 
     /// WCAG contrast of two `#rrggbb` colours.

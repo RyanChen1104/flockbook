@@ -122,6 +122,15 @@ import Foundation
               "status tags: only exact repeats go; unsure ones stay (\(StatusSegments.dropRepeats(near, info: info).map { $0.map(\.text).joined() }))")
         check(StatusLineRecord(lines: lines, info: nil, time: Date()).tags.map(\.text).first == "Opus 5.5", "status tags: no facts: the owner's parts")
         // A part's colour is drawn on the tag while it reads there (4.5:1, small text); else the tag's own text colour.
+        for dark in [false, true] {
+            let c = StatusTag.contrast(StatusTag.dimHex(dark: dark), StatusTag.tagHex(dark: dark))
+            check(c >= 4.5 && StatusTag.dimHex(dark: dark) == (dark ? "#969696" : "#6b6b6b"),
+                  "status tags: dim text is a fixed grey that reads on the tag (\(dark ? "dark" : "light") \(String(format: "%.2f", c)):1)")
+            check(StatusTag.runHex(StyledRun("x", dim: true), dark: dark) == StatusTag.dimHex(dark: dark)
+                  && StatusTag.runHex(StyledRun("x", fg: "#cd0000", dim: true), dark: dark) == StatusTag.dimHex(dark: dark)
+                  && StatusTag.runHex(StyledRun("x", fg: "#000000"), dark: false) == "#000000" && StatusTag.runHex(StyledRun("x"), dark: dark) == nil,
+                  "status tags: a dim run is the grey, coloured or not; else its colour where it reads, or the tag's")
+        }
         check(!StatusTag.readable("#808080", dark: false) && !StatusTag.readable("#6e6e6e", dark: true) && StatusTag.readable("#cd0000", dark: false),
               "status tags: a colour under 4.5:1 on the tag falls back (grey \(String(format: "%.2f", StatusTag.contrast("#808080", StatusTag.tagHex(dark: false)))):1)")
         check(StatusTag.readable("#ffff00", dark: false) == false && StatusTag.readable("#ffff00", dark: true)
