@@ -99,6 +99,33 @@ func checksHerdrPath() async throws {
     }
     check(whole == 8, "herdrpath: exit 127, stderr in pieces with no last newline -> the whole last line, 8 of 8 (\(whole))")
 
+    // A terminal that already showed a frame keeps retrying when herdr is gone for a moment (`brew upgrade herdr` relinks it).
+    let upgraded = dir + "/upgraded.sh", ran = dir + "/ran", spyFrame = dir + "/frame.sh"
+    let frameLine = #"{"type":"terminal.frame","seq":1,"full":true,"width":80,"height":24,"bytes":"b2sNCg=="}"#
+    try "#!/bin/sh\nif [ ! -e '\(ran)' ]; then touch '\(ran)'; echo '\(frameLine)'; exit 1; fi\necho 'env: herdr: No such file or directory' >&2\nexit 127\n"
+        .write(toFile: upgraded, atomically: true, encoding: .utf8)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: upgraded)
+    try "#!/bin/sh\necho '\(frameLine)'\nexit 1\n".write(toFile: spyFrame, atomically: true, encoding: .utf8)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: spyFrame)
+    let after127 = await run(TerminalSession(terminalId: "term_x", session: .default(), launcher: [upgraded]), 2)
+    check(!after127.ended && failed(after127.events) == nil && retries(after127.events) >= 2,
+          "herdrpath: exit 127 after a frame -> still retried (\(retries(after127.events)) retries, \(failed(after127.events) ?? "not failed"))")
+    let finds = Locked(0)
+    let vanished = await run(TerminalSession(terminalId: "term_x", session: .default(), find: {
+        finds.update { $0 += 1; return $0 } == 1 ? spyFrame : nil }), 2)
+    check(!vanished.ended && failed(vanished.events) == nil && retries(vanished.events) >= 2,
+          "herdrpath: herdr not found after a frame -> still retried (\(retries(vanished.events)) retries, \(failed(vanished.events) ?? "not failed"))")
+
+    // A child of herdr that keeps stderr open does not hold the terminal: after exit, stderr gets a second to end.
+    let holder = dir + "/holder.sh"
+    try "#!/bin/sh\n(exec 1>&-; sleep 6) &\necho 'held' >&2\nexit 127\n".write(toFile: holder, atomically: true, encoding: .utf8)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: holder)
+    let t0 = Date()
+    let held = await run(TerminalSession(terminalId: "term_x", session: .default(), launcher: [holder]), 4)
+    let took = Date().timeIntervalSince(t0)
+    check(held.ended && failed(held.events) == "held" && took < 3,
+          "herdrpath: stderr held open by a child -> ends within the grace (\(String(format: "%.1f", took)) s, \(failed(held.events) ?? "not failed"))")
+
     // The real start: the found program with --session and the terminal's arguments, PATH with ~/.local/bin.
     let argsLog = dir + "/args", spy = dir + "/spy.sh"
     try "#!/bin/sh\necho \"$*\" > '\(argsLog)'\necho \"$PATH\" >> '\(argsLog)'\nexit 127\n".write(toFile: spy, atomically: true, encoding: .utf8)
