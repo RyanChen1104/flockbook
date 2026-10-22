@@ -34,15 +34,181 @@ public enum GhosttyThemeProblem: Error, Sendable, Hashable {
     case badTheme(String)
     case badValue(String)
 
-    public var reason: String { "" }
+    /// One line for Settings.
+    public var reason: String {
+        switch self {
+        case .noConfig: "No Ghostty config file found."
+        case .noTheme: "Ghostty's config sets no theme."
+        case .themeNotFound(let name): "Ghostty theme “\(name)” not found."
+        case .badTheme(let name): "Ghostty theme “\(name)” has no colors."
+        case .badValue(let value): "Ghostty's theme setting “\(value)” is not valid."
+        }
+    }
 }
 
 /// Reads the user's Ghostty config the way Ghostty does, for the theme's colours only. Never writes.
+/// - Config files, later wins: `$XDG_CONFIG_HOME/ghostty` (default `~/.config/ghostty`), then
+///   `~/Library/Application Support/com.mitchellh.ghostty`; in each, `config` then `config.ghostty`.
+/// - `config-file = [?]path`: relative to the file it is in, loaded after that file (so its keys win); a file
+///   already read (a cycle) is skipped. A missing file is skipped, with or without `?`.
+/// - `theme = name`, `theme = light:A,dark:B` (both, any order) or an absolute path. A name is looked up in the
+///   user's `themes` folder, then in Ghostty.app's (`resources` = `Ghostty.app/Contents/Resources/ghostty`).
+/// - Colour keys in the config override the theme's; an empty value resets one to Ghostty's default.
 public enum GhosttyConfig {
     public static func load(home: String = NSHomeDirectory(), environment: [String: String] = ProcessInfo.processInfo.environment,
                             resources: String?) -> Result<GhosttyThemes, GhosttyThemeProblem> {
-        .failure(.noConfig)
+        let fm = FileManager.default
+        let files = configFiles(home: home, environment: environment).filter { isFile($0) }
+        guard !files.isEmpty else { return .failure(.noConfig) }
+        var seen = Set<String>()
+        var themeValue: String?, config = Colors()
+        for (key, value) in files.flatMap({ read($0, home: home, seen: &seen) }) {
+            if key == "theme" { themeValue = value.isEmpty ? nil : value } else { config.set(key, value) }
+        }
+        guard let themeValue else {
+            guard !config.isEmpty else { return .failure(.noTheme) }
+            let t = config.resolved(name: "Ghostty config", over: Colors())
+            return .success(GhosttyThemes(light: t, dark: t))
+        }
+        guard let names = names(themeValue) else { return .failure(.badValue(themeValue)) }
+        let folders = [ghosttyFolder(home: home, environment: environment) + "/themes"] + (resources.map { [$0 + "/themes"] } ?? [])
+        func theme(_ name: String) -> Result<TerminalTheme, GhosttyThemeProblem> {
+            let path = name.hasPrefix("/") ? (isFile(name) ? name : nil) : folders.map { $0 + "/" + name }.first(where: isFile)
+            guard let path, let data = fm.contents(atPath: path) else { return .failure(.themeNotFound(name)) }
+            var colors = Colors()
+            for (key, value) in lines(String(decoding: data, as: UTF8.self)) where key != "theme" && key != "config-file" { colors.set(key, value) }
+            guard !colors.isEmpty else { return .failure(.badTheme(name)) }
+            return .success(config.resolved(name: (name as NSString).lastPathComponent, over: colors))
+        }
+        return theme(names.light).flatMap { light in
+            names.dark == names.light ? .success(GhosttyThemes(light: light, dark: light)) : theme(names.dark).map { GhosttyThemes(light: light, dark: $0) }
+        }
     }
 
-    public static func color(_ s: String) -> RGB8? { nil }
+    /// Ghostty's config files in load order (later wins). They may not exist.
+    public static func configFiles(home: String, environment: [String: String]) -> [String] {
+        [ghosttyFolder(home: home, environment: environment), home + "/Library/Application Support/com.mitchellh.ghostty"]
+            .flatMap { [$0 + "/config", $0 + "/config.ghostty"] }
+    }
+
+    static func ghosttyFolder(home: String, environment: [String: String]) -> String {
+        let xdg = environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.config"
+        return xdg + "/ghostty"
+    }
+
+    /// `#RRGGBB` or `RRGGBB`, optionally in double quotes. Nil: anything else (X11 colour names are not read).
+    public static func color(_ s: String) -> RGB8? {
+        var hex = unquote(s.trimmingCharacters(in: .whitespaces))
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return nil }
+        return RGB8(UInt8(v >> 16 & 0xff), UInt8(v >> 8 & 0xff), UInt8(v & 0xff))
+    }
+
+    /// Ghostty's defaults (`ghostty +show-config --default`).
+    static let defaultBackground = RGB8(0x28, 0x2c, 0x34), defaultForeground = RGB8(0xff, 0xff, 0xff)
+    static let defaultPalette: [RGB8] = [
+        RGB8(0x1d, 0x1f, 0x21), RGB8(0xcc, 0x66, 0x66), RGB8(0xb5, 0xbd, 0x68), RGB8(0xf0, 0xc6, 0x74),
+        RGB8(0x81, 0xa2, 0xbe), RGB8(0xb2, 0x94, 0xbb), RGB8(0x8a, 0xbe, 0xb7), RGB8(0xc5, 0xc8, 0xc6),
+        RGB8(0x66, 0x66, 0x66), RGB8(0xd5, 0x4e, 0x53), RGB8(0xb9, 0xca, 0x4a), RGB8(0xe7, 0xc5, 0x47),
+        RGB8(0x7a, 0xa6, 0xda), RGB8(0xc3, 0x97, 0xd8), RGB8(0x70, 0xc0, 0xb1), RGB8(0xea, 0xea, 0xea),
+    ]
+
+    /// The colour keys a theme or a config sets. `nil` in a slot: reset to the default (an empty value).
+    struct Colors {
+        enum Value { case rgb(RGB8), cellForeground, cellBackground }
+        static let keys: Set<String> = ["background", "foreground", "cursor-color", "cursor-text", "selection-background", "selection-foreground"]
+        var keys: [String: Value?] = [:]
+        var palette: [Int: RGB8?] = [:]
+        var isEmpty: Bool { keys.isEmpty && palette.isEmpty }
+
+        mutating func set(_ key: String, _ value: String) {
+            if key == "palette" {
+                let parts = value.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                guard parts.count == 2, let i = GhosttyConfig.index(parts[0]), (0..<16).contains(i) else { return }
+                if parts[1].isEmpty { palette[i] = .some(nil) } else if let c = GhosttyConfig.color(parts[1]) { palette[i] = c }
+                return
+            }
+            guard Self.keys.contains(key) else { return }
+            switch value {
+            case "": keys[key] = .some(nil)
+            case "cell-foreground": keys[key] = .cellForeground
+            case "cell-background": keys[key] = .cellBackground
+            default: if let c = GhosttyConfig.color(value) { keys[key] = .rgb(c) }
+            }
+        }
+
+        /// These keys over `theme`'s, then Ghostty's defaults for the rest.
+        func resolved(name: String, over theme: Colors) -> TerminalTheme {
+            let k = theme.keys.merging(keys) { $1 }, p = theme.palette.merging(palette) { $1 }
+            func plain(_ key: String) -> RGB8? { if case .rgb(let c)?? = k[key] { c } else { nil } }
+            let bg = plain("background") ?? GhosttyConfig.defaultBackground, fg = plain("foreground") ?? GhosttyConfig.defaultForeground
+            func value(_ key: String, _ fallback: RGB8) -> RGB8 {
+                switch k[key] ?? nil { case .rgb(let c): c; case .cellForeground: fg; case .cellBackground: bg; case nil: fallback }
+            }
+            return TerminalTheme(name: name, background: bg, foreground: fg,
+                                 palette: (0..<16).map { (p[$0] ?? nil) ?? GhosttyConfig.defaultPalette[$0] },
+                                 cursor: value("cursor-color", fg), cursorText: value("cursor-text", bg),
+                                 selectionBackground: value("selection-background", fg), selectionForeground: value("selection-foreground", bg))
+        }
+    }
+
+    /// A palette index: decimal, or `0x`, `0o`, `0b`.
+    static func index(_ s: String) -> Int? {
+        for (prefix, radix) in [("0x", 16), ("0o", 8), ("0b", 2)] where s.lowercased().hasPrefix(prefix) { return Int(s.dropFirst(2), radix: radix) }
+        return Int(s)
+    }
+
+    /// `theme`'s value: the light and the dark name (the same name twice for one theme). Nil: not valid.
+    static func names(_ value: String) -> (light: String, dark: String)? {
+        func valid(_ n: String) -> Bool { !n.isEmpty && (n.hasPrefix("/") || !n.contains("/")) }
+        let parts = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.contains(where: { $0.hasPrefix("light:") || $0.hasPrefix("dark:") }) else { return valid(value) ? (value, value) : nil }
+        var light: String?, dark: String?
+        for part in parts {
+            if part.hasPrefix("light:") { light = part.dropFirst(6).trimmingCharacters(in: .whitespaces) }
+            else if part.hasPrefix("dark:") { dark = part.dropFirst(5).trimmingCharacters(in: .whitespaces) }
+            else { return nil }
+        }
+        guard let light, let dark, valid(light), valid(dark) else { return nil }
+        return (light, dark)
+    }
+
+    /// One file's keys, then its `config-file`s' (in order), each read once.
+    static func read(_ path: String, home: String, seen: inout Set<String>) -> [(String, String)] {
+        let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard !seen.contains(real), isFile(real), let data = FileManager.default.contents(atPath: real) else { return [] }
+        seen.insert(real)
+        var out: [(String, String)] = [], includes: [String] = []
+        for (key, value) in lines(String(decoding: data, as: UTF8.self)) {
+            if key == "config-file" { includes.append(value) } else { out.append((key, value)) }
+        }
+        let dir = (path as NSString).deletingLastPathComponent
+        for var inc in includes {
+            if inc.hasPrefix("?") { inc = unquote(String(inc.dropFirst())) }
+            guard !inc.isEmpty else { continue }
+            if inc.hasPrefix("~/") { inc = home + inc.dropFirst() }
+            out += read(inc.hasPrefix("/") ? inc : dir + "/" + inc, home: home, seen: &seen)
+        }
+        return out
+    }
+
+    /// `key = value` lines; `#` comment lines and lines without `=` are skipped. Values lose surrounding quotes.
+    static func lines(_ text: String) -> [(String, String)] {
+        text.split(whereSeparator: \.isNewline).compactMap { raw in
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { return nil }
+            let key = line[..<eq].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { return nil }
+            return (key, unquote(line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)))
+        }
+    }
+
+    static func unquote(_ s: String) -> String {
+        s.count >= 2 && s.hasPrefix("\"") && s.hasSuffix("\"") ? String(s.dropFirst().dropLast()) : s
+    }
+
+    static func isFile(_ path: String) -> Bool {
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &folder) && !folder.boolValue
+    }
 }
