@@ -334,6 +334,15 @@ extension ContentTests {
         capture(swin, to: "\(dir)/question-sent.png")
         swin.orderOut(nil)
 
+        // Under Settings (the screen kept hidden and inert under the page): the keys do not answer.
+        var coveredSent: [QuestionAnswer]?
+        let (cwin, _) = window(scene(items(single("q-covered")), canSend: true, onSend: { coveredSent = $0 })
+                                   .environment(\.underSettings, true).disabled(true), NSSize(width: 1200, height: 760))
+        try? await Task.sleep(for: .seconds(1.2))
+        await digit(cwin, 1); await returnKey(cwin)
+        step("under Settings: 1 and Return send nothing (\(coveredSent.map { "\($0.map(\.picks))" } ?? "nothing"))", coveredSent == nil)
+        cwin.orderOut(nil)
+
         // Answered and declined rows in the transcript; the composer is back.
         var multiAnswered = three(); multiAnswered.toolUseId = "q-three-ans"
         multiAnswered.state = .answered(["Passkey (Recommended)", "Open tabs, Sidebar state", ""])

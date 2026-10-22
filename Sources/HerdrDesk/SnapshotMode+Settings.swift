@@ -410,6 +410,25 @@ extension ChromeTests {
         step("a control of the page keeps the keys (\(control.map { "\(type(of: $0))" } ?? "no control"): \(name(win.firstResponder)))",
              control != nil && win.firstResponder === control)
         win.makeFirstResponder(nil)
+        // The mouse too: the hidden terminal's own wheel monitor (it does not go through hit-testing) lets the wheel pass.
+        if let terminal = terminal as? PasteTerminalView {
+            var wheels = 0
+            let saved = terminal.onWheel
+            terminal.onWheel = { _, _ in wheels += 1 }
+            let mid = win.convertPoint(toScreen: terminal.convert(NSPoint(x: terminal.bounds.midX, y: terminal.bounds.midY), to: nil))
+            if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 60, wheel2: 0, wheel3: 0) {
+                cg.location = CGPoint(x: mid.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mid.y)
+                if let e = NSEvent(cgEvent: cg) { NSApp.sendEvent(e) }
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            terminal.onWheel = saved
+            step("a wheel over the hidden terminal does not reach it (\(wheels) wheels)", wheels == 0)
+        } else { step("a wheel over the hidden terminal: no terminal", false) }
+        // A terminal sheet asked for under Settings (a late approval result) does not open over the page.
+        model.showTerminal = true; try? await Task.sleep(for: .milliseconds(800))
+        step("no terminal sheet over Settings (\(win.attachedSheet.map { "\(type(of: $0))" } ?? "none"))", win.attachedSheet == nil)
+        model.showTerminal = false; try? await Task.sleep(for: .milliseconds(800))
+        if let sheet = win.attachedSheet { win.endSheet(sheet); try? await Task.sleep(for: .milliseconds(400)) }
         // Only the hidden screen loses the keys: a field over Settings (the ⌘/ panel's search) keeps them.
         ShortcutsPanel.open(); try? await Task.sleep(for: .seconds(1))
         let search = views(root, NSSearchField.self).first
@@ -438,6 +457,28 @@ extension ChromeTests {
         model.showSettings(); try? await Task.sleep(for: .milliseconds(400))
         model.closeSettings(); try? await Task.sleep(for: .milliseconds(400))
         step("from Overview, Back returns to Overview (\(model.screen))", model.screen == .overview)
+        // From Search: its list and the toolbar search field do not take the keys under Settings.
+        model.screen = .search; try? await Task.sleep(for: .milliseconds(800))
+        // The tables of the Search screen: those still in the window once Settings shows (the sidebar's list is replaced).
+        let onSearch = views(root, NSTableView.self)
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(800))
+        let searchField = views(win.contentView?.superview ?? root, NSSearchField.self).first
+        let lists = onSearch.filter { $0.window === win }
+        var taken: [String] = []
+        if let searchField {
+            win.makeFirstResponder(searchField)
+            if win.firstResponder === searchField || (searchField.currentEditor().map { $0 === win.firstResponder } ?? false) { taken.append("search field") }
+            win.makeFirstResponder(nil)
+        }
+        for table in lists {
+            win.makeFirstResponder(table)
+            if win.firstResponder === table { taken.append("\(type(of: table))") }
+            win.makeFirstResponder(nil)
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        step("from Search under Settings: no search field or list takes the keys (search field \(searchField == nil ? "gone" : "there"), \(lists.count) lists; taken \(taken))", !lists.isEmpty && taken.isEmpty)
+        model.closeSettings(); try? await Task.sleep(for: .milliseconds(600))
+        step("from Search, Back returns to Search (\(model.screen))", model.screen == .search)
         model.screen = .tab; try? await Task.sleep(for: .milliseconds(400))
 
         // The sidebar hidden: the page brings its own list, Back on top.
