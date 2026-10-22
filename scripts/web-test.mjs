@@ -681,6 +681,7 @@ async function fakeRun() {
     "status line: the model in bold; the context's bar at 42%");
   check(await p.eval(`!!${more} && !${more}.hidden && ${more}.getAttribute('aria-label') === 'Show the whole status line' && ${more}.getAttribute('aria-expanded') === 'false'`) === true,
     "status line: tags left out: the chevron at the right, with a label");
+  check(await p.eval(`!!${more}.querySelector('.chev.up')`) === true, "status line: closed, the chevron points up (the tags open upwards)");
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline");
   await p.shot("statusline", true);
@@ -708,6 +709,7 @@ async function fakeRun() {
     `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
   check(await p.eval(`${more}.getAttribute('aria-expanded') === 'true' && ${more}.getAttribute('aria-label') === 'Hide the whole status line'`) === true,
     "status line: open, the chevron says it hides");
+  check(await p.eval(`!!${more}.querySelector('.chev') && !${more}.querySelector('.chev.up')`) === true, "status line: open, the chevron points down");
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline-open");
   await p.shot("statusline-open", true);

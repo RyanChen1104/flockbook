@@ -66,7 +66,7 @@ struct StatusLineBar: View {
     private var chevron: some View {
         let label = expanded ? "Hide the whole status line" : "Show the whole status line"
         return Button { expanded.toggle() } label: {
-            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+            Image(systemName: StatusTagRow.chevronSymbol(open: expanded))
                 .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                 .frame(width: 22, height: 18).contentShape(Rectangle())
         }

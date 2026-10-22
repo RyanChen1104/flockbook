@@ -93,6 +93,8 @@ import Foundation
         check(fit(30) == .init(shown: 0, chevron: true), "status row: none fits: the chevron alone (\(fit(30)))")
         check(StatusTagRow.fit(widths: [], chevron: 20, spacing: 6, available: 400, more: true) == .init(shown: 0, chevron: true),
               "status row: no tags, own lines: the chevron")
+        check(StatusTagRow.chevronSymbol(open: false) == "chevron.up" && StatusTagRow.chevronSymbol(open: true) == "chevron.down",
+              "status row: closed, the chevron points up (the tags open upwards); open, down")
     }
 
     // Appendix D: the owner's lines become tags too. Each line splits at " · ", " | ", "│", " • " or two spaces and
