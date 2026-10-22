@@ -129,12 +129,6 @@ h2 .parts { font: var(--caption); color: var(--label-2); }
 .back { border: none; background: none; color: var(--accent); padding: 6px 4px; min-height: 36px; cursor: pointer; flex: none; font: var(--body); }
 .bar-title { display: flex; align-items: center; gap: 8px; min-width: 0; font: var(--headline); }
 .bar-title span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-stack { display: flex; flex-direction: column; min-width: 0; }
-.bar-stack > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-title .bar-stack > .team-line { font: var(--caption); color: var(--label-2); white-space: normal; }
-.team-wait { margin-top: 20vh; }
-.team-wait h2 { justify-content: center; }
-.team-wait p { margin: 0 8px; }
 .items { display: flex; flex-direction: column; gap: 14px; padding: 20px 0 12px; font: var(--reading); }
 .msg p { margin: 0 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg p:last-child { margin-bottom: 0; }

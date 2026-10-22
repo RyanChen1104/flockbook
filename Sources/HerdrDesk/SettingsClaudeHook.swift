@@ -1,21 +1,29 @@
 import HerdrKit
 import SwiftUI
 
-/// Settings > Remote access: "Answer Claude questions from the phone". Off until the owner installs the hook; the
+/// Settings > Agents (while Remote access is on): "Answer Claude questions from the phone". Off until the owner installs the hook; the
 /// sheet shows the exact change to Claude Code's settings file before anything is written.
 struct ClaudeHookRow: View {
     let setup: ClaudeHookSetup
     @State private var sheet = false
 
     var body: some View {
-        LabeledContent {
-            Button(setup.state == .on ? "Uninstall…" : "Install…") { sheet = true }
-        } label: {
-            Text("Answer Claude questions from the phone")
-            Text(note).foregroundStyle(isProblem ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+        SettingsGroup("Claude Code", note: note, noteColor: isProblem ? .red : nil) {
+            SettingsRow("Answer Claude questions from the phone", value: value, valueColor: isProblem ? .red : nil) {
+                Button(setup.state == .on ? "Uninstall…" : "Install…") { sheet = true }
+            }
+            .settingsControl(.claudeQuestions)
         }
         .sheet(isPresented: $sheet) { ClaudeHookSheet(setup: setup) }
         .onAppear { setup.refresh() }
+    }
+
+    private var value: String {
+        switch setup.state {
+        case .off: "Off"
+        case .on: "On"
+        case .problem: "Problem"
+        }
     }
 
     private var isProblem: Bool { if case .problem = setup.state { true } else { false } }

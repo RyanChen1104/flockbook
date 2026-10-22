@@ -1454,7 +1454,6 @@ async function fakeRun() {
   check(await p.until(atEnd, 2000) === true, `newest: back from the background -> at the bottom (gap ${await p.eval(bottomGap)})`);
 
   await pictures();
-  await team();
 
   for (const x of pages) check(x.errors.length === 0, `page: no errors or CSP violations (${x.errors.join(" | ")})`);
 }
@@ -1661,34 +1660,3 @@ async function pictures() {
   hub.stdin.write("session w2:p2 s4\n");
 }
 
-
-/** An agent team took the pane's log: the same two notes as the Mac, from the snapshot's `team`. */
-async function team() {
-  const p = await page(await context());
-  pages.push(p);
-  await p.goto(origin + "/");
-  await p.eval("localStorage.setItem('flockbook.token', 'input-token')");
-  await p.reload();
-  await p.until("!!document.querySelector('.list')", 8000);
-  await p.eval("location.hash = '#pane=w2%3Ap2'");
-  hub.stdin.write("team w2:p2 waiting\n");
-  check(await p.until("document.querySelector('.team-wait h2')?.textContent === \"Waiting for the lead's log\"", 8000) === true
-    && await p.eval("document.querySelector('.team-wait p').textContent") === "Herdr points this pane at an agent-team teammate. The lead's conversation shows here once Herdr reports it. The terminal shows what it is doing."
-    && await p.eval("!document.querySelector('.team-line') && !document.querySelector('.items')?.textContent.includes('Loading')"),
-    "team: no lead log -> Waiting for the lead's log, not Loading");
-  await p.shot("team-waiting");
-  await p.shot("team-waiting", true);
-  hub.stdin.write("team w2:p2 last s4\n");
-  check(await p.until("document.querySelector('.team-line')?.textContent === \"Agent team: showing the lead's last known session.\"", 8000) === true
-    && await p.eval("!document.querySelector('.team-wait')"), "team: the last lead -> one line over the conversation");
-  check(await p.eval(noScroll), "team: no sideways scroll");
-  check(await p.eval("(() => { const l = document.querySelector('.team-line'); return l.scrollWidth <= l.clientWidth; })()") === true,
-    "team: the line is read whole at 390 pt (not cut off)");
-  await p.shot("team-lastlead");
-  await p.shot("team-lastlead", true);
-  hub.stdin.write("team w2:p2 none s4\n");
-  check(await p.until("!document.querySelector('.team-line') && !document.querySelector('.team-wait')", 8000) === true, "team: herdr's own log -> no note");
-  await p.close();
-  pages.splice(pages.indexOf(p), 1);
-  check(p.errors.length === 0, `team: no errors or CSP violations (${p.errors.join(" | ")})`);
-}

@@ -17,8 +17,23 @@ final class AppModel {
     var workspaceID: String? { didSet { updateVisibleSessions() } }
     var tabID: String? { didSet { updateVisibleSessions() } }
     var showTerminal = false
+    /// The Settings page covers the screen under it (`underSettings` in its views): nothing there sends to a pane.
+    var coveredBySettings: Bool { screen == .settings }
     /// Settings is a page of the main window (sidebar foot, ⌘,).
-    func showSettings() { screen = .settings }
+    /// While it shows, Settings has the sidebar (Back and its tabs) and the toolbar has no tab row.
+    func showSettings() {
+        if screen != .settings { screenBeforeSettings = screen }
+        screen = .settings
+    }
+    /// ⌘,: opens Settings, or leaves it when it is open.
+    func toggleSettings() { screen == .settings ? closeSettings() : showSettings() }
+    /// Back and Esc: the screen from before Settings, its workspace and tab as they were (Settings never changes them).
+    func closeSettings() {
+        guard screen == .settings else { return }
+        screen = screenBeforeSettings
+    }
+    /// The screen Settings was opened from: it stays in the window under Settings (hidden), so Back finds it as it was.
+    private(set) var screenBeforeSettings: Screen = .tab
     var splitDirection: String = "down"
     var searchText = ""
     /// Width of the tab row toolbar item. Follows the detail column, never the tab count (see `setDetailWidth`).
@@ -307,9 +322,11 @@ final class AppModel {
     }
 
     /// Tells the store which logs are on screen (both panes of a split, only the zoomed one when zoomed) so they
-    /// load deep (2 MB) while every other log stays short. Nothing is on screen outside the tab screen.
+    /// load deep (2 MB) while every other log stays short. Nothing is on screen outside the tab screen; under Settings the
+    /// tab screen stays (hidden), so its logs keep their depth and the older messages it shows.
     func updateVisibleSessions() {
-        guard screen == .tab, let t = tab else { store.setVisibleSessions([]); return }
+        let tabScreen = screen == .tab || (screen == .settings && screenBeforeSettings == .tab)
+        guard tabScreen, let t = tab else { store.setVisibleSessions([]); return }
         let zoomed = zoomedPaneID(in: t)
         let panes = zoomed.map { id in t.panes.filter { $0.id == id } } ?? t.panes
         store.setVisibleSessions(Set(panes.compactMap { $0.agent?.sessionId }))

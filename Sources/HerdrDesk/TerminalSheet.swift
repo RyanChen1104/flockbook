@@ -158,6 +158,7 @@ struct SheetWindowSizer: NSViewRepresentable {
 /// Live terminal for one pane. Writable: a `TerminalSession` in control mode (keys, paste, resize). Read-only: observe.
 /// Shows why the session ended (taken over by another client, refused, not found); it never takes over by itself.
 struct ObservedTerminal: View {
+    @Environment(\.underSettings) private var underSettings
     let client: HerdrClient
     let paneId: String
     let terminalId: String
@@ -178,8 +179,6 @@ struct ObservedTerminal: View {
         var kindAt = Date.distantPast
     }
     @State private var closedReason: String?
-    /// The terminal could not start, or keeps stopping before it showed anything: why (`startErrorLine`).
-    @State private var startError: String?
     @State private var takeover = false
     @State private var epoch = 0
     @State private var history: HistoryData?
@@ -197,7 +196,7 @@ struct ObservedTerminal: View {
     /// - `.history`: scroll up opens the history view. `.none`: nothing.
     /// - observe/read-only on an agent pane: the notice only.
     private func wheel(_ dy: CGFloat, precise: Bool) {
-        guard history == nil else { return }
+        guard history == nil, !underSettings else { return }
         let st = wheelState
         if let k = st.kind, Date().timeIntervalSince(st.kindAt) < 1.5 { act(k, dy, precise); return }
         guard !fetching else { return }
@@ -257,8 +256,7 @@ struct ObservedTerminal: View {
 
     var body: some View {
         TerminalNSView(client: client, terminalId: terminalId, writable: writable, takeover: takeover, focused: focused,
-                       handle: hnd, rightClickToPane: rightClickToPane, onWheel: wheel, historyOpen: { history != nil }, onClosed: { closedReason = $0 },
-                       onStartError: { startError = $0 })
+                       handle: hnd, rightClickToPane: rightClickToPane, onWheel: wheel, historyOpen: { history != nil }, onClosed: { closedReason = $0 })
             .id("\(terminalId)-\(epoch)")
             .opacity(history == nil ? 1 : 0)   // both views are transparent: the history view replaces the live one
             .overlay {
@@ -288,21 +286,6 @@ struct ObservedTerminal: View {
                 hnd.isHistory = { history != nil }
             }
             .onDisappear { if history != nil { onHistoryChange(false) } }
-            .overlay {
-                // Not a blank view: the transparent terminal shows only the window behind it until a frame comes.
-                if let e = startError {
-                    VStack(spacing: 10) {
-                        Label(Self.startErrorLine(e), systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        Button("Retry") { startError = nil; closedReason = nil; epoch += 1 }.controlSize(.small)
-                    }
-                    .padding(20)
-                }
-            }
-            .onChange(of: startError, initial: true) { _, e in
-                TerminalProbe.startError = e.map(Self.startErrorLine)
-                TerminalProbe.retry = e == nil ? nil : { startError = nil; closedReason = nil; epoch += 1 }
-            }
             .overlay(alignment: .top) {
                 if let r = closedReason, r != "detached" {
                     HStack(spacing: 10) {
@@ -320,8 +303,6 @@ struct ObservedTerminal: View {
             }
     }
 
-    static func startErrorLine(_ reason: String) -> String { "Can't start the terminal: " + reason }
-
     static func explain(_ reason: String) -> String {
         if reason.contains("taken over") { return "Another client took over this terminal." }
         if reason.contains("already has an attached client") { return "Another client is controlling this terminal." }
@@ -330,15 +311,7 @@ struct ObservedTerminal: View {
     }
 }
 
-/// Tests: what the terminal view showed, and its Retry.
-@MainActor enum TerminalProbe {
-    static var startError: String?
-    static var retry: (() -> Void)?
-}
-
 struct TerminalNSView: NSViewRepresentable {
-    /// Tests only: the program in place of herdr.
-    static var testLauncher: [String]?
     let client: HerdrClient
     let terminalId: String
     var writable = false
@@ -349,8 +322,6 @@ struct TerminalNSView: NSViewRepresentable {
     var onWheel: (CGFloat, Bool) -> Void = { _, _ in }
     var historyOpen: () -> Bool = { false }
     var onClosed: (String) -> Void = { _ in }
-    /// Why the terminal does not start (nil again once a frame comes).
-    var onStartError: (String?) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -360,7 +331,6 @@ struct TerminalNSView: NSViewRepresentable {
         let c = context.coordinator
         c.writable = writable
         c.onClosed = onClosed
-        c.onStartError = onStartError
         c.handle = handle
         handle?.live = tv
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
@@ -368,16 +338,14 @@ struct TerminalNSView: NSViewRepresentable {
         tv.terminalDelegate = c
         tv.allowMouseReporting = writable
         Self.applyColors(tv, scheme)
-        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe, launcher: Self.testLauncher)
+        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe)
         c.session = session
         handle?.session = session
         session.start()
         c.task = Task { @MainActor in
-            var framed = false, said: String?
             for await ev in session.events {
                 switch ev {
                 case .frame(let frame):
-                    if !framed { framed = true; c.onStartError(nil) }
                     if frame.full {
                         let t = tv.getTerminal()
                         if frame.width > 0, frame.height > 0, (t.cols != frame.width || t.rows != frame.height) { t.resize(cols: frame.width, rows: frame.height) }
@@ -385,10 +353,7 @@ struct TerminalNSView: NSViewRepresentable {
                     }
                     tv.feed(byteArray: ArraySlice([UInt8](frame.bytes)))
                 case .closed(let reason): c.onClosed(reason)
-                case .notice(let s): said = s
-                // Stopped again before any frame: herdr's last words, while it keeps trying.
-                case .reconnecting: if !framed { c.onStartError(said ?? "herdr's terminal stopped before it showed anything.") }
-                case .failed(let reason): c.onStartError(reason)
+                case .reconnecting, .notice: break
                 }
             }
         }
@@ -396,8 +361,9 @@ struct TerminalNSView: NSViewRepresentable {
     }
 
     func updateNSView(_ tv: PasteTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         let c = context.coordinator
-        c.writable = writable; c.onClosed = onClosed; c.onStartError = onStartError
+        c.writable = writable; c.onClosed = onClosed; c.covered = context.environment.underSettings
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
         tv.allowMouseReporting = writable
         if c.scheme != scheme { c.scheme = scheme; Self.applyColors(tv, scheme) }
@@ -429,18 +395,20 @@ struct TerminalNSView: NSViewRepresentable {
         nonisolated(unsafe) var task: Task<Void, Never>?
         nonisolated(unsafe) var session: TerminalSession?
         var writable = false
+        /// Under the Settings page: nothing goes to the pane, whatever reaches the view (SwiftTerm's own mouse-moved
+        /// reports do not go through hit-testing).
+        var covered = false
         weak var handle: TerminalHandle?
         var wasFocused = false
         var scheme: ColorScheme?
         var onClosed: (String) -> Void = { _ in }
-        var onStartError: (String?) -> Void = { _ in }
         private var resizeTask: Task<Void, Never>?
 
         /// Keystrokes (IME text, Ctrl/Option/arrows are already encoded by SwiftTerm) go to the terminal session.
         nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
             let bytes = [UInt8](data)
             Task { @MainActor in
-                guard writable, !bytes.isEmpty else { return }
+                guard writable, !covered, !bytes.isEmpty else { return }
                 handle?.sentBytes += bytes.count
                 _ = session?.send(bytes: bytes)
             }
@@ -482,19 +450,22 @@ final class PasteTerminalView: TerminalView {
     nonisolated(unsafe) var rightMonitor: Any?
     /// Right clicks go to the program (xterm report through the control session) instead of the pane menu.
     var rightClickToPane = false
+    /// Checks: right clicks the monitor took for the program.
+    static var rightClicksTaken = 0
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
         if let m = rightMonitor { NSEvent.removeMonitor(m); rightMonitor = nil }
         guard window != nil else { return }
         rightMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] e in
-            guard let self, self.rightClickToPane, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, self.rightClickToPane, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let t = self.getTerminal()
             guard t.cols > 0, t.rows > 0 else { return e }
             let col = min(t.cols, max(1, Int(p.x / (self.bounds.width / CGFloat(t.cols))) + 1))
             let yTop = self.isFlipped ? p.y : self.bounds.height - p.y
             let row = min(t.rows, max(1, Int(yTop / (self.bounds.height / CGFloat(t.rows))) + 1))
-            _ = self.coordinator?.session?.rightClick(col: col, row: row)
+            Self.rightClicksTaken += 1
+            if self.coordinator?.covered != true { _ = self.coordinator?.session?.rightClick(col: col, row: row) }
             return nil
         }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
@@ -506,10 +477,11 @@ final class PasteTerminalView: TerminalView {
     }
     /// True when the history view is open over this one: it takes the wheel itself.
     var historyOpen: () -> Bool = { false }
-    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() }
+    /// Hidden, under the history view, or under the Settings page.
+    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() || SettingsFocus.covered(self) }
     deinit { if let m = monitor { NSEvent.removeMonitor(m) }; if let m = rightMonitor { NSEvent.removeMonitor(m) } }
     override func paste(_ sender: Any) {
-        guard let c = coordinator, c.writable, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        guard let c = coordinator, c.writable, !c.covered, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         _ = c.session?.paste(text)
     }
 }
@@ -555,7 +527,7 @@ final class HistoryTerminalView: TerminalView {
         guard window != nil else { return }
         // Wheel down while already at the bottom leaves the history. Everything else scrolls the view itself.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            guard let self, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let atBottom = !self.canScroll || self.scrollPosition >= 0.999
             self.flashScroller()
             if e.scrollingDeltaY < 0, atBottom, e.momentumPhase.isEmpty { self.onBottomScroll?(); return nil }
@@ -603,6 +575,7 @@ struct HistoryTerminalNSView: NSViewRepresentable {
         return tv
     }
     func updateNSView(_ tv: HistoryTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         tv.onBottomScroll = { onExit(nil) }
         tv.onExit = onExit
     }

@@ -465,9 +465,7 @@ public struct HubAgent: Codable, Hashable, Sendable {
     public var status: AgentStatus
     public var session: String?
     public var title: String
-    /// Left out when there is no note.
-    public var team: TeamNote?
-    public init(_ a: Agent) { name = a.name; kind = a.kind; status = a.status; session = a.sessionId; title = a.title; team = a.team }
+    public init(_ a: Agent) { name = a.name; kind = a.kind; status = a.status; session = a.sessionId; title = a.title }
 }
 
 /// A pane without its terminal id (that stays inside the hub).

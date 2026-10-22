@@ -3,6 +3,7 @@ import SwiftUI
 
 struct TabScreen: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.underSettings) private var underSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,8 +34,9 @@ struct TabScreen: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.notice)
-        .sheet(isPresented: Bindable(model).showTerminal) { TerminalSheet() }
-        .confirmationDialog("Close this pane?", isPresented: Binding(get: { model.closingPane != nil }, set: { if !$0 { model.closingPane = nil } }),
+        // Not over the Settings page (a late approval result asks for the terminal): they wait for Back.
+        .sheet(isPresented: Binding(get: { model.showTerminal && !underSettings }, set: { model.showTerminal = $0 })) { TerminalSheet() }
+        .confirmationDialog("Close this pane?", isPresented: Binding(get: { model.closingPane != nil && !underSettings }, set: { if !$0 { model.closingPane = nil } }),
                             titleVisibility: .visible) {
             Button("Close pane", role: .destructive) { if let p = model.closingPane { model.closePane(p) } }
             Button("Cancel", role: .cancel) {}
@@ -93,25 +95,19 @@ struct PaneView: View {
                 // scroll edges, instead of being cut by a hard rectangle.
                 ConversationView(items: model.store.conversation(for: agent.sessionId), agentName: agent.name,
                                  liveCard: model.liveCardInConversation(pane),
-                                 onAllow: { model.approve(pane: pane, allow: true, bound: $0) },
-                                 onDeny: { model.approve(pane: pane, allow: false, bound: $0) },
+                                 onAllow: { approve(true, $0) },
+                                 onDeny: { approve(false, $0) },
                                  onOpenTerminal: { model.showTerminal = true },
                                  agentStatus: agent.status,
                                  onFresh: { if focused { focusRequest += 1 } },
                                  loadState: model.store.conversationState(for: agent.sessionId),
-                                 team: agent.team,
                                  scrollToken: model.sendTokens[pane.id] ?? 0,
                                  session: agent.sessionId,
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })
                     .environment(\.logURL, model.store.logURL(for: agent.sessionId))
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
-                    .paneBar(.top) {
-                        VStack(spacing: 0) {
-                            if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) }
-                            TeamLine(team: agent.team)
-                        }
-                    }
+                    .paneBar(.top) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }
                     .paneBar(.bottom) {
                         VStack(spacing: 0) {
                             if agent.status == .working, let q = model.queued[pane.id] {
@@ -172,8 +168,8 @@ extension PaneView {
             // A prompt the log does not have (no transcript, a log that lags, a box the log's call does not match): the
             // card from the screen, where the question card goes.
             ApprovalCard(request: r, agentName: agent.name, canRespond: true,
-                         onAllow: { model.approve(pane: pane, allow: true, bound: r) },
-                         onDeny: { model.approve(pane: pane, allow: false, bound: r) },
+                         onAllow: { approve(true, r) },
+                         onDeny: { approve(false, r) },
                          onOpen: { model.showTerminal = true })
                 .id(r.toolUseId)
                 .inputColumn()
@@ -230,8 +226,15 @@ extension PaneView {
 
     /// User action only (Send): types the answers into the picker. On success the card shows "Sent" for a moment, then the
     /// composer comes back; on failure the screen is read again (read-only) and the card shows the error.
+    /// Under the Settings page nothing is sent, whatever reaches the card (its rows may keep older closures).
+    private func approve(_ allow: Bool, _ bound: PermissionRequest?) {
+        guard !model.coveredBySettings else { return }
+        model.approve(pane: pane, allow: allow, bound: bound)
+    }
+
     private func answer(_ q: QuestionRequest, _ answers: [QuestionAnswer]) async throws {
         guard Self.canAnswer(q, writes: model.writesEnabled) else { return }
+        guard !model.coveredBySettings else { throw QuestionCard.HeldUnderSettings() }   // not "Sent": nothing went
         let request = screenQuestion?.toolUseId == q.toolUseId ? screenQuestion ?? q : q   // the fully read one
         do {
             try await model.store.client.answerQuestion(paneId: pane.id, request: request, answers: answers)
@@ -342,7 +345,10 @@ struct InlineRenameField: NSViewRepresentable {
         f.setAccessibilityLabel(placeholder)
         return f
     }
-    func updateNSView(_ f: Field, context: Context) { context.coordinator.parent = self }
+    func updateNSView(_ f: Field, context: Context) {
+        context.coordinator.parent = self
+        SettingsFocus.cover(f, context.environment.underSettings)
+    }
 
     final class Field: NSTextField {
         private var focusedOnce = false
@@ -423,6 +429,7 @@ struct SearchView: View {
                 Spacer()
                 Text(h.ws.label).foregroundStyle(.secondary)
             }
+            .background { CoveredList() }   // under the Settings page the list does not take the keys
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { if h.id == hits.first?.id { ScreenColumn.probe?("search", $0, area) } }
             .listRowInsets(EdgeInsets(top: 0, leading: ScreenColumn.margin(area.width) + 8, bottom: 0, trailing: ScreenColumn.margin(area.width) + 8))
             .tag(h.id)

@@ -16,9 +16,6 @@ public final class HerdrStore {
     /// Why the last snapshot failed, with the next step (`ConnectionCheck`). Nil while connected, or when the socket
     /// accepts but the request fails.
     public private(set) var problem: ConnectionProblem?
-    /// Connected, but no `herdr` program where the app looks (`ConnectionCheck.programWarning`): terminals cannot start.
-    /// Looked up once, on the first snapshot.
-    public private(set) var programWarning: String?
     @ObservationIgnored var isPreview = false
     @ObservationIgnored var fuzzState: UInt64 = 0
     @ObservationIgnored var fuzzCounter = 0
@@ -38,6 +35,8 @@ public final class HerdrStore {
     @ObservationIgnored private var reliefPending = false
 
     public func setVisibleSessions(_ ids: Set<String>?) { visibleOverride = ids; applyDepth() }
+    /// What `setVisibleSessions` set last (nil: never set).
+    public var visibleSessions: Set<String>? { visibleOverride }
 
     /// Without `setVisibleSessions`, a log read in the last 2 s counts as visible. (Only "the last one read" made two
     /// panes read in turn swap full/short on every call, and each swap re-parsed 2 MB.)
@@ -83,92 +82,45 @@ public final class HerdrStore {
     @ObservationIgnored private var resolved: [String: String] = [:]
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
 
-    /// paneId → the log to show in place of a teammate's or undecided log that herdr names (see `SessionResolver.leads`).
-    @ObservationIgnored private var swaps: [String: LeadSwap] = [:]
-    /// Claude sessions the resolver judged to be a lead's log. Other Claude sessions are held back until judged.
-    @ObservationIgnored private var leads: Set<String> = []
-
-    /// Fills `agent.sessionId` from `resolved` where herdr gave none, and puts the lead's log (or none) in place of
-    /// a teammate's or undecided log while herdr still names it. Either way the session is not herdr's
-    /// (`sessionResolved`), and the pane says which (`team`). With `leads`, a Claude session that is in neither `leads`
-    /// nor `swaps` is not judged yet and shows no log, with no note (judging takes one pass); nil `leads` (no resolver,
-    /// as in previews) holds nothing back.
-    static func withFallbacks(_ ws: [Workspace], resolved: [String: String], swaps: [String: LeadSwap], leads: Set<String>?) -> [Workspace] {
-        guard !resolved.isEmpty || !swaps.isEmpty || leads != nil else { return ws }
+    /// Fills `agent.sessionId` from `resolved` where herdr gave none.
+    private func withResolved(_ ws: [Workspace]) -> [Workspace] {
+        guard !resolved.isEmpty else { return ws }
         var ws = ws
         for w in ws.indices { for t in ws[w].tabs.indices { for p in ws[w].tabs[t].panes.indices {
             let pane = ws[w].tabs[t].panes[p]
-            // The log to show in place of `sid` and the pane's note, or nil to show `sid`.
-            func instead(_ sid: String) -> (String?, TeamNote?)? {
-                if let s = swaps[pane.id], s.teammate == sid { return (s.lead, s.lead == nil ? .waitingForLead : .lastLead) }
-                if let leads, pane.agent?.kind == "claude", !leads.contains(sid) { return (nil, nil) }
-                return nil
-            }
-            guard let sid = pane.agent?.sessionId else {
-                if pane.agent != nil, let path = resolved[pane.id] {
-                    let shown = instead(path)
-                    ws[w].tabs[t].panes[p].agent?.sessionId = shown.map(\.0) ?? path
-                    ws[w].tabs[t].panes[p].agent?.team = shown?.1
-                    ws[w].tabs[t].panes[p].agent?.sessionResolved = true
-                }
-                continue
-            }
-            if let shown = instead(sid) {
-                ws[w].tabs[t].panes[p].agent?.sessionId = shown.0
-                ws[w].tabs[t].panes[p].agent?.team = shown.1
+            if pane.agent != nil, pane.agent?.sessionId == nil, let path = resolved[pane.id] {
+                ws[w].tabs[t].panes[p].agent?.sessionId = path
                 ws[w].tabs[t].panes[p].agent?.sessionResolved = true
             }
         } } }
         return ws
     }
 
-    /// The logs panes already show: herdr's sessions and the logs the resolver found.
-    static func claims(_ ws: [Workspace], resolved: [String: String]) -> Set<String> {
-        Set(ws.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.sessionId }).union(resolved.values)
-    }
-
-    /// The Claude panes to judge: herdr's session, else the log the resolver found.
-    static func leadAsks(_ raw: [Workspace], found: [String: String]) -> [SessionResolver.LeadAsk] {
-        raw.flatMap(\.tabs).flatMap(\.panes).compactMap { p in
-            guard p.agent?.kind == "claude", let sid = p.agent?.sessionId ?? found[p.id] else { return nil }
-            return SessionResolver.LeadAsk(paneId: p.id, sessionId: sid)
-        }
-    }
-
-    /// Starts one resolver pass for the panes that still have no session, and for Claude panes whose session may be
-    /// a teammate's log. The snapshot never waits for it.
+    /// Starts one resolver pass for the panes that still have no session. The snapshot never waits for it.
     private func resolveMissing(_ raw: [Workspace]) {
         guard !isPreview, resolveTask == nil else { return }
         let panes = raw.flatMap(\.tabs).flatMap(\.panes)
         let needs = panes.compactMap { p in
             p.agent.flatMap { $0.sessionId == nil ? SessionResolver.Need(paneId: p.id, kind: $0.kind, cwd: p.cwd) : nil }
         }
-        if needs.isEmpty, resolved.isEmpty, Self.leadAsks(raw, found: [:]).isEmpty, swaps.isEmpty, leads.isEmpty { return }
+        if needs.isEmpty, resolved.isEmpty { return }
         let claimed = Set(panes.compactMap { $0.agent?.sessionId })
         resolveTask = Task { [weak self, resolver] in
             let found = await resolver.resolve(needs, claimed: claimed)
-            let pass = await resolver.leads(Self.leadAsks(raw, found: found), claimed: claimed.union(found.values))
             guard let self else { return }
             self.resolveTask = nil
-            if found != self.resolved || pass.swaps != self.swaps || pass.leads != self.leads {
-                self.resolved = found
-                self.swaps = pass.swaps
-                self.leads = pass.leads
-                self.applySnapshot(self.lastRaw)
-            }
-            // Sessions herdr named while this pass ran are judged by the next one.
-            let judged = Set(pass.swaps.values.map(\.teammate)).union(pass.leads)
-            let named = self.lastRaw.flatMap(\.tabs).flatMap(\.panes).compactMap { $0.agent?.kind == "claude" ? $0.agent?.sessionId : nil }
-            if named.contains(where: { !judged.contains($0) }) { self.resolveMissing(self.lastRaw) }
+            guard found != self.resolved else { return }
+            self.resolved = found
+            self.applySnapshot(self.lastRaw)
         }
     }
 
-    /// The last snapshot as herdr sent it, before `withFallbacks`.
+    /// The last snapshot as herdr sent it, before `withResolved`.
     @ObservationIgnored private var lastRaw: [Workspace] = []
 
     private func applySnapshot(_ raw: [Workspace]) {
         lastRaw = raw
-        let ws = Self.withFallbacks(raw, resolved: resolved, swaps: swaps, leads: isPreview ? nil : leads)
+        let ws = withResolved(raw)
         if ws != workspaces { workspaces = ws }
         syncLogs()
     }
@@ -191,12 +143,6 @@ public final class HerdrStore {
     /// A snapshot herdr gave.
     func took(_ raw: [Workspace]) {
         connected = true
-        if !snapshotted, !isPreview {
-            Task { [weak self] in
-                let w = await Task.detached { ConnectionCheck.programWarning() }.value
-                self?.programWarning = w
-            }
-        }
         snapshotted = true
         snapshots += 1
         if problem != nil { problem = nil }

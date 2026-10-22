@@ -3,8 +3,7 @@
 export type Status = "idle" | "working" | "blocked" | "done" | "unknown";
 export type Level = "read" | "input";
 
-/** `team`: an agent team took the pane's log; the Mac shows the lead's last known log (lastLead) or none yet (waitingForLead). */
-export interface Agent { name: string; kind: string; status: Status; session?: string; title: string; team?: "waitingForLead" | "lastLead" }
+export interface Agent { name: string; kind: string; status: Status; session?: string; title: string }
 export interface Pane { id: string; cwd: string; label?: string; agent?: Agent }
 export interface Tab { id: string; label: string; number: number; status: Status; panes: Pane[] }
 export interface Workspace { id: string; label: string; tabs: Tab[] }

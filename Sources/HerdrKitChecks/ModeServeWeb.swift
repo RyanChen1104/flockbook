@@ -256,15 +256,6 @@ import ImageIO
                 } } }
                 b.workspaces = ws
             }
-            // `team <pane> waiting` | `team <pane> last <session>` | `team <pane> none <session>`: an agent team took the
-            // pane's log: no lead log yet, the lead's last known one, or herdr's own again.
-            if w.count >= 3, w[0] == "team" {
-                for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {
-                    ws[wi].tabs[ti].panes[pi].agent?.sessionId = w.count == 4 ? w[3] : nil
-                    ws[wi].tabs[ti].panes[pi].agent?.team = w[2] == "waiting" ? .waitingForLead : w[2] == "last" ? .lastLead : nil
-                } } }
-                b.workspaces = ws
-            }
             // `nosession <pane>`: the agent there has no session now (it ended); no new conversation is sent.
             if w.count == 2, w[0] == "nosession" {
                 for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == w[1] {

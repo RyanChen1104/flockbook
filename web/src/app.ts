@@ -1007,32 +1007,23 @@ function conversationScreen(pane: string): HTMLElement {
   const v = view(pane);
   const title = where ? (where.p.agent?.title || where.t.label) : pane;
   const status = where?.p.agent?.status ?? "unknown";
-  // An agent team took the pane's log (the Mac's words): the lead's last known log says so under the title; with no
-  // lead log known the pane waits for it and shows no rows (they would be another session's).
-  const team = where?.p.agent?.team;
   const head = h("header", { class: "top bar glass-bar" },
     h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
-    h("span", { class: "bar-title" }, dot(status), team === "lastLead"
-      ? h("span", { class: "bar-stack" }, h("span", {}, title), h("span", { class: "team-line" }, "Agent team: showing the lead's last known session."))
-      : h("span", {}, title)));
+    h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
   // Older rows on the way: a notice under the bar, over the rows (it moves none of them).
   const notice = earlierOf(pane);
   const noticed = !!v.waiting || !!(notice && (notice.busy || (!notice.failed && performance.now() < notice.noticeUntil)));
   const items: Child[] = [];
-  const rows = team === "waitingForLead" ? [] : v.items;
-  if (team === "waitingForLead") {
-    items.push(h("div", { class: "team-wait center", role: "status" }, h("h2", {}, "Waiting for the lead's log"),
-      h("p", { class: "muted" }, "Herdr points this pane at an agent-team teammate. The lead's conversation shows here once Herdr reports it. The terminal shows what it is doing.")));
-  } else if (v.hasEarlier && v.session) {
+  if (v.hasEarlier && v.session) {
     const mine = notice;
     if (mine?.failed) items.push(h("p", { class: "center muted", role: "status" }, "Could not load earlier messages."));
     // While the notice shows the button keeps its words and its room but is not seen (one "Loading earlier", not two).
     items.push(h("button", { id: "load-earlier", class: noticed ? "quiet under-notice" : "quiet", disabled: !!mine?.busy, "aria-busy": mine?.busy ? "true" : "false", onclick: () => loadEarlier(pane) },
       mine?.failed && !mine.busy ? "Try again" : "Load earlier"));
   }
-  items.push(...rowsFor(pane, rows));
-  if (!rows.length && !v.screen && team !== "waitingForLead") items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
-  if (v.screen && (!rows.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
+  items.push(...rowsFor(pane, v.items));
+  if (!v.items.length && !v.screen) items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
+  if (v.screen && (!v.items.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
   else if (v.screen) items.push(screenView(v.screen, false));
   if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 

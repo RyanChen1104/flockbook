@@ -35,40 +35,18 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            List(selection: selection) {
-                Section {
-                    // Same path as the island's + and ⌘T: a new tab in the current workspace.
-                    Button { model.newTab() } label: { SidebarLine(title: "New tab", symbol: "square.and.pencil") }
-                        .buttonStyle(.plain)
-                        .disabled(!model.writesEnabled || model.workspace == nil)
-                        .help("New tab (⌘T)")
-                        .probe { ChromeProbe.rows["New tab"] = $0 }
-                    // The Needs-you count keeps the app's one orange badge (a list .badge is plain text, without the fill).
-                    navRow("Needs you", "tray", .inbox, badge: model.allBlocked.count)
-                    navRow("Overview", "square.grid.2x2", .overview)
-                    navRow("Search", "magnifyingglass", .search)
-                }
-                Section {
-                    // The header is a row (not a section header): it gets the rows' own leading and trailing edges, so
-                    // "Workspaces" lines up with the avatars and its button with the status column.
-                    workspacesHeader
-                    let slots = StatusColumn.slots(model.store.workspaces)
-                    ForEach(model.store.workspaces) { ws in WorkspaceRow(ws: ws, slots: slots).tag(SidebarItem.workspace(ws.id)) }
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
             // The list starts below the toolbar (the lights row with the system sidebar toggle), at the system's spacing.
             // Not under it: rows inside the title bar band would lose their clicks to the title bar.
+            if model.screen == .settings { SettingsSidebar() } else { mainList }
             // Remote access listening: always in sight while on (Settings > Remote access turns it off).
             if let hub = model.remote, hub.running {
                 RemoteFooter(hub: hub)
             }
             // Connection state only when something is wrong (as Mail): nothing while connected.
-            if !model.store.connected || model.store.programWarning != nil {
+            if !model.store.connected {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).imageScale(.small)
-                    Text(model.store.connected ? model.store.programWarning ?? "" : connectionText).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(connectionText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
                 }
                 .padding(.horizontal, 18).padding(.vertical, 10)
@@ -77,14 +55,16 @@ struct SidebarView: View {
                 .onDisappear { ChromeProbe.connectionFooter = .zero }
             }
             // Settings, pinned at the foot: a list of its own, so it keeps the system row look and selection and stays in place
-            // while the workspaces above scroll.
-            List(selection: selection) {
-                navRow("Settings", "gearshape", .settings)
+            // while the workspaces above scroll. Not while Settings has the sidebar (its Back row leaves it).
+            if model.screen != .settings {
+                List(selection: selection) {
+                    navRow("Settings", "gearshape", .settings)
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .scrollDisabled(true)
+                .frame(height: 44)
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .scrollDisabled(true)
-            .frame(height: 44)
         }
         // Full screen: the band the hidden toolbar leaves (rows start where they start windowed).
         .modifier(FullScreenBand(top: panel.minY))
@@ -105,6 +85,33 @@ struct SidebarView: View {
             // value written per frame would make the full-screen toggle (FullScreenChrome) chase it instead of animating once.
             if model.sidebarVisibility != .detailOnly, $0.minX >= SystemSidebar.inset - 0.5, abs(model.sidebarMaxX - $0.maxX) > 0.5 { model.sidebarMaxX = $0.maxX }
         }
+    }
+
+    /// The screens and the workspaces: the sidebar while Settings does not have it.
+    private var mainList: some View {
+        List(selection: selection) {
+            Section {
+                // Same path as the island's + and ⌘T: a new tab in the current workspace.
+                Button { model.newTab() } label: { SidebarLine(title: "New tab", symbol: "square.and.pencil") }
+                    .buttonStyle(.plain)
+                    .disabled(!model.writesEnabled || model.workspace == nil)
+                    .help("New tab (⌘T)")
+                    .probe { ChromeProbe.rows["New tab"] = $0 }
+                // The Needs-you count keeps the app's one orange badge (a list .badge is plain text, without the fill).
+                navRow("Needs you", "tray", .inbox, badge: model.allBlocked.count)
+                navRow("Overview", "square.grid.2x2", .overview)
+                navRow("Search", "magnifyingglass", .search)
+            }
+            Section {
+                // The header is a row (not a section header): it gets the rows' own leading and trailing edges, so
+                // "Workspaces" lines up with the avatars and its button with the status column.
+                workspacesHeader
+                let slots = StatusColumn.slots(model.store.workspaces)
+                ForEach(model.store.workspaces) { ws in WorkspaceRow(ws: ws, slots: slots).tag(SidebarItem.workspace(ws.id)) }
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 
     /// Connected / Reconnecting… (stale data, with last update time) / Connecting… (no data yet).
@@ -142,6 +149,8 @@ struct SidebarView: View {
             Spacer(minLength: 4)
             if badge > 0 { BlockedBadge(count: badge).probe { ChromeProbe.rows["badge:\(title)"] = $0 } }
         }
+        .onAppear { ChromeProbe.rowsShown[title] = true }
+        .onDisappear { ChromeProbe.rowsShown[title] = false }
         .tag(item)
     }
 }
@@ -328,5 +337,40 @@ struct RemoteFooter: View {
         .buttonStyle(.plain)
         .help("Settings > Remote access")
         .padding(.horizontal, 18).padding(.vertical, 10)
+    }
+}
+
+/// The sidebar while Settings shows (as an app's settings take its sidebar): Back on top, then the tabs. Back returns to the
+/// screen Settings was opened from; a tab row chooses the tab the page shows (`SettingsTab.key`, remembered).
+struct SettingsSidebar: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage(SettingsTab.key, store: AppDefaults.store) private var stored = SettingsTab.general.rawValue
+
+    private enum Row: Hashable { case back, tab(SettingsTab) }
+
+    var body: some View {
+        let selection = Binding<Row?> { .tab(SettingsTab(stored: stored)) } set: { row in
+            switch row {
+            case .back: model.closeSettings()
+            case .tab(let t): stored = t.rawValue
+            case nil: break
+            }
+        }
+        List(selection: selection) {
+            SidebarLine(title: "Back", symbol: "chevron.left")
+                .help("Back (Esc)")
+                .probe { SettingsProbe.back = $0 }
+                .onDisappear { SettingsProbe.back = .zero }
+                .tag(Row.back)
+            Section {
+                ForEach(SettingsTab.allCases) { t in
+                    SidebarLine(title: t.title, symbol: t.symbol)
+                        .probe { SettingsProbe.tabs[t] = $0 }
+                        .tag(Row.tab(t))
+                }
+            } header: { Text("Settings") }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 }

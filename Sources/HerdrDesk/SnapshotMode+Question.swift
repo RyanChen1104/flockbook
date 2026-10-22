@@ -334,6 +334,33 @@ extension ContentTests {
         capture(swin, to: "\(dir)/question-sent.png")
         swin.orderOut(nil)
 
+        // Under Settings (the screen kept hidden and inert under the page): the keys do not answer, by the card's own
+        // guard too (no `.disabled` here). A card that came while Settings showed answers the keys after Back.
+        var coveredSent: [QuestionAnswer]?
+        let (cwin, _) = window(scene(items(single("q-covered")), canSend: true, onSend: { coveredSent = $0 })
+                                   .environment(\.underSettings, true), NSSize(width: 1200, height: 760))
+        try? await Task.sleep(for: .seconds(1.2))
+        await digit(cwin, 1); await returnKey(cwin)
+        step("under Settings: 1 and Return send nothing (\(coveredSent.map { "\($0.map(\.picks))" } ?? "nothing"))", coveredSent == nil)
+        cwin.orderOut(nil)
+        let cover = Cover()
+        var backSent: [QuestionAnswer]?
+        let (bwin, _) = window(Covered(cover: cover) { scene(items(single("q-back")), canSend: true, onSend: { backSent = $0 }) }, NSSize(width: 1200, height: 760))
+        try? await Task.sleep(for: .seconds(1.2))
+        cover.on = false; try? await Task.sleep(for: .milliseconds(600))
+        await digit(bwin, 1); await returnKey(bwin)
+        step("came under Settings, after Back: 1 and Return answer (\(backSent.map { "\($0.map(\.picks))" } ?? "nothing"))", backSent == [QuestionAnswer(picks: [0])])
+        bwin.orderOut(nil)
+        // A send held back under the page (the screen's answer gate) is not "Sent": the card says so and keeps the picks.
+        var reports: [String] = []
+        QuestionProbe.report = { if case .sent = $0 { reports.append("sent") } else if case .failed(let why) = $0 { reports.append(why) } }
+        let (hwin, _) = window(scene(items(single("q-held")), canSend: true, onSend: { _ in throw QuestionCard.HeldUnderSettings() }), NSSize(width: 1200, height: 760))
+        try? await Task.sleep(for: .seconds(1.2))
+        await digit(hwin, 1); await returnKey(hwin)
+        QuestionProbe.report = nil
+        step("a send held under Settings is not Sent (\(reports))", reports.count == 1 && reports[0].hasPrefix("Not sent while Settings"))
+        hwin.orderOut(nil)
+
         // Answered and declined rows in the transcript; the composer is back.
         var multiAnswered = three(); multiAnswered.toolUseId = "q-three-ans"
         multiAnswered.state = .answered(["Passkey (Recommended)", "Open tabs, Sidebar state", ""])
@@ -352,4 +379,12 @@ extension ContentTests {
         print("question-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }
+}
+
+/// Checks: a screen under the Settings page, as `DetailView` keeps it, until `on` turns false (Back).
+@Observable private final class Cover { var on = true }
+private struct Covered<Content: View>: View {
+    let cover: Cover
+    @ViewBuilder let content: () -> Content
+    var body: some View { content().environment(\.underSettings, cover.on).disabled(cover.on) }
 }

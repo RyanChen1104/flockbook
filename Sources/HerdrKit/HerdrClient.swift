@@ -201,8 +201,8 @@ public actor HerdrClient {
     /// A long-lived control (or observe) channel for one terminal: input, resize and frames over one process.
     /// Not started yet; call `start()` on the result. See `TerminalSession`.
     nonisolated public func terminalSession(terminalId: String, mode: TerminalSession.Mode = .control(takeover: false),
-                                            cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil) -> TerminalSession {
-        TerminalSession(terminalId: terminalId, session: session, mode: mode, cols: cols, rows: rows, launcher: launcher)
+                                            cols: Int? = nil, rows: Int? = nil) -> TerminalSession {
+        TerminalSession(terminalId: terminalId, session: session, mode: mode, cols: cols, rows: rows)
     }
 
     /// One-way stream without reconnect. `TerminalSession(mode: .observe)` is the same with reconnect and size.
@@ -212,12 +212,11 @@ public actor HerdrClient {
         let isNamed = session.name != nil
         return AsyncThrowingStream { cont in
             let proc = Process()
-            guard let herdr = ConnectionCheck.findHerdr() else { cont.finish(throwing: HerdrError.socket(ConnectionCheck.notFound)); return }
-            proc.executableURL = URL(fileURLWithPath: herdr)
-            proc.arguments = prefix + ["terminal", "session", "observe", terminalId]
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            proc.arguments = ["herdr"] + prefix + ["terminal", "session", "observe", terminalId]
             var env = ProcessInfo.processInfo.environment
             if isNamed { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
-            env["PATH"] = TerminalSession.childPath(environment: env, home: NSHomeDirectory())
+            env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin"
             proc.environment = env
             let out = Pipe()
             proc.standardOutput = out
