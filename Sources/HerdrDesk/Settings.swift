@@ -75,7 +75,7 @@ struct SettingsView: View {
                     Toggle(isOn: Binding(get: { AppUpdater.shared.automaticallyChecks },
                                          set: { AppUpdater.shared.automaticallyChecks = $0 })) {
                         Text("Check for updates automatically")
-                        Text("Once a day. Flockbook asks before it installs an update.")
+                        Text("Once an hour. Flockbook asks before it installs an update.")
                     }
                     LabeledContent {
                         Button("Check Now") { AppUpdater.shared.checkForUpdates() }.disabled(!AppUpdater.shared.canCheck)
