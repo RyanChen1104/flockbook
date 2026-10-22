@@ -333,8 +333,8 @@ extension ChromeTests {
             win.appearance = NSAppearance(named: .darkAqua)
             try? await Task.sleep(for: .milliseconds(600))
             ContentTests.capture(win, to: "\(dir)/settings-page-dark-scrolled.png")
-            // Back to where the page started, insets included (the origin at the top is negative: the toolbar's inset above,
-            // the centring margin at the side). Scrolling to .zero would put the first row under the toolbar, off centre.
+            // Back to where the page started, insets included (the origin at the top is negative: the toolbar's inset above).
+            // Scrolling to .zero would put the first row under the toolbar.
             sv.contentView.scroll(to: top); sv.reflectScrolledClipView(sv.contentView)
             try? await Task.sleep(for: .milliseconds(600))
             let back = sv.contentView.bounds.origin

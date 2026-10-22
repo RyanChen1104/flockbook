@@ -105,10 +105,10 @@ extension SnapshotRunner {
                  bound.map(Pixels.init) == yes.map(Pixels.init) && yes.map(Pixels.init) != no.map(Pixels.init))
         }
 
-        // The Settings window scrolls at a fixed height: the long Tailscale page must not grow past the screen
-        // (the Pair a Device row ran off the bottom). The scroll view's content is taller than what it shows.
+        // The Settings window scrolls at a fixed height: the long Tailscale page (every step open, during setup) must not
+        // grow past the screen (the Pair a Device row ran off the bottom). The scroll view's content is taller than what it shows.
         do {
-            let host = NSHostingView(rootView: SettingsView(tab: .remote, remote: tsOn, scrolls: true))
+            let host = NSHostingView(rootView: SettingsView(tab: .remote, remote: tsSetup, scrolls: true))
             let win = OffscreenWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
             win.contentView = host
             win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
@@ -118,11 +118,14 @@ extension SnapshotRunner {
             let shown = sv?.contentView.bounds.height ?? 0, content = sv?.documentView?.frame.height ?? 0
             step("settings window: \(Int(host.fittingSize.height)) pt high, shows \(Int(shown)) of \(Int(content)) pt, scrolls",
                  host.fittingSize.height <= 700 && content > shown + 50 && sv?.hasVerticalScroller != false)
-            win.orderOut(nil)
+            win.orderOut(nil); win.contentView = nil
         }
 
         // The Tailscale checks: all five passed -> one row ("All 5 checks passed", Details, Check Again); Details shows
-        // them. Any not passed -> every step shows, those not passed first, with their actions.
+        // them. Any not passed -> every step shows, those not passed first, with their actions. Each page starts after the
+        // one before has left (its rows report that late) and without its probes.
+        try? await Task.sleep(for: .milliseconds(500))
+        SettingsProbe.steps = [:]; SettingsProbe.controls = [:]
         for (name, hub, details, want) in [("all passed", tsOn, false, [Int]()), ("all passed, Details", tsOn, true, [1, 2, 3, 4, 5]),
                                            ("setup", tsSetup, false, [3, 4, 5, 1, 2]), ("serve taken", tsTaken, false, [5, 1, 2, 3, 4])] {
             let host = NSHostingView(rootView: SettingsView(tab: .remote, remote: hub, stepDetails: details))
@@ -135,7 +138,9 @@ extension SnapshotRunner {
             step("checks \(name): steps top to bottom \(order), want \(want); block \(Int(block.height)) pt",
                  order == want && (want.isEmpty ? block.height > 0 && block.height <= 44 : block.height > 44))
             win.orderOut(nil); win.contentView = nil
-            SettingsProbe.steps = [:]
+            // The closed page's rows report that they left; the next page starts without them.
+            try? await Task.sleep(for: .milliseconds(500))
+            SettingsProbe.steps = [:]; SettingsProbe.controls = [:]
         }
 
         let shots: [(String, AnyView, CGFloat)] = [
