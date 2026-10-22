@@ -14,6 +14,7 @@ import SwiftUI
         if args.contains("--test-textsize") { Task { await textSize() }; return true }
         if args.contains("--test-sendfail") { Task { await sendFail() }; return true }
         if args.contains("--test-loadstate") { Task { await loadState() }; return true }
+        if args.contains("--test-termfail") { Task { await termFail() }; return true }
         if args.contains("--test-glyph") { Task { await glyph() }; return true }
         if args.contains("--test-panebars") { Task { await paneBars() }; return true }
         if args.contains("--test-surfaces") { Task { await surfaces() }; return true }
@@ -391,6 +392,77 @@ import SwiftUI
         NSApp.terminate(nil)
     }
 
+    /// A terminal that cannot start (no herdr program where the app looks): one line saying why and Retry, not a blank
+    /// view. A fake herdr that exits 127 like `env` does; nothing talks to a herdr session.
+    static func termFail() async {
+        var failures = 0
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("termfail-test: \(n) \(ok ? "ok" : "FAIL")") }
+        step("the line: Can't start the terminal + why",
+             ObservedTerminal.startErrorLine(ConnectionCheck.notFound) == "Can't start the terminal: " + ConnectionCheck.notFound)
+        let tmp = NSTemporaryDirectory() + "fb-termfail-\(getpid())", script = tmp + "/herdr", log = tmp + "/starts"
+        try? FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try? "#!/bin/sh\necho start >> '\(log)'\necho 'env: herdr: No such file or directory' >&2\nexit 127\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        func starts() -> Int { ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        func until(_ sec: Double, _ ok: () -> Bool) async -> Bool {
+            let t = Date()
+            while Date().timeIntervalSince(t) < sec { if ok() { return true }; try? await Task.sleep(for: .milliseconds(50)) }
+            return ok()
+        }
+        TerminalNSView.testLauncher = [script]
+        defer { TerminalNSView.testLauncher = nil }
+        let model = AppModel(store: .preview)
+        let want = ObservedTerminal.startErrorLine("env: herdr: No such file or directory")
+        for dark in [false, true] {
+            TerminalProbe.startError = nil
+            let (win, _) = offscreen(ZStack { WindowSurface(glass: .off)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_fail", writable: true, focused: false)
+                    .padding(.horizontal, 14).padding(.bottom, 8) }, NSSize(width: 640, height: 360))
+            win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let shown = await until(4) { TerminalProbe.startError == want }
+            step("\(dark ? "dark" : "light"): the pane says why (\(TerminalProbe.startError ?? "nothing"))", shown)
+            try? await Task.sleep(for: .milliseconds(300))
+            capture(win, to: "\(dir)/termfail\(dark ? "-dark" : "").png")
+            if !dark {
+                let before = starts()
+                step("exit 127: not retried by itself (\(before) start)", before == 1)
+                TerminalProbe.retry?()
+                let again = await until(3) { starts() == before + 1 }
+                step("Retry starts it again (\(starts()) starts)", again)
+            }
+            win.orderOut(nil)
+        }
+        // Then it starts: the first frame clears the error. `fail` is how the first start ends: exit 1 is retried by itself,
+        // exit 127 waits for Retry.
+        for fail in [1, 127] {
+            let once = tmp + "/once-\(fail)", flaky = tmp + "/flaky-\(fail)"
+            let frame = #"{"type":"terminal.frame","seq":1,"full":true,"width":80,"height":24,"bytes":"b2sNCg=="}"#
+            try? """
+            #!/bin/sh
+            if [ ! -e '\(once)' ]; then touch '\(once)'; echo 'socket gone' >&2; exit \(fail); fi
+            echo '\(frame)'
+            sleep 5
+            """.write(toFile: flaky, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: flaky)
+            TerminalNSView.testLauncher = [flaky]
+            TerminalProbe.startError = nil
+            let (win, _) = offscreen(ZStack { WindowSurface(glass: .off)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_flaky\(fail)", writable: true, focused: false) },
+                NSSize(width: 640, height: 360))
+            let shown = await until(4) { TerminalProbe.startError == ObservedTerminal.startErrorLine("socket gone") }
+            step("exit \(fail), then a frame: the error shows first (\(TerminalProbe.startError ?? "nothing"))", shown)
+            if fail == 127 { TerminalProbe.retry?() }
+            let cleared = await until(8) { TerminalProbe.startError == nil }
+            try? await Task.sleep(for: .milliseconds(800))
+            step("exit \(fail), then a frame: the error goes away and stays away (\(TerminalProbe.startError ?? "none"))", cleared && TerminalProbe.startError == nil)
+            win.orderOut(nil)
+        }
+        print("termfail-test: pictures in \(dir)/termfail{,-dark}.png")
+        print("termfail-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
+        NSApp.terminate(nil)
+    }
+
     /// Empty conversation: which view for which load state (no 30 s guess), with a picture of each.
     static func loadState() async {
         var failures = 0
@@ -431,6 +503,28 @@ import SwiftUI
             win.orderOut(nil)
         }
         step("fresh agent's empty state asks the pane to focus the composer (\(fresh) call)", fresh == 1)
+        // An agent team took the pane's log: no lead log yet waits for it (with the terminal); the last lead says so above.
+        let waiting = ConversationView.EmptyCopy(title: TeamNote.waitingTitle, detail: TeamNote.waitingDetail, terminal: true)
+        step("team, no lead log: Waiting for the lead's log + Show Terminal, whatever the status",
+             ([nil] + [AgentStatus.idle, .working, .blocked, .done]).allSatisfy { ConversationView.emptyCopy(.missing, status: $0, agentName: "tk", team: .waitingForLead) == waiting })
+        step("team, last lead: the empty copy is the usual one",
+             ConversationView.emptyCopy(.missing, status: .done, agentName: "tk", team: .lastLead) == copy(.missing, .done))
+        step("team line: only for the last lead",
+             TeamLine.text(.lastLead) == TeamNote.lastLeadLine && TeamLine.text(.waitingForLead) == nil && TeamLine.text(nil) == nil)
+        for dark in [false, true] {
+            let tail = dark ? "-dark" : ""
+            let (w1, _) = offscreen(ZStack { WindowSurface(glass: .off); ConversationView(items: [], agentName: "claude", agentStatus: .working, loadState: .missing, team: .waitingForLead) }, NSSize(width: 640, height: 360))
+            w1.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try? await Task.sleep(for: .milliseconds(400))
+            capture(w1, to: "\(dir)/team-waiting\(tail).png"); w1.orderOut(nil)
+            let rows = [ConversationItem(id: "u1", kind: .userText("Split the work across the team.")),
+                        ConversationItem(id: "a1", kind: .assistantText("I started three teammates. Their results come back here."))]
+            let (w2, _) = offscreen(ZStack { WindowSurface(glass: .off); ConversationView(items: rows, agentName: "claude", agentStatus: .working, loadState: .ready).paneBar(.top) { TeamLine(team: .lastLead) } }, NSSize(width: 640, height: 360))
+            w2.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            try? await Task.sleep(for: .milliseconds(400))
+            capture(w2, to: "\(dir)/team-lastlead\(tail).png"); w2.orderOut(nil)
+        }
+        print("loadstate-test: pictures in \(dir)/team-{waiting,lastlead}{,-dark}.png")
         print("loadstate-test: pictures in \(dir)/empty-{loading,ready,missing,missing-worked,failed}.png")
         print("loadstate-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

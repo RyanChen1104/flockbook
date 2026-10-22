@@ -101,13 +101,19 @@ struct PaneView: View {
                                  agentStatus: agent.status,
                                  onFresh: { if focused { focusRequest += 1 } },
                                  loadState: model.store.conversationState(for: agent.sessionId),
+                                 team: agent.team,
                                  scrollToken: model.sendTokens[pane.id] ?? 0,
                                  session: agent.sessionId,
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })
                     .environment(\.logURL, model.store.logURL(for: agent.sessionId))
                     .paneMenu(pane, tab: tab)
                     .id(pane.id)   // a different pane is a different conversation: fresh scroll state, rests at the bottom
-                    .paneBar(.top) { if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) } }
+                    .paneBar(.top) {
+                        VStack(spacing: 0) {
+                            if labelShown { PaneLabel(pane: pane, focused: focused, zoomed: zoomed, tab: tab) }
+                            TeamLine(team: agent.team)
+                        }
+                    }
                     .paneBar(.bottom) {
                         VStack(spacing: 0) {
                             if agent.status == .working, let q = model.queued[pane.id] {
