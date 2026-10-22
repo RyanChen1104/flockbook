@@ -433,6 +433,31 @@ import SwiftUI
             }
             win.orderOut(nil)
         }
+        // Then it starts: the first frame clears the error. `fail` is how the first start ends: exit 1 is retried by itself,
+        // exit 127 waits for Retry.
+        for fail in [1, 127] {
+            let once = tmp + "/once-\(fail)", flaky = tmp + "/flaky-\(fail)"
+            let frame = #"{"type":"terminal.frame","seq":1,"full":true,"width":80,"height":24,"bytes":"b2sNCg=="}"#
+            try? """
+            #!/bin/sh
+            if [ ! -e '\(once)' ]; then touch '\(once)'; echo 'socket gone' >&2; exit \(fail); fi
+            echo '\(frame)'
+            sleep 5
+            """.write(toFile: flaky, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: flaky)
+            TerminalNSView.testLauncher = [flaky]
+            TerminalProbe.startError = nil
+            let (win, _) = offscreen(ZStack { WindowSurface(glass: .off)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_flaky\(fail)", writable: true, focused: false) },
+                NSSize(width: 640, height: 360))
+            let shown = await until(4) { TerminalProbe.startError == ObservedTerminal.startErrorLine("socket gone") }
+            step("exit \(fail), then a frame: the error shows first (\(TerminalProbe.startError ?? "nothing"))", shown)
+            if fail == 127 { TerminalProbe.retry?() }
+            let cleared = await until(8) { TerminalProbe.startError == nil }
+            try? await Task.sleep(for: .milliseconds(800))
+            step("exit \(fail), then a frame: the error goes away and stays away (\(TerminalProbe.startError ?? "none"))", cleared && TerminalProbe.startError == nil)
+            win.orderOut(nil)
+        }
         print("termfail-test: pictures in \(dir)/termfail{,-dark}.png")
         print("termfail-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

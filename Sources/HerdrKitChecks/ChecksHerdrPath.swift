@@ -26,6 +26,37 @@ func checksHerdrPath() async throws {
     check(ConnectionCheck.notFound == "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin.",
           "herdrpath: the not-found reason names the folders")
 
+    // Only a program counts: a folder named herdr or a file without the x bit does not stop the search; a symlink does count.
+    let folder = dir + "/folder", plain = dir + "/plain", link = dir + "/link", dirLink = dir + "/dirlink"
+    for d in [folder + "/herdr", plain, link, dirLink] { try fm.createDirectory(atPath: d, withIntermediateDirectories: true) }
+    fm.createFile(atPath: plain + "/herdr", contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o644])
+    try fm.createSymbolicLink(atPath: link + "/herdr", withDestinationPath: custom + "/herdr")
+    try fm.createSymbolicLink(atPath: dirLink + "/herdr", withDestinationPath: folder + "/herdr")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": folder], home: home) == local + "/herdr", "herdrpath: a folder named herdr on PATH is skipped")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": folder, "HERDR_BIN": folder + "/herdr"], home: home) == local + "/herdr",
+          "herdrpath: HERDR_BIN naming a folder is skipped")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": plain], home: home) == local + "/herdr", "herdrpath: a herdr file without the x bit is skipped")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": plain, "HERDR_BIN": plain + "/herdr"], home: home) == local + "/herdr",
+          "herdrpath: HERDR_BIN naming a file without the x bit is skipped")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": link], home: home) == link + "/herdr", "herdrpath: a symlink to the program counts")
+    check(ConnectionCheck.findHerdr(environment: ["PATH": dirLink], home: home) == local + "/herdr", "herdrpath: a symlink to a folder is skipped")
+    check(ConnectionCheck.programWarning(environment: ["PATH": folder], home: dir + "/nohome", usual: [folder]) != nil,
+          "herdrpath: only a folder named herdr -> the warning")
+
+    // herdr not running: the command to start it uses HERDR_BIN's full path (often not on the Terminal's PATH), quoted for the shell.
+    let spaced = dir + "/my tools"
+    try fm.createDirectory(atPath: spaced, withIntermediateDirectories: true)
+    program(spaced + "/herdr")
+    let noServer = dir + "/none.sock"
+    check(ConnectionCheck.diagnose(session: HerdrSession(name: nil, socketPath: noServer), environment: ["PATH": dir + "/empty", "HERDR_BIN": custom + "/herdr"], home: home)
+          == .notRunning(command: custom + "/herdr"), "herdrpath: not running, HERDR_BIN -> its full path")
+    check(ConnectionCheck.diagnose(session: HerdrSession(name: "work", socketPath: noServer), environment: ["PATH": dir + "/empty", "HERDR_BIN": spaced + "/herdr"], home: home)
+          == .notRunning(command: "'\(spaced)/herdr' --session work"), "herdrpath: a HERDR_BIN with a space is quoted")
+    check(ConnectionCheck.shellQuoted("/a/it's") == "'/a/it'\\''s'" && ConnectionCheck.shellQuoted("/usr/bin/herdr") == "/usr/bin/herdr",
+          "herdrpath: shell quoting")
+    check(ConnectionCheck.diagnose(session: HerdrSession(name: nil, socketPath: noServer), environment: ["PATH": dir + "/empty", "HERDR_BIN": folder + "/herdr"], home: home)
+          == .notRunning(command: "herdr"), "herdrpath: HERDR_BIN not a program -> plain `herdr`")
+
     // The program a terminal runs: herdr's full path (no `/usr/bin/env herdr`), PATH with the usual folders for herdr itself.
     check(TerminalSession.launcher(session: .default(), environment: finder, home: home) == [local + "/herdr"], "herdrpath: terminal runs ~/.local/bin/herdr")
     check(TerminalSession.launcher(session: .named("work"), environment: finder, home: home) == [local + "/herdr", "--session", "work"],
@@ -55,6 +86,27 @@ func checksHerdrPath() async throws {
     let r127 = await run(TerminalSession(terminalId: "term_x", session: .default(), launcher: [gone]), 3)
     check(r127.ended && retries(r127.events) == 0 && failed(r127.events)?.contains("No such file or directory") == true,
           "herdrpath: exit 127 before any frame -> failed with herdr's words, no retry (\(retries(r127.events)) retries)")
+
+    // herdr's last words come in pieces and without a newline: all of them are the reason, every time.
+    let pieces = dir + "/pieces.sh"
+    try "#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo \"warn $i\" >&2; i=$((i+1)); done\nprintf 'env: herdr: ' >&2\nsleep 0.05\nprintf 'No such file or directory' >&2\nexit 127\n"
+        .write(toFile: pieces, atomically: true, encoding: .utf8)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pieces)
+    var whole = 0
+    for _ in 0..<8 {
+        let r = await run(TerminalSession(terminalId: "term_x", session: .default(), launcher: [pieces]), 3)
+        if r.ended, failed(r.events) == "env: herdr: No such file or directory" { whole += 1 }
+    }
+    check(whole == 8, "herdrpath: exit 127, stderr in pieces with no last newline -> the whole last line, 8 of 8 (\(whole))")
+
+    // The real start: the found program with --session and the terminal's arguments, PATH with ~/.local/bin.
+    let argsLog = dir + "/args", spy = dir + "/spy.sh"
+    try "#!/bin/sh\necho \"$*\" > '\(argsLog)'\necho \"$PATH\" >> '\(argsLog)'\nexit 127\n".write(toFile: spy, atomically: true, encoding: .utf8)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: spy)
+    _ = await run(TerminalSession(terminalId: "term_x", session: .named("work"), find: { spy }), 3)
+    let spied = ((try? String(contentsOfFile: argsLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    check(spied.first?.hasPrefix("--session work terminal session control term_x") == true, "herdrpath: started as `herdr --session work terminal session control …` (\(spied.first ?? "not started"))")
+    check(spied.count == 2 && spied[1].split(separator: ":").contains(Substring(NSHomeDirectory() + "/.local/bin")), "herdrpath: herdr's PATH has ~/.local/bin")
 
     let none = await run(TerminalSession(terminalId: "term_x", session: .default(), find: { nil }), 3)
     check(none.ended && failed(none.events) == ConnectionCheck.notFound, "herdrpath: no herdr program -> failed: not found")
