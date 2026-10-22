@@ -685,7 +685,7 @@ async function fakeRun() {
     "status line: open, two lines; the long one scrolls sideways, not the page");
   check(await p.eval(`getComputedStyle(${statusRows}[0].firstElementChild).color`) === "rgb(175, 135, 255)" && await p.eval(`getComputedStyle(${statusRows}[1].firstElementChild).opacity`) === "0.6",
     "status line: the line's colours and dim text");
-  check(await p.eval("[...document.querySelectorAll('.status-detail > .status-tags > .status-tag')].map((t) => t.textContent).join('|')") === "Opus 5.5|high|ctx 42%|$3.27 est."
+  check(await p.eval("[...document.querySelectorAll('.statusline.open > .status-head > .status-tags.all > .status-tag')].map((t) => t.textContent).join('|')") === "Opus 5.5|high|ctx 42%|$3.27 est."
     && /^Updated \d/.test(await p.eval("document.querySelector('.status-detail > .status-time')?.textContent ?? ''")),
     `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
   check(await p.eval(`${more}.getAttribute('aria-expanded') === 'true' && ${more}.getAttribute('aria-label') === 'Hide the whole status line'`) === true,
@@ -703,11 +703,11 @@ async function fakeRun() {
   check(await p.until(`${shownTags}.length > 0 && ${shownTags}.length < 4 && !${more}.hidden && ${noScroll}`) === true,
     `status line: narrow, the tags that fit and the chevron (${await p.eval(`JSON.stringify(${shownTags})`)})`);
   await p.scale(3);
-  // A nearly full context: the context tag and its bar orange (the light orange that reads on the tag).
+  // A nearly full context: the context tag and its bar orange (the orange that reads on the tag, light or dark).
   await p.type("#composer-text", "status hot");
   await p.click("#composer-send");
   check(await p.until(`${rowTags}[2]?.classList.contains('warn') && ${rowTags}[2].textContent === 'ctx 86%'`) === true
-    && await p.eval(`getComputedStyle(${rowTags}[2]).color`) === "rgb(160, 75, 0)",
+    && await p.eval(`getComputedStyle(${rowTags}[2]).color`) === (await p.eval("matchMedia('(prefers-color-scheme: dark)').matches") ? "rgb(255, 160, 74)" : "rgb(160, 75, 0)"),
     `status line: context 86%, orange (${await p.eval(`getComputedStyle(${rowTags}[2]).color`)})`);
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("statusline-hot");

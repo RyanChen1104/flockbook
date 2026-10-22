@@ -593,7 +593,7 @@ extension Hub {
         lastQueued[p.id] = queued
         // The status line (Claude only), the same way.
         let line = HubStatusLine(pane: p.id, record: p.agent.flatMap { $0.kind == "claude" ? $0.sessionId : nil }.flatMap { backend.statusLine(session: $0) })
-        if force ? !line.lines.isEmpty : line != (lastStatusLine[p.id] ?? HubStatusLine(pane: p.id, lines: [])) { out.append(.statusLine(line)) }
+        if force ? !line.isEmpty : line != (lastStatusLine[p.id] ?? HubStatusLine(pane: p.id, lines: [])) { out.append(.statusLine(line)) }
         lastStatusLine[p.id] = line
         return out
     }

@@ -334,7 +334,7 @@ public struct HubQueued: Codable, Hashable, Sendable {
 }
 
 /// Claude Code's status line of a watched pane (opt-in, `StatusLineFolder`): the owner's own status line as styled
-/// lines, and Claude Code's facts for the expanded view (cost: its own estimate). Empty lines: none to show now.
+/// lines, and Claude Code's facts for the row's tags (cost: its own estimate). No lines and no facts: none to show now.
 public struct HubStatusLine: Codable, Hashable, Sendable {
     public var pane: String
     public var lines: [[StyledRun]]
@@ -351,11 +351,12 @@ public struct HubStatusLine: Codable, Hashable, Sendable {
         self.effort = effort; self.time = time
     }
     /// Nothing to show: no own line and no facts.
-    public var isEmpty: Bool { lines.isEmpty }
+    public var isEmpty: Bool { lines.isEmpty && model == nil && effort == nil && costUSD == nil && contextPercent == nil }
     public init(pane: String, record: StatusLineRecord?) {
-        let lines = record?.shown ?? []
-        let i = lines.isEmpty ? nil : record?.info
-        self.init(pane: pane, lines: lines, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize)
+        guard let record, !record.isEmpty else { self.init(pane: pane, lines: []); return }
+        let i = record.info
+        self.init(pane: pane, lines: record.lines, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
+                  effort: i?.effort, time: record.time.timeIntervalSince1970.rounded())
     }
 }
 

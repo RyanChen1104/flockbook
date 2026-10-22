@@ -114,8 +114,8 @@ struct PaneView: View {
                                 QueuedStrip(queue: q, canPull: model.writesEnabled, pulling: model.pulling.contains(pane.id),
                                             onPull: { model.pullQueued(pane) })
                             }
-                            composer(agent)
                             if let line = model.statusLines[pane.id] { StatusLineBar(record: line) }
+                            composer(agent)
                         }
                     }
                     .softScrollEdges([.top, .bottom])

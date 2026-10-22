@@ -69,7 +69,7 @@ const state = {
   revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
-  /** Claude Code's status line is open (one line that scrolls sideways) instead of a chip. */
+  /** Claude Code's status line is open: every tag, the owner's lines and when it was updated. */
   statusOpen: false,
 };
 
@@ -221,7 +221,7 @@ function receive(m: HubMessage): void {
       view(m.pane).screen = m.text;
       break;
     case "statusLine":
-      view(m.pane).statusLine = m.lines.length ? m : undefined;
+      view(m.pane).statusLine = m.lines.length || statusTags(m).length ? m : undefined;
       break;
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
@@ -1045,35 +1045,67 @@ function conversationScreen(pane: string): HTMLElement {
   const list = h("div", { class: "items" });
   itemsOf.set(list, items);
   const form = composer(pane, !!card, where?.p.agent?.name);
-  // Claude Code's status line: in the composer, under the text field; a read-only device has it at the foot alone.
+  // Claude Code's status line: in the composer, over the text field; a read-only device has it at the foot alone.
   const line = statusLineView(pane);
-  if (form && line) form.append(line);
+  if (form && line) form.prepend(line);
   return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
 }
 
-/** Claude Code's status line: a chip with its first line, cut; a tap shows every line at full length, each scrolling
- *  sideways, and Claude Code's facts. Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
+/** Claude Code's status line (appendix C): a row of tags over the composer's field (the model in bold, effort, context
+ *  with its bar, orange from 80%, the cost marked as an estimate), only the ones that fit in one row, and a chevron at
+ *  the right when one is left out or the owner's lines are there to open. Open: every tag, the owner's lines in their
+ *  colours (each scrolling sideways) and when it was updated. Without facts the row is the owner's first line, cut.
+ *  Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
 function statusLineView(pane: string): HTMLElement | null {
   const s = view(pane).statusLine;
-  if (!s?.lines.length) return null;
+  const tags = s ? statusTags(s) : [];
+  if (!s || (!s.lines.length && !tags.length)) return null;
   const open = state.statusOpen;
   const plain = (l: StyledRun[]): string => l.map((r) => r.text).join("");
-  const chip = h("button", { class: `status-chip${open ? " open" : ""}`, type: "button", "aria-expanded": open ? "true" : "false",
-    "aria-label": open ? "Hide the status line" : "Show the status line", onclick: () => { state.statusOpen = !state.statusOpen; render(); } },
-    open ? "Status line" : plain(s.lines[0]));
-  const facts = statusFacts(s);
-  const body = open ? h("div", { class: "status-lines" },
-    ...s.lines.map((l) => h("div", { class: "status-row" }, ...l.map(runView))),
-    facts ? h("div", { class: "status-facts" }, facts) : null) : null;
-  return h("div", { class: "statusline", "data-key": JSON.stringify([s, open]) }, chip, body);
+  const more = h("button", { class: "status-more", type: "button", "aria-expanded": open ? "true" : "false",
+    "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { state.statusOpen = !state.statusOpen; render(); } },
+    open ? "⌃" : "⌄");
+  // Open, the row wraps and holds every tag; without facts it is empty (the owner's lines are under it).
+  const row = tags.length ? h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags)
+    : open ? h("div", { class: "status-tags all" }) : h("div", { class: "status-plain" }, plain(s.lines[0] ?? []));
+  const head = h("div", { class: "status-head" }, row, more);
+  // The chevron stays for own lines or a tag left out of the row (wrapped onto the hidden second line).
+  if (tags.length && !s.lines.length && !open) {
+    const fit = (): void => {
+      // Measured without the chevron: with it, its own room could push the last tag out.
+      more.hidden = true;
+      const first = row.firstElementChild as HTMLElement | null;
+      more.hidden = ![...row.children].some((t) => (t as HTMLElement).offsetTop !== first?.offsetTop);
+    };
+    new ResizeObserver(fit).observe(row);
+  }
+  const time = s.time ? new Date(s.time * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  const body = open && (s.lines.length || time) ? h("div", { class: "status-detail" },
+    s.lines.length ? h("div", { class: "status-lines" }, ...s.lines.map((l) => h("div", { class: "status-row" }, ...l.map(runView)))) : null,
+    time ? h("div", { class: "status-time" }, `Updated ${time}`) : null) : null;
+  return h("div", { class: `statusline${open ? " open" : ""}`, "data-key": JSON.stringify([s, open]) }, head, body);
 }
 
-/** "Opus 5.5 · context 42% of 1M · session $3.27 (estimate)": what Claude Code's JSON says. */
-function statusFacts(s: StatusLine): string {
-  const tokens = (n: number): string => n >= 1e6 && n % 1e6 === 0 ? `${n / 1e6}M` : n >= 1000 ? `${Math.floor(n / 1000)}K` : `${n}`;
-  return [s.model,
-    s.contextPercent !== undefined ? `context ${s.contextPercent}%${s.contextSize ? ` of ${tokens(s.contextSize)}` : ""}` : undefined,
-    s.costUSD !== undefined ? `session $${s.costUSD.toFixed(2)} (estimate)` : undefined].filter(Boolean).join(" · ");
+/** One tag per fact Claude Code's JSON gives; none for a fact it did not send. */
+function statusTags(s: StatusLine): HTMLElement[] {
+  const tag = (kind: string, text: string, spoken: string, ...extra: HTMLElement[]): HTMLElement =>
+    h("span", { class: `status-tag tag-${kind}`, role: "text", "aria-label": spoken }, text, ...extra);
+  const out: HTMLElement[] = [];
+  if (s.model) out.push(tag("model", s.model, `Model ${s.model}`));
+  if (s.effort) out.push(tag("effort", s.effort, `Effort ${s.effort}`));
+  if (s.contextPercent !== undefined) {
+    const p = s.contextPercent;
+    const fill = h("span", { class: "status-fill" });
+    fill.style.width = `${Math.min(Math.max(p, 0), 100)}%`;
+    const t = tag("context", `ctx ${p}%`, `Context ${p}% used`, h("span", { class: "status-bar", "aria-hidden": "true" }, fill));
+    if (p >= 80) t.classList.add("warn");
+    out.push(t);
+  }
+  if (s.costUSD !== undefined) {
+    const d = `$${s.costUSD.toFixed(2)}`;
+    out.push(tag("cost", `${d} est.`, `Session cost about ${d}, an estimate`));
+  }
+  return out;
 }
 
 /** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that

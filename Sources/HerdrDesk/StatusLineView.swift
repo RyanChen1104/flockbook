@@ -6,14 +6,16 @@ extension AppModel {
     func checkStatusLine(for pane: Pane) {
         let r = pane.agent.flatMap { $0.kind == "claude" ? $0.sessionId : nil }
             .flatMap { StatusLineSetup.live.record(session: $0) }
-            .flatMap { $0.shown.isEmpty ? nil : $0 }
+            .flatMap { $0.isEmpty ? nil : $0 }
         if statusLines[pane.id] != r { statusLines[pane.id] = r }
     }
 }
 
-/// Claude Code's status line under the composer: one small, dim, monospaced line in its own colours. A long line is
-/// cut; a click shows every line, wrapped, and Claude Code's facts (its cost is an estimate). The pointer over it shows
-/// the facts too.
+/// Claude Code's status row over the composer (appendix C): one tag per fact Claude Code's JSON gives (the model in
+/// bold, effort, context with its bar, orange from 80%, the cost marked as an estimate), in one row; the tags that do
+/// not fit are left out and a chevron at the right opens the rest. The owner's own lines are only in the open view, so
+/// with them the chevron is always there. Open: every tag, wrapped; the owner's lines in their colours, each scrolling
+/// sideways; when Claude Code last ran the line. Without the JSON's facts the row is the owner's first line, cut.
 struct StatusLineBar: View {
     let record: StatusLineRecord
     @State private var expanded: Bool
@@ -22,59 +24,73 @@ struct StatusLineBar: View {
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var sizeRaw = ReadingSize.m.rawValue
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var widthRaw = ReadingWidth.medium.rawValue
     private var size: ReadingSize { ReadingSize(rawValue: sizeRaw) ?? .m }
+    private var tags: [StatusTag] { record.info?.tags ?? [] }
 
     var body: some View {
         let width = ReadingWidth(rawValue: widthRaw) ?? .medium
         ZeroWidthAs(width: size.column + 2 * width.sidePadding) {
-            Button { expanded.toggle() } label: { content }
-                .buttonStyle(.plain)
-                .help(Self.facts(record.info) ?? "")
+            Group { if expanded { open } else { row } }
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .contain)
                 .accessibilityLabel("Claude Code status line")
-                .accessibilityValue(ANSIText.plain(record.shown))
-                .accessibilityHint(expanded ? "Shows one line" : "Shows every line")
                 .readingColumn(size, width, alignment: .leading)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { StatusLineProbe.frame = $0 }
-                // Close under the composer (its column has 12 pt under it).
-                .padding(.top, -10).padding(.bottom, 10)
+                // Close over the composer (its column has 6 pt over it).
+                .padding(.top, 6).padding(.bottom, -2)
         }
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if expanded {
-                ForEach(Array(record.shown.enumerated()), id: \.offset) { _, line in
-                    Text(Self.attributed(line, dark: scheme == .dark)).fixedSize(horizontal: false, vertical: true)
-                }
-                if let f = Self.facts(record.info) {
-                    Text(f).foregroundStyle(.tertiary).padding(.top, 2)
-                }
-            } else {
-                Text(Self.attributed(record.shown.first ?? [], dark: scheme == .dark))
+    /// One row: the tags that fit and the chevron; without facts, the owner's first line.
+    @ViewBuilder private var row: some View {
+        if tags.isEmpty {
+            HStack(spacing: 6) {
+                Text(Self.attributed(record.lines.first ?? [], dark: scheme == .dark))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                chevron
             }
+            .onAppear { StatusLineProbe.plain = true; StatusLineProbe.fit = .init(shown: 0, chevron: true) }
+        } else {
+            StatusRowLayout(more: !record.lines.isEmpty) {
+                ForEach(tags, id: \.kind) { StatusTagView(tag: $0) }
+                chevron
+            }
+            .clipped()
         }
-        .font(.system(size: 11, design: .monospaced))
-        .foregroundStyle(.secondary)
-        .opacity(0.85)
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
     }
 
-    /// "Opus 5.5 · context 37% of 1M · session $0.42 (estimate)": what Claude Code's JSON says; nil when nothing.
-    static func facts(_ i: ClaudeStatusInfo?) -> String? {
-        guard let i else { return nil }
-        var parts: [String] = []
-        if let m = i.model { parts.append(m) }
-        if let p = i.contextPercent {
-            parts.append("context \(p)%" + (i.contextSize.map { " of " + Self.tokens($0) } ?? ""))
+    private var open: some View {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                if !tags.isEmpty {
+                    FlowLayout(spacing: 6) { ForEach(tags, id: \.kind) { StatusTagView(tag: $0) } }
+                }
+                ForEach(Array(record.lines.enumerated()), id: \.offset) { _, line in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(Self.attributed(line, dark: scheme == .dark)).fixedSize().textSelection(.enabled)
+                    }
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                }
+                Text("Updated \(record.time.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            chevron
         }
-        if let c = i.costUSD { parts.append(String(format: "session $%.2f (estimate)", c)) }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    static func tokens(_ n: Int) -> String {
-        n >= 1_000_000 && n % 1_000_000 == 0 ? "\(n / 1_000_000)M" : n >= 1000 ? "\(n / 1000)K" : "\(n)"
+    private var chevron: some View {
+        let label = expanded ? "Hide the whole status line" : "Show the whole status line"
+        return Button { expanded.toggle() } label: {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                .frame(width: 22, height: 18).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     static func attributed(_ line: [StyledRun], dark: Bool) -> AttributedString {
@@ -105,6 +121,73 @@ struct StatusLineBar: View {
     static func rgb(_ hex: String) -> (r: Double, g: Double, b: Double)? {
         guard hex.count == 7, hex.first == "#", let v = UInt32(hex.dropFirst(), radix: 16) else { return nil }
         return (Double(v >> 16 & 0xff) / 255, Double(v >> 8 & 0xff) / 255, Double(v & 0xff) / 255)
+    }
+}
+
+/// One fact: its text (the model in bold), the context's bar, orange when the context is nearly full.
+struct StatusTagView: View {
+    let tag: StatusTag
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        let warn = StatusLineBar.rgb(StatusTag.warnHex(dark: dark)).map { Color(red: $0.r, green: $0.g, blue: $0.b) } ?? .orange
+        let fill = StatusLineBar.rgb(StatusTag.tagHex(dark: dark)).map { Color(red: $0.r, green: $0.g, blue: $0.b) } ?? .clear
+        HStack(spacing: 5) {
+            Text(tag.text)
+                .fontWeight(tag.kind == .model ? .bold : .regular)
+                .foregroundStyle(tag.warn ? AnyShapeStyle(warn) : tag.kind == .model ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            if let p = tag.percent {
+                Capsule().fill(Color.primary.opacity(0.15)).frame(width: 28, height: 4)
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(tag.warn ? AnyShapeStyle(warn) : AnyShapeStyle(Color.primary.opacity(0.5)))
+                            .frame(width: 28 * CGFloat(min(max(p, 0), 100)) / 100)
+                    }
+            }
+        }
+        .font(.system(size: 11).monospacedDigit())
+        .lineLimit(1)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(fill, in: Capsule())
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tag.spoken)
+        .onAppear { if tag.warn { StatusLineProbe.warn = true } }
+    }
+}
+
+/// The status row: the tags in order while they fit, then the chevron at the right (`StatusTagRow.fit`). The rest go
+/// out of the row (the row clips them). The last subview is the chevron.
+struct StatusRowLayout: Layout {
+    var spacing: CGFloat = 6
+    /// Own lines that only the open view shows: the chevron stays.
+    var more: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let ideal = sizes.map(\.width).reduce(0, +) + CGFloat(max(sizes.count - 1, 0)) * spacing
+        let w = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? ideal
+        return CGSize(width: w, height: sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let chevron = subviews.last else { return }
+        let tags = subviews.dropLast()
+        let widths = tags.map { $0.sizeThatFits(.unspecified).width }
+        let f = StatusTagRow.fit(widths: widths, chevron: chevron.sizeThatFits(.unspecified).width, spacing: spacing,
+                                 available: bounds.width, more: more)
+        let away = CGPoint(x: bounds.maxX + 10_000, y: bounds.midY)
+        var x = bounds.minX
+        for (i, t) in tags.enumerated() {
+            if i - tags.startIndex < f.shown {
+                t.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: .unspecified)
+                x += widths[i - tags.startIndex] + spacing
+            } else {
+                t.place(at: away, anchor: .leading, proposal: .unspecified)
+            }
+        }
+        chevron.place(at: f.chevron ? CGPoint(x: bounds.maxX, y: bounds.midY) : away, anchor: .trailing, proposal: .unspecified)
+        MainActor.assumeIsolated { StatusLineProbe.fit = f }
     }
 }
 

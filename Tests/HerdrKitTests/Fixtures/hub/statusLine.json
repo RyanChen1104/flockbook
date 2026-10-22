@@ -1,1 +1,1 @@
-{"v":1,"type":"statusLine","pane":"w1:p1","lines":[[{"text":"Opus 5.5 ","fg":"#7f7f7f"},{"text":"main","fg":"#00cd00","bold":true}],[{"text":"ctx 37%","dim":true}]],"model":"Opus 5.5","costUSD":0.42,"contextPercent":37,"contextSize":1000000}
+{"v":1,"type":"statusLine","pane":"w1:p1","lines":[[{"text":"Opus 5.5 ","fg":"#7f7f7f"},{"text":"main","fg":"#00cd00","bold":true}],[{"text":"ctx 37%","dim":true}]],"model":"Opus 5.5","costUSD":0.42,"contextPercent":37,"contextSize":1000000,"effort":"high","time":1792648800}

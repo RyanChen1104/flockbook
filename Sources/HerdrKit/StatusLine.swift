@@ -242,15 +242,8 @@ public struct StatusLineRecord: Hashable, Sendable {
     public var time: Date
     public init(lines: [[StyledRun]], info: ClaudeStatusInfo?, time: Date) { self.lines = lines; self.info = info; self.time = time }
 
-    /// What to show: the owner's lines; without any, the JSON's summary; else nothing.
-    public var shown: [[StyledRun]] {
-        if !lines.isEmpty { return lines }
-        guard let s = info?.summary, !s.isEmpty else { return [] }
-        return [[StyledRun(s)]]
-    }
-
     /// No own line and no facts: nothing to show.
-    public var isEmpty: Bool { shown.isEmpty }
+    public var isEmpty: Bool { lines.isEmpty && (info?.tags.isEmpty ?? true) }
 }
 
 /// One tag of the status row over the composer: what Claude Code's JSON says, one fact each.
@@ -273,12 +266,32 @@ public struct StatusTag: Hashable, Sendable {
     public static func tagHex(dark: Bool) -> String { dark ? "#2e2e2e" : "#f0f0f0" }
 
     /// WCAG contrast of two `#rrggbb` colours.
-    public static func contrast(_ a: String, _ b: String) -> Double { 0 }
+    public static func contrast(_ a: String, _ b: String) -> Double {
+        func lum(_ hex: String) -> Double {
+            guard hex.count == 7, hex.first == "#", let v = UInt32(hex.dropFirst(), radix: 16) else { return 0 }
+            func lin(_ c: UInt32) -> Double { let x = Double(c & 0xff) / 255; return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(v >> 16) + 0.7152 * lin(v >> 8) + 0.0722 * lin(v)
+        }
+        let (x, y) = (lum(a), lum(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
 }
 
 extension ClaudeStatusInfo {
     /// The row's tags: model, effort, context, cost; a field Claude Code did not send has none.
-    public var tags: [StatusTag] { [] }
+    public var tags: [StatusTag] {
+        var out: [StatusTag] = []
+        if let model { out.append(StatusTag(kind: .model, text: model, spoken: "Model \(model)", percent: nil, warn: false)) }
+        if let effort { out.append(StatusTag(kind: .effort, text: effort, spoken: "Effort \(effort)", percent: nil, warn: false)) }
+        if let p = contextPercent {
+            out.append(StatusTag(kind: .context, text: "ctx \(p)%", spoken: "Context \(p)% used", percent: p, warn: p >= StatusTag.warnPercent))
+        }
+        if let c = costUSD {
+            let d = String(format: "$%.2f", c)
+            out.append(StatusTag(kind: .cost, text: "\(d) est.", spoken: "Session cost about \(d), an estimate", percent: nil, warn: false))
+        }
+        return out
+    }
 }
 
 /// The status row: one line of tags, then the chevron.
@@ -292,7 +305,21 @@ public enum StatusTagRow {
     /// How many tags fit on one row, in order, and whether the chevron shows: when a tag is left out, or `more` (own
     /// lines that only the open view shows). The chevron takes its width and a spacing.
     public static func fit(widths: [CGFloat], chevron: CGFloat, spacing: CGFloat, available: CGFloat, more: Bool) -> Fit {
-        Fit(shown: 0, chevron: false)
+        var used: CGFloat = 0, all = 0
+        for w in widths {
+            let next = used + (all > 0 ? spacing : 0) + w
+            if next > available { break }
+            used = next; all += 1
+        }
+        if all == widths.count && !more { return Fit(shown: all, chevron: false) }
+        // The chevron needs its room: drop tags from the end until it fits.
+        var shown = all
+        while shown > 0 {
+            let row = widths.prefix(shown).reduce(0, +) + CGFloat(shown - 1) * spacing
+            if row + spacing + chevron <= available { break }
+            shown -= 1
+        }
+        return Fit(shown: shown, chevron: true)
     }
 }
 
