@@ -15,6 +15,7 @@ import SwiftUI
         if args.contains("--test-sendfail") { Task { await sendFail() }; return true }
         if args.contains("--test-loadstate") { Task { await loadState() }; return true }
         if args.contains("--test-termfail") { Task { await termFail() }; return true }
+        if args.contains("--test-termtheme") { Task { await termTheme() }; return true }
         if args.contains("--test-glyph") { Task { await glyph() }; return true }
         if args.contains("--test-panebars") { Task { await paneBars() }; return true }
         if args.contains("--test-surfaces") { Task { await surfaces() }; return true }
@@ -196,7 +197,7 @@ import SwiftUI
         let tw = OffscreenWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
         tw.contentView = container; tw.setFrameOrigin(NSPoint(x: -3000, y: -3000)); tw.orderFrontRegardless()
         let dark = tw.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        TerminalNSView.applyColors(tv, dark ? .dark : .light)
+        TerminalNSView.applyColors(tv, dark ? .dark : .light, mode: .flockbook)
         tv.feed(text: "$ ls\r\nREADME.md  Sources\r\n$ ")
         try? await Task.sleep(for: .milliseconds(600))
         let tpath = "\(dir)/surfaces-terminal.png"

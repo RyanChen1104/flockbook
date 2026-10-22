@@ -293,6 +293,24 @@ legend { font: var(--title3); margin-bottom: 12px; padding: 0; }
 .queue-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; text-align: right; }
 .queue-foot .small { min-height: 36px; padding: 6px 12px; }
 
+/* Wide screens (an iPad, 768 pt and up; app.ts `split`): the agents in a 320 pt column on the left, the conversation
+   in the rest. Its bar spans that column and is opaque (no text shows through); its text and composer stay at most
+   760 pt wide, in the middle. --side: the list's room (0 when hidden); --gl / --gr: the gutters beside the content. */
+main.split { --side: 0px; --gl: calc(16px + env(safe-area-inset-left)); --gr: calc(16px + env(safe-area-inset-right));
+  max-width: none; margin: 0; padding: 0 var(--gr) calc(16px + env(safe-area-inset-bottom)) calc(var(--side) + var(--gl)); }
+main.split.side-shown { --side: calc(320px + env(safe-area-inset-left)); --gl: 16px; }
+.side { position: fixed; top: 0; bottom: 0; left: 0; z-index: 4; width: var(--side); overflow-y: auto; overscroll-behavior: contain;
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  background: var(--solid-bar); border-right: .5px solid var(--sep); }
+.side .row[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, var(--solid-float)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.side .head-pills { flex-wrap: wrap; justify-content: flex-end; }
+.split .top { margin: 0 calc(-1 * var(--gr)) 0 calc(-1 * var(--gl)); padding-left: var(--gl); padding-right: var(--gr); background: var(--solid-bar); }
+.split .conversation > :not(.top, .earlier-pill) { max-width: 760px; margin-left: auto; margin-right: auto; }
+.side-toggle { display: grid; place-items: center; width: 40px; padding: 6px; }
+.side-toggle svg { width: 24px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.split .earlier-pill { left: calc(var(--side) + (100% - var(--side)) / 2); }
+.split .banner, .split .toast { left: calc(var(--side) + var(--gl)); right: var(--gr); }
+
 /* Pictures of a message or a tool group (remote-protocol.md 3.4): the box keeps the picture's place before it loads. */
 .pictures { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .msg.user:has(> .pictures) { width: 80%; }

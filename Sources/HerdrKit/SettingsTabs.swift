@@ -32,7 +32,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
     /// The controls the tab shows, top to bottom. Some show only in a state (Connect with: Remote access on).
     public var controls: [SettingsControl] {
         switch self {
-        case .general: [.window, .textSize, .readingWidth]
+        case .general: [.window, .textSize, .readingWidth, .terminalColors]
         case .agents: [.allowInput, .statusLine, .claudeQuestions]
         case .remote: [.remoteAccess, .connectWith, .tailscaleSteps, .address, .devices, .pictures, .phoneNotifications, .agentCommand]
         case .updates: [.autoUpdate, .version]
@@ -52,7 +52,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
 
 /// One control (row) of the Settings page.
 public enum SettingsControl: String, CaseIterable, Sendable {
-    case window, textSize, readingWidth
+    case window, textSize, readingWidth, terminalColors
     case allowInput, statusLine, claudeQuestions
     case remoteAccess, connectWith, tailscaleSteps, address, devices, pictures, phoneNotifications, agentCommand
     case autoUpdate, version
@@ -62,7 +62,7 @@ extension SettingsTab {
     /// One line under the page's title: what the tab is for.
     public var summary: String {
         switch self {
-        case .general: "How the window and the reading text look."
+        case .general: "How the window, the reading text and the terminal look."
         case .agents: "What Flockbook may do in your agents' terminals."
         case .remote: "Use your agents from your phone."
         case .updates: "Keep Flockbook up to date."
