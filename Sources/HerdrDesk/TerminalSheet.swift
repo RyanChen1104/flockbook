@@ -417,7 +417,7 @@ struct TerminalNSView: NSViewRepresentable {
     /// (an opaque fill was a lighter block next to the conversation). Cells with their own colour, the caret and
     /// selections stay opaque. SwiftTerm's scroller is hidden: the live view never scrolls (wheel = history), and the
     /// history view shows it only while scrolling.
-    static func applyColors(_ tv: TerminalView, _ scheme: ColorScheme) {
+    static func applyColors(_ tv: TerminalView, _ scheme: ColorScheme, mode: TerminalColors = .current) {
         let dark = scheme == .dark
         tv.nativeBackgroundColor = (dark ? NSColor(srgbRed: 0.118, green: 0.118, blue: 0.118, alpha: 1) : .white)
         tv.backgroundOpacity = 0

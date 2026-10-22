@@ -49,6 +49,7 @@ OFFLINE=(
     "sendfail|sendfail-test: PASS|--test-sendfail"
     "loadstate|loadstate-test: PASS|--test-loadstate"
     "termfail|termfail-test: PASS|--test-termfail"
+    "termtheme|termtheme-test: PASS|--test-termtheme"
     "glyph|glyph-test: PASS|--test-glyph"
     "panebars|panebars-test: PASS|--test-panebars"
     "surfaces|surfaces-test: PASS|--test-surfaces"
