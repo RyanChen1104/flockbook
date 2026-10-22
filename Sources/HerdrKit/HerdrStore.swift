@@ -16,6 +16,9 @@ public final class HerdrStore {
     /// Why the last snapshot failed, with the next step (`ConnectionCheck`). Nil while connected, or when the socket
     /// accepts but the request fails.
     public private(set) var problem: ConnectionProblem?
+    /// Connected, but no `herdr` program where the app looks (`ConnectionCheck.programWarning`): terminals cannot start.
+    /// Looked up once, on the first snapshot.
+    public private(set) var programWarning: String?
     @ObservationIgnored var isPreview = false
     @ObservationIgnored var fuzzState: UInt64 = 0
     @ObservationIgnored var fuzzCounter = 0
@@ -188,6 +191,12 @@ public final class HerdrStore {
     /// A snapshot herdr gave.
     func took(_ raw: [Workspace]) {
         connected = true
+        if !snapshotted, !isPreview {
+            Task { [weak self] in
+                let w = await Task.detached { ConnectionCheck.programWarning() }.value
+                self?.programWarning = w
+            }
+        }
         snapshotted = true
         snapshots += 1
         if problem != nil { problem = nil }

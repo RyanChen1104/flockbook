@@ -178,6 +178,8 @@ struct ObservedTerminal: View {
         var kindAt = Date.distantPast
     }
     @State private var closedReason: String?
+    /// The terminal could not start, or keeps stopping before it showed anything: why (`startErrorLine`).
+    @State private var startError: String?
     @State private var takeover = false
     @State private var epoch = 0
     @State private var history: HistoryData?
@@ -255,7 +257,8 @@ struct ObservedTerminal: View {
 
     var body: some View {
         TerminalNSView(client: client, terminalId: terminalId, writable: writable, takeover: takeover, focused: focused,
-                       handle: hnd, rightClickToPane: rightClickToPane, onWheel: wheel, historyOpen: { history != nil }, onClosed: { closedReason = $0 })
+                       handle: hnd, rightClickToPane: rightClickToPane, onWheel: wheel, historyOpen: { history != nil }, onClosed: { closedReason = $0 },
+                       onStartError: { startError = $0 })
             .id("\(terminalId)-\(epoch)")
             .opacity(history == nil ? 1 : 0)   // both views are transparent: the history view replaces the live one
             .overlay {
@@ -285,6 +288,21 @@ struct ObservedTerminal: View {
                 hnd.isHistory = { history != nil }
             }
             .onDisappear { if history != nil { onHistoryChange(false) } }
+            .overlay {
+                // Not a blank view: the transparent terminal shows only the window behind it until a frame comes.
+                if let e = startError {
+                    VStack(spacing: 10) {
+                        Label(Self.startErrorLine(e), systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Button("Retry") { startError = nil; closedReason = nil; epoch += 1 }.controlSize(.small)
+                    }
+                    .padding(20)
+                }
+            }
+            .onChange(of: startError, initial: true) { _, e in
+                TerminalProbe.startError = e.map(Self.startErrorLine)
+                TerminalProbe.retry = e == nil ? nil : { startError = nil; closedReason = nil; epoch += 1 }
+            }
             .overlay(alignment: .top) {
                 if let r = closedReason, r != "detached" {
                     HStack(spacing: 10) {
@@ -302,6 +320,8 @@ struct ObservedTerminal: View {
             }
     }
 
+    static func startErrorLine(_ reason: String) -> String { "Can't start the terminal: " + reason }
+
     static func explain(_ reason: String) -> String {
         if reason.contains("taken over") { return "Another client took over this terminal." }
         if reason.contains("already has an attached client") { return "Another client is controlling this terminal." }
@@ -310,7 +330,15 @@ struct ObservedTerminal: View {
     }
 }
 
+/// Tests: what the terminal view showed, and its Retry.
+@MainActor enum TerminalProbe {
+    static var startError: String?
+    static var retry: (() -> Void)?
+}
+
 struct TerminalNSView: NSViewRepresentable {
+    /// Tests only: the program in place of herdr.
+    static var testLauncher: [String]?
     let client: HerdrClient
     let terminalId: String
     var writable = false
@@ -321,6 +349,8 @@ struct TerminalNSView: NSViewRepresentable {
     var onWheel: (CGFloat, Bool) -> Void = { _, _ in }
     var historyOpen: () -> Bool = { false }
     var onClosed: (String) -> Void = { _ in }
+    /// Why the terminal does not start (nil again once a frame comes).
+    var onStartError: (String?) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -330,6 +360,7 @@ struct TerminalNSView: NSViewRepresentable {
         let c = context.coordinator
         c.writable = writable
         c.onClosed = onClosed
+        c.onStartError = onStartError
         c.handle = handle
         handle?.live = tv
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
@@ -337,14 +368,16 @@ struct TerminalNSView: NSViewRepresentable {
         tv.terminalDelegate = c
         tv.allowMouseReporting = writable
         Self.applyColors(tv, scheme)
-        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe)
+        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe, launcher: Self.testLauncher)
         c.session = session
         handle?.session = session
         session.start()
         c.task = Task { @MainActor in
+            var framed = false, said: String?
             for await ev in session.events {
                 switch ev {
                 case .frame(let frame):
+                    if !framed { framed = true; c.onStartError(nil) }
                     if frame.full {
                         let t = tv.getTerminal()
                         if frame.width > 0, frame.height > 0, (t.cols != frame.width || t.rows != frame.height) { t.resize(cols: frame.width, rows: frame.height) }
@@ -352,7 +385,10 @@ struct TerminalNSView: NSViewRepresentable {
                     }
                     tv.feed(byteArray: ArraySlice([UInt8](frame.bytes)))
                 case .closed(let reason): c.onClosed(reason)
-                case .reconnecting, .notice: break
+                case .notice(let s): said = s
+                // Stopped again before any frame: herdr's last words, while it keeps trying.
+                case .reconnecting: if !framed { c.onStartError(said ?? "herdr's terminal stopped before it showed anything.") }
+                case .failed(let reason): c.onStartError(reason)
                 }
             }
         }
@@ -361,7 +397,7 @@ struct TerminalNSView: NSViewRepresentable {
 
     func updateNSView(_ tv: PasteTerminalView, context: Context) {
         let c = context.coordinator
-        c.writable = writable; c.onClosed = onClosed
+        c.writable = writable; c.onClosed = onClosed; c.onStartError = onStartError
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
         tv.allowMouseReporting = writable
         if c.scheme != scheme { c.scheme = scheme; Self.applyColors(tv, scheme) }
@@ -397,6 +433,7 @@ struct TerminalNSView: NSViewRepresentable {
         var wasFocused = false
         var scheme: ColorScheme?
         var onClosed: (String) -> Void = { _ in }
+        var onStartError: (String?) -> Void = { _ in }
         private var resizeTask: Task<Void, Never>?
 
         /// Keystrokes (IME text, Ctrl/Option/arrows are already encoded by SwiftTerm) go to the terminal session.

@@ -48,6 +48,7 @@ OFFLINE=(
     "settings-page|settings-page-test: PASS|--test-settings-page"
     "sendfail|sendfail-test: PASS|--test-sendfail"
     "loadstate|loadstate-test: PASS|--test-loadstate"
+    "termfail|termfail-test: PASS|--test-termfail"
     "glyph|glyph-test: PASS|--test-glyph"
     "panebars|panebars-test: PASS|--test-panebars"
     "surfaces|surfaces-test: PASS|--test-surfaces"
