@@ -28,9 +28,23 @@ public struct Agent: Sendable, Hashable {
     /// `sessionId` was found by `SessionResolver` (a log path), not given by herdr: a fresh snapshot has none, so a
     /// remote key gate cannot bind to this agent.
     public var sessionResolved = false
+    /// Herdr names an agent-team teammate's log (or one not judged a lead's) for this pane: what the pane shows instead.
+    public var team: TeamNote?
     public init(name: String, kind: String, status: AgentStatus, sessionId: String?, title: String) {
         self.name = name; self.kind = kind; self.status = status; self.sessionId = sessionId; self.title = title
     }
+}
+
+/// A Claude agent team took the pane's log (`SessionResolver.leads`). The words are the app's and the phone's.
+public enum TeamNote: String, Sendable, Hashable, Codable {
+    /// No lead log is known: the pane shows none, and waits for herdr to name it.
+    case waitingForLead
+    /// The pane shows the lead's last known log, which may be an older session.
+    case lastLead
+
+    public static let waitingTitle = "Waiting for the lead's log"
+    public static let waitingDetail = "Herdr points this pane at an agent-team teammate. The lead's conversation shows here once Herdr reports it. The terminal shows what it is doing."
+    public static let lastLeadLine = "Agent team: showing the lead's last known session."
 }
 
 public struct Pane: Identifiable, Sendable, Hashable {

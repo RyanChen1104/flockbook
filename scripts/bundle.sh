@@ -95,12 +95,12 @@ fi
 FEED_URL="${FEED_URL:-https://flockbook.mclee.dev/appcast.xml}"
 UPDATE_KEYS="  <key>SUFeedURL</key><string>$FEED_URL</string>"
 if [ -n "${SPARKLE_PUBLIC_KEY:-}" ]; then
-  # Daily check, no first-launch permission prompt; the user still confirms every install.
+  # Hourly check (Sparkle's shortest interval), no first-launch permission prompt; the user still confirms every install.
   # The feed and the archive must carry EdDSA signatures from the matching private key.
   UPDATE_KEYS="$UPDATE_KEYS
   <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
   <key>SUEnableAutomaticChecks</key><true/>
-  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUScheduledCheckInterval</key><integer>3600</integer>
   <key>SURequireSignedFeed</key><true/>
   <key>SUVerifyUpdateBeforeExtraction</key><true/>"
   echo "updates: on, feed $FEED_URL"

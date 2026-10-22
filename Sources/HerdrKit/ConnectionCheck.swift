@@ -22,8 +22,10 @@ public enum ConnectionCheck {
         switch e {
         case 0: return nil
         case ENOENT, ENOTDIR, ECONNREFUSED:
-            guard findHerdr(environment: environment, home: home, usual: usual) != nil else { return .herdrMissing }
-            return .notRunning(command: (["herdr"] + session.cliPrefix).joined(separator: " "))
+            guard let found = findHerdr(environment: environment, home: home, usual: usual) else { return .herdrMissing }
+            // HERDR_BIN is often off the Terminal's PATH: start that one by its full path.
+            let program = found == environment["HERDR_BIN"] ? shellQuoted(found) : "herdr"
+            return .notRunning(command: ([program] + session.cliPrefix).joined(separator: " "))
         case EACCES, EPERM: return .noPermission(path: path)
         default: return .failed(path: path, reason: String(cString: strerror(e)))
         }
@@ -48,12 +50,36 @@ public enum ConnectionCheck {
         return rc == 0 ? 0 : errno
     }
 
-    /// The `herdr` program on `PATH` or in the usual install folders (a Finder launch has a short `PATH`). Nil: none.
-    /// `usual`: those folders (nil: Homebrew, /usr/local/bin, ~/.local/bin, ~/.cargo/bin).
-    public static func findHerdr(environment: [String: String], home: String, usual: [String]? = nil) -> String? {
-        let onPath = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let usual = usual ?? ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.cargo/bin"]
-        return (onPath + usual).lazy.map { $0 + "/herdr" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    /// The `herdr` program: `HERDR_BIN`, else on `PATH`, else in the usual install folders (a Finder launch has a short
+    /// `PATH`). Nil: none. `usual`: those folders (nil: `usualFolders`).
+    public static func findHerdr(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
+        let onPath = (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/herdr" }
+        let usual = (usual ?? usualFolders(home: home)).map { $0 + "/herdr" }
+        return ([environment["HERDR_BIN"]].compactMap { $0 } + onPath + usual).first(where: isProgram)
+    }
+
+    /// An executable file (or a symlink to one). A folder named herdr is not: it has the x bit too.
+    static func isProgram(_ path: String) -> Bool {
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &folder) && !folder.boolValue && FileManager.default.isExecutableFile(atPath: path)
+    }
+
+    /// Where herdr is installed when it is not on `PATH`: its installer's folder first, then Homebrew, then cargo.
+    public static func usualFolders(home: String) -> [String] { [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", home + "/.cargo/bin"] }
+
+    /// `path` for a shell command line: as is when it has only safe characters, else in single quotes.
+    public static func shellQuoted(_ path: String) -> String {
+        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+=:@%,")
+        if !path.isEmpty, path.unicodeScalars.allSatisfy(safe.contains) { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Why a terminal cannot start when `findHerdr` finds nothing.
+    public static let notFound = "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin."
+
+    /// Connected but no `herdr` program where the app looks: the agents show, but terminals cannot start. Nil: found.
+    public static func programWarning(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
+        findHerdr(environment: environment, home: home, usual: usual) == nil ? "herdr program not found: terminals can't start" : nil
     }
 }
 

@@ -27,4 +27,14 @@ func checksUpdater() async throws {
     if case let .off(why) = UpdaterGate.decide(bundlePath: app, info: info(key: ""), headless: false) {
         check(why.contains("SUPublicEDKey"), "updater: the reason names the missing key")
     } else { check(false, "updater: empty key gives a reason") }
+
+    // The bundle's Info.plist: Sparkle checks every hour (its shortest interval), by itself, without the first-launch prompt.
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let bundle = (try? String(contentsOf: root.appending(path: "scripts/bundle.sh"), encoding: .utf8)) ?? ""
+    func plistValue(_ key: String) -> String? {
+        guard let r = bundle.range(of: "<key>\(key)</key><[^>]+>[^<]*", options: .regularExpression) else { return nil }
+        return String(bundle[r].dropFirst("<key>\(key)</key>".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    check(plistValue("SUScheduledCheckInterval") == "<integer>3600", "updater: Info.plist SUScheduledCheckInterval is 3600 (\(plistValue("SUScheduledCheckInterval") ?? "missing"))")
+    check(plistValue("SUEnableAutomaticChecks") == "<true/>", "updater: Info.plist SUEnableAutomaticChecks is true")
 }
