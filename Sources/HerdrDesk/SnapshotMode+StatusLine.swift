@@ -70,6 +70,10 @@ extension SnapshotRunner {
         let narrow = await shotBar(record, expanded: false, dark: false, width: 380, path: "\(dir)/statusline-narrow-light.png")
         step("narrow pane: the tags that fit, then the chevron (\(String(describing: narrow.fit)))",
              narrow.away && (narrow.fit.map { $0.shown > 0 && $0.shown < 4 && $0.chevron } ?? false) && narrow.bar.height < 30)
+        let long = StatusLineRecord(lines: [[StyledRun(String(repeating: "/very/long/working/directory", count: 12))]], info: info, time: Date())
+        let longShot = await shotBar(long, expanded: true, dark: false, width: 600, path: "\(dir)/statusline-long-light.png")
+        step("a long part, open: cut with an ellipsis inside the 600 pt pane (tags \(Int(StatusLineProbe.openFlow)) pt, column \(Int(StatusLineProbe.openColumn)) pt)",
+             longShot.away && StatusLineProbe.openFlow > 0 && StatusLineProbe.openFlow <= StatusLineProbe.openColumn + 0.5 && StatusLineProbe.openColumn < 600)
         let factsOnly = await shotBar(StatusLineRecord(lines: [], info: info, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-facts-only-light.png")
         step("facts, no own line: every tag, no chevron (\(String(describing: factsOnly.fit)))", factsOnly.away && factsOnly.fit == .init(shown: 4, chevron: false))
         let plain = await shotBar(StatusLineRecord(lines: record.lines, info: nil, time: Date()), expanded: false, dark: false, path: "\(dir)/statusline-plain-light.png")
@@ -115,7 +119,7 @@ extension SnapshotRunner {
         }
         .environment(\.flatGlass, true).environment(\.colorScheme, dark ? .dark : .light)
         .frame(width: size.width, height: size.height)
-        StatusLineProbe.frame = .zero; StatusLineProbe.fit = nil; StatusLineProbe.plain = false; StatusLineProbe.warn = false; StatusLineProbe.openTags = nil
+        StatusLineProbe.frame = .zero; StatusLineProbe.fit = nil; StatusLineProbe.plain = false; StatusLineProbe.warn = false; StatusLineProbe.openTags = nil; StatusLineProbe.openFlow = 0; StatusLineProbe.openColumn = 0
         let away = await render(view, size: size, dark: dark, path: path)
         return (StatusLineProbe.frame, composer.minY - StatusLineProbe.frame.maxY, StatusLineProbe.fit, StatusLineProbe.plain, StatusLineProbe.warn, away)
     }

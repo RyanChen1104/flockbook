@@ -121,7 +121,9 @@ import Foundation
         check(StatusSegments.dropRepeats(near, info: info).map { $0.map(\.text).joined() } == ["Opus 5.5 (1M)", "ctx 38%", "$0.42"],
               "status tags: only exact repeats go; unsure ones stay (\(StatusSegments.dropRepeats(near, info: info).map { $0.map(\.text).joined() }))")
         check(StatusLineRecord(lines: lines, info: nil, time: Date()).tags.map(\.text).first == "Opus 5.5", "status tags: no facts: the owner's parts")
-        // A part's colour is drawn on the tag while it reads there (3:1); else the tag's own text colour.
+        // A part's colour is drawn on the tag while it reads there (4.5:1, small text); else the tag's own text colour.
+        check(!StatusTag.readable("#808080", dark: false) && !StatusTag.readable("#6e6e6e", dark: true) && StatusTag.readable("#cd0000", dark: false),
+              "status tags: a colour under 4.5:1 on the tag falls back (grey \(String(format: "%.2f", StatusTag.contrast("#808080", StatusTag.tagHex(dark: false)))):1)")
         check(StatusTag.readable("#ffff00", dark: false) == false && StatusTag.readable("#ffff00", dark: true)
               && StatusTag.readable("#000000", dark: false) && !StatusTag.readable("#000000", dark: true),
               "status tags: a colour that does not read on the tag falls back")
@@ -231,6 +233,16 @@ import Foundation
         check(!StatusLineWrapper.emit(Data("late".utf8), to: fds[1]), "status line wrapper: Claude Code stopped reading: no crash, nothing more")
         close(fds[1])
 
+        // A wrapper run by a wrapper (two copies of the app, one's command kept as the owner's): nothing runs again.
+        original(#"printf "[$FLOCKBOOK_STATUSLINE]""#)
+        r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5, environment: ["PATH": "/usr/bin:/bin"])
+        check(r.output == Data("[1]".utf8), "status line wrapper: the command is told it runs under the wrapper (\(String(decoding: r.output, as: UTF8.self)))")
+        original("echo again")
+        r = StatusLineWrapper.run(input: input, dir: dir, timeout: 5, environment: ["PATH": "/usr/bin:/bin", "FLOCKBOOK_STATUSLINE": "1"])
+        check(r.output.isEmpty && r.status == 0, "status line wrapper: under a wrapper already: the kept command does not run again")
+        original("'/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline' --dir '/x'")
+        check(StatusLineFolder(url: dir).originalCommand() == nil, "status line wrapper: a kept wrapper command is never run as the owner's")
+
         original("echo still")
         let bad = Data(#"{"session_id":"../x"}"#.utf8)
         r = StatusLineWrapper.run(input: bad, dir: dir, timeout: 5)
@@ -328,13 +340,26 @@ import Foundation
         check(merged?["command"] as? String == "sh line.sh" && merged?["padding"] as? Int == 4 && merged?["refreshInterval"] as? Int == 7,
               "status line file: off keeps padding and refresh changed while on (\(String(describing: merged)))")
 
-        // Backups: the newest few are kept, older ones go.
+        // Backups: ours apart from the hook installer's; the first (from before ours ever went in) and the newest stay,
+        // by time, not by name.
         let fm = FileManager.default
-        for d in 1...8 { try Data("{}".utf8).write(to: file.deletingLastPathComponent().appendingPathComponent("settings.json.flockbook-2020010\(d)-000000.bak")) }
-        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
-        let baks = try fm.contentsOfDirectory(atPath: file.deletingLastPathComponent().path).filter { $0.hasPrefix("settings.json.flockbook-") && $0.hasSuffix(".bak") }.sorted()
-        check(baks.count == ClaudeSettingsHook.keptBackups && !baks.contains("settings.json.flockbook-20200101-000000.bak") && baks.last?.hasPrefix("settings.json.flockbook-20200108") == false,
-              "status line file: only the newest \(ClaudeSettingsHook.keptBackups) backups stay (\(baks.count))")
+        let cdir = file.deletingLastPathComponent()
+        for n in try fm.contentsOfDirectory(atPath: cdir.path) where n.hasSuffix(".bak") { try fm.removeItem(at: cdir.appendingPathComponent(n)) }
+        let hookBak = cdir.appendingPathComponent("settings.json.flockbook-20200101-000000.bak")
+        try Data("{}".utf8).write(to: hookBak)
+        for d in 1...8 {
+            // Names out of time order: the -10 copy is the newest, the -2 copy the oldest of the same second.
+            let n = d == 1 ? "settings.json.flockbook-statusline-20200101-000000.bak" : "settings.json.flockbook-statusline-20200102-000000-\(d == 8 ? 10 : d).bak"
+            let f = cdir.appendingPathComponent(n)
+            try Data("{}".utf8).write(to: f)
+            try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_577_836_800 + Double(d) * 60)], ofItemAtPath: f.path)
+        }
+        let made = try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        let baks = try fm.contentsOfDirectory(atPath: cdir.path).filter { $0.hasPrefix("settings.json.flockbook-statusline-") }
+        check(made?.lastPathComponent.hasPrefix("settings.json.flockbook-statusline-") == true && baks.count == ClaudeSettingsHook.keptBackups
+              && baks.contains("settings.json.flockbook-statusline-20200101-000000.bak") && baks.contains("settings.json.flockbook-statusline-20200102-000000-10.bak")
+              && !baks.contains("settings.json.flockbook-statusline-20200102-000000-2.bak") && fm.fileExists(atPath: hookBak.path),
+              "status line file: \(ClaudeSettingsHook.keptBackups) of ours stay, the first and the newest by time; the hook installer's untouched (\(baks.sorted()))")
         try ClaudeStatusLineSetting.apply(on: false, file: file, command: ours, folder: folder)
 
         let link = home.appendingPathComponent("link.json")
@@ -401,6 +426,18 @@ import Foundation
         let other = ClaudeStatusLineSetting.command(wrapper: "/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: "/elsewhere")
         check(!ClaudeStatusLineSetting.isOurs(["command": old], command: ours) && !ClaudeStatusLineSetting.isOurs(["command": other], command: ours),
               "status line moved: only the exact command is ours")
+        let quoted = ClaudeStatusLineSetting.command(wrapper: "/Applications/Bob's Apps/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: dir.path)
+        check(quoted.contains(#"'\''"#) && ClaudeStatusLineSetting.state(["statusLine": ["type": "command", "command": quoted]], command: ours, wasOn: true) == .moved,
+              "status line moved: an older copy in a folder with ' in its name is 'moved' (\(quoted.prefix(50))…)")
+        check(ClaudeStatusLineSetting.parts(quoted)?.wrapper == "/Applications/Bob's Apps/Flockbook.app/Contents/MacOS/flockbook-statusline",
+              "status line moved: the quoted path reads back")
+        var threwOther = false
+        do { _ = try ClaudeStatusLineSetting.enabling(["statusLine": ["type": "command", "command": other]], command: ours) } catch { threwOther = true }
+        check(threwOther, "status line moved: another copy's command (another folder) is never kept as the owner's line")
+        let odd = "FOO=1 /opt/flockbook-statusline --dir /x"
+        threwOther = false
+        do { _ = try ClaudeStatusLineSetting.enabling(["statusLine": ["type": "command", "command": odd]], command: ours) } catch { threwOther = true }
+        check(threwOther, "status line moved: no command that runs flockbook-statusline is kept as the owner's line")
         let movedSettings: [String: Any] = ["statusLine": ["type": "command", "command": old, "padding": 3]]
         check(ClaudeStatusLineSetting.state(movedSettings, command: ours, wasOn: true) == .moved
               && ClaudeStatusLineSetting.state(["statusLine": ["type": "command", "command": other]], command: ours, wasOn: true) == .replaced,
@@ -419,6 +456,19 @@ import Foundation
         let fixed = try ClaudeSettingsHook.read(file)["statusLine"] as? [String: Any]
         check(fixed?["command"] as? String == ours && fixed?["padding"] as? Int == 3 && folder.original()?["command"] as? String == "sh line.sh" && folder.wasOn,
               "status line moved: fix: the path in place, padding and the owner's kept line unchanged")
+
+        // Two copies, the other's path with a ': on keeps the owner's line, fixes the path.
+        try JSONSerialization.data(withJSONObject: ["statusLine": ["type": "command", "command": quoted]]).write(to: file)
+        try ClaudeStatusLineSetting.apply(on: true, file: file, command: ours, folder: folder)
+        check((try ClaudeSettingsHook.read(file)["statusLine"] as? [String: Any])?["command"] as? String == ours && folder.originalCommand() == "sh line.sh",
+              "status line moved: on over a quoted older copy: the path fixed, the owner's line kept")
+        let otherFile = home.appendingPathComponent("other.json")
+        let otherLine = #"{"statusLine":{"type":"command","command":"'/Applications/Flockbook.app/Contents/MacOS/flockbook-statusline' --dir '/elsewhere'"}}"#
+        try Data(otherLine.utf8).write(to: otherFile)
+        var threw2 = false
+        do { try ClaudeStatusLineSetting.apply(on: true, file: otherFile, command: ours, folder: folder) } catch { threw2 = true }
+        check(threw2 && (try? Data(contentsOf: otherFile)) == Data(otherLine.utf8) && folder.originalCommand() == "sh line.sh",
+              "status line moved: on over another copy's command is refused; the kept line unchanged")
 
         for w in ["/Volumes/Flockbook/Flockbook.app/Contents/MacOS/flockbook-statusline",
                   "/private/var/folders/ab/xyz/T/AppTranslocation/1234/d/Flockbook.app/Contents/MacOS/flockbook-statusline"] {

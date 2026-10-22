@@ -52,10 +52,12 @@ struct StatusLineBar: View {
         HStack(alignment: .top, spacing: 6) {
             VStack(alignment: .leading, spacing: 6) {
                 FlowLayout(spacing: 6) { ForEach(Array(tags.enumerated()), id: \.offset) { StatusTagView(tag: $0.element) } }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { StatusLineProbe.openFlow = $0 }
                 Text("Updated \(record.time.formatted(date: .omitted, time: .shortened))")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { StatusLineProbe.openColumn = $0 }
             .onAppear { StatusLineProbe.openTags = tags.count }
             chevron
         }
@@ -177,4 +179,7 @@ extension StatusLineProbe {
     static var warn = false
     /// How many tags the open view drew.
     static var openTags: Int?
+    /// The open view's tags and their column, wide (a long part must not run past the column).
+    static var openFlow: CGFloat = 0
+    static var openColumn: CGFloat = 0
 }
