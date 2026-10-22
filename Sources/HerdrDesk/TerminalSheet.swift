@@ -302,6 +302,8 @@ struct ObservedTerminal: View {
             }
     }
 
+    static func startErrorLine(_ reason: String) -> String { "" }
+
     static func explain(_ reason: String) -> String {
         if reason.contains("taken over") { return "Another client took over this terminal." }
         if reason.contains("already has an attached client") { return "Another client is controlling this terminal." }
@@ -310,7 +312,15 @@ struct ObservedTerminal: View {
     }
 }
 
+/// Tests: what the terminal view showed, and its Retry.
+@MainActor enum TerminalProbe {
+    static var startError: String?
+    static var retry: (() -> Void)?
+}
+
 struct TerminalNSView: NSViewRepresentable {
+    /// Tests only: the program in place of herdr.
+    static var testLauncher: [String]?
     let client: HerdrClient
     let terminalId: String
     var writable = false
@@ -337,7 +347,7 @@ struct TerminalNSView: NSViewRepresentable {
         tv.terminalDelegate = c
         tv.allowMouseReporting = writable
         Self.applyColors(tv, scheme)
-        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe)
+        let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe, launcher: Self.testLauncher)
         c.session = session
         handle?.session = session
         session.start()
@@ -352,7 +362,7 @@ struct TerminalNSView: NSViewRepresentable {
                     }
                     tv.feed(byteArray: ArraySlice([UInt8](frame.bytes)))
                 case .closed(let reason): c.onClosed(reason)
-                case .reconnecting, .notice: break
+                case .reconnecting, .notice, .failed: break
                 }
             }
         }

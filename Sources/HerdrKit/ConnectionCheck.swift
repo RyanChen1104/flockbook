@@ -50,11 +50,15 @@ public enum ConnectionCheck {
 
     /// The `herdr` program on `PATH` or in the usual install folders (a Finder launch has a short `PATH`). Nil: none.
     /// `usual`: those folders (nil: Homebrew, /usr/local/bin, ~/.local/bin, ~/.cargo/bin).
-    public static func findHerdr(environment: [String: String], home: String, usual: [String]? = nil) -> String? {
+    public static func findHerdr(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
         let onPath = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         let usual = usual ?? ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.cargo/bin"]
         return (onPath + usual).lazy.map { $0 + "/herdr" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
+
+    public static func usualFolders(home: String) -> [String] { [] }
+    public static let notFound = ""
+    public static func programWarning(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? { nil }
 }
 
 extension ConnectionProblem {

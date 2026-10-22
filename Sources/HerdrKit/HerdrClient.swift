@@ -201,8 +201,8 @@ public actor HerdrClient {
     /// A long-lived control (or observe) channel for one terminal: input, resize and frames over one process.
     /// Not started yet; call `start()` on the result. See `TerminalSession`.
     nonisolated public func terminalSession(terminalId: String, mode: TerminalSession.Mode = .control(takeover: false),
-                                            cols: Int? = nil, rows: Int? = nil) -> TerminalSession {
-        TerminalSession(terminalId: terminalId, session: session, mode: mode, cols: cols, rows: rows)
+                                            cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil) -> TerminalSession {
+        TerminalSession(terminalId: terminalId, session: session, mode: mode, cols: cols, rows: rows, launcher: launcher)
     }
 
     /// One-way stream without reconnect. `TerminalSession(mode: .observe)` is the same with reconnect and size.

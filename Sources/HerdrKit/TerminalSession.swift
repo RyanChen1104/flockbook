@@ -10,6 +10,8 @@ public enum TerminalEvent: Sendable {
     case reconnecting(attempt: Int)
     /// A line from stderr, e.g. an ignored input.
     case notice(String)
+    /// Final: the terminal could not start (no herdr program, or herdr exited 127 before any frame). Why, in words.
+    case failed(reason: String)
 }
 
 /// One long-lived `herdr terminal session control|observe <terminal_id>` process. Input, resize and frames share its
@@ -38,7 +40,7 @@ public final class TerminalSession: @unchecked Sendable {
 
     /// `launcher` replaces `/usr/bin/env herdr --session <name>` (tests use a fake script).
     public init(terminalId: String, session: HerdrSession, mode: Mode = .control(takeover: false),
-                cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil) {
+                cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil, find: @escaping @Sendable () -> String? = { ConnectionCheck.findHerdr() }) {
         self.terminalId = terminalId
         self.mode = mode
         self.argvPrefix = launcher ?? ["/usr/bin/env", "herdr"] + session.cliPrefix
@@ -57,6 +59,9 @@ public final class TerminalSession: @unchecked Sendable {
     /// Whether `paste` wraps the text in bracketed-paste markers. herdr's frames normally do not show the program's mode, so
     /// this stays true unless a frame carries `ESC[?2004l` (then false until `ESC[?2004h`). Override with `paste(_:bracketed:)`.
     public var bracketedPaste: Bool { lock.withLock { bracketed } }
+
+    static func launcher(session: HerdrSession, environment: [String: String], home: String) -> [String]? { ["/usr/bin/env", "herdr"] + session.cliPrefix }
+    static func childPath(environment: [String: String], home: String) -> String { (environment["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin" }
 
     public func start() {
         let go = lock.withLock { () -> Bool in defer { started = true }; return !started && !stopped }

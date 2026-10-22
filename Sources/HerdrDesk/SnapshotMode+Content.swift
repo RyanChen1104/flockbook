@@ -14,6 +14,7 @@ import SwiftUI
         if args.contains("--test-textsize") { Task { await textSize() }; return true }
         if args.contains("--test-sendfail") { Task { await sendFail() }; return true }
         if args.contains("--test-loadstate") { Task { await loadState() }; return true }
+        if args.contains("--test-termfail") { Task { await termFail() }; return true }
         if args.contains("--test-glyph") { Task { await glyph() }; return true }
         if args.contains("--test-panebars") { Task { await paneBars() }; return true }
         if args.contains("--test-surfaces") { Task { await surfaces() }; return true }
@@ -388,6 +389,51 @@ import SwiftUI
         AppDefaults.store.removeObject(forKey: ReadingSize.key)
         print("textsize-test: pictures in \(dir)/textsize-*.png")
         print("textsize-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
+        NSApp.terminate(nil)
+    }
+
+    /// A terminal that cannot start (no herdr program where the app looks): one line saying why and Retry, not a blank
+    /// view. A fake herdr that exits 127 like `env` does; nothing talks to a herdr session.
+    static func termFail() async {
+        var failures = 0
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("termfail-test: \(n) \(ok ? "ok" : "FAIL")") }
+        step("the line: Can't start the terminal + why",
+             ObservedTerminal.startErrorLine(ConnectionCheck.notFound) == "Can't start the terminal: " + ConnectionCheck.notFound)
+        let tmp = NSTemporaryDirectory() + "fb-termfail-\(getpid())", script = tmp + "/herdr", log = tmp + "/starts"
+        try? FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try? "#!/bin/sh\necho start >> '\(log)'\necho 'env: herdr: No such file or directory' >&2\nexit 127\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        func starts() -> Int { ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        func until(_ sec: Double, _ ok: () -> Bool) async -> Bool {
+            let t = Date()
+            while Date().timeIntervalSince(t) < sec { if ok() { return true }; try? await Task.sleep(for: .milliseconds(50)) }
+            return ok()
+        }
+        TerminalNSView.testLauncher = [script]
+        defer { TerminalNSView.testLauncher = nil }
+        let model = AppModel(store: .preview)
+        let want = ObservedTerminal.startErrorLine("env: herdr: No such file or directory")
+        for dark in [false, true] {
+            TerminalProbe.startError = nil
+            let (win, _) = offscreen(ZStack { WindowSurface(glass: .off)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_fail", writable: true, focused: false)
+                    .padding(.horizontal, 14).padding(.bottom, 8) }, NSSize(width: 640, height: 360))
+            win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let shown = await until(4) { TerminalProbe.startError == want }
+            step("\(dark ? "dark" : "light"): the pane says why (\(TerminalProbe.startError ?? "nothing"))", shown)
+            try? await Task.sleep(for: .milliseconds(300))
+            capture(win, to: "\(dir)/termfail\(dark ? "-dark" : "").png")
+            if !dark {
+                let before = starts()
+                step("exit 127: not retried by itself (\(before) start)", before == 1)
+                TerminalProbe.retry?()
+                step("Retry starts it again (\(starts()) starts)", await until(3) { starts() == before + 1 })
+            }
+            win.orderOut(nil)
+        }
+        print("termfail-test: pictures in \(dir)/termfail{,-dark}.png")
+        print("termfail-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }
 
