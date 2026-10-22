@@ -5,9 +5,10 @@ import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token", SIDE_KEY = "flockbook.side";
 const app = document.getElementById("app") as HTMLElement;
-/** An iPad's width (portrait too) and up: two columns (see `split`). */
-const wideScreen = matchMedia("(min-width: 768px)");
-wideScreen.addEventListener("change", () => render());
+/** An iPad's width (portrait too) and up: two columns (see `split`). A phone on its side is as wide but low: one column. */
+const wideScreen = matchMedia("(min-width: 768px) and (min-height: 600px)");
+// The row being read stays where it is (the resize before this put it back, see `seenRow`).
+wideScreen.addEventListener("change", () => { keepTopRow = !following; render(); });
 
 // --- Storage (may be blocked: private mode, cleared site data).
 function load(key: string): string | null {
@@ -402,6 +403,7 @@ function settled(): void {
   reader.active = false;
   if (reader.reachedEnd) following = true;
   else if (Math.abs(viewTop() - reader.from) >= 1) following = false;
+  noteSeenRow();
   toBottom();
   if (state.watching && !reader.touching) addWaiting(state.watching);
 }
@@ -419,7 +421,9 @@ function letGoBar(): void {
   readerActs();
 }
 const scrollKeys = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
-for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, readerActs, { passive: true });
+// Scrolling the list beside the conversation is not reading it.
+const inSide = (e: Event): boolean => e.target instanceof Element && !!e.target.closest(".side");
+for (const type of ["wheel", "touchstart", "touchmove"]) addEventListener(type, (e) => { if (!inSide(e)) readerActs(); }, { passive: true });
 /** A finger on the glass: the page may bounce or glide on after it lifts, so the round goes on from the lift. A render
  *  may put a new node in place of the one under a finger (a reply comes in). Every touch event of that finger still
  *  goes to the node it first touched, out of the page now, and never reaches the window: that node hears the moves and
@@ -541,28 +545,33 @@ function sideShown(): boolean { return split() && (!state.watching || !state.sid
 function toggleSide(): void {
   state.sideHidden = !state.sideHidden;
   save(SIDE_KEY, state.sideHidden ? "hidden" : null);
+  keepTopRow = !following;   // the right column gets wider or narrower: the row being read stays in place
   render();
 }
+/** The list beside the conversation: one node that stays in the page while shown (a screen reader does not hear it
+ *  again on each tick: the page is `aria-live`), and where it was scrolled to, kept while it is hidden. */
+const side = h("aside", { id: "agents", class: "side", "aria-label": "Agents", "aria-live": "off" });
+let sideScroll = 0;
+side.addEventListener("scroll", () => { if (side.isConnected) sideScroll = side.scrollTop; }, { passive: true });
 
 function render(): void {
   const anchor = keepTopRow ? topRow() : null;
   keepTopRow = false;
+  const focused = document.activeElement?.id;   // read first: the list's rows are made anew below
   const count = blockedPanes(state.workspaces).length;
   document.title = count ? `(${count}) Flockbook` : "Flockbook";
   const body: Child[] = [];
-  const wide = split(), side = sideShown();
+  const wide = split(), showSide = sideShown();
   app.classList.toggle("split", wide);
-  app.classList.toggle("side-shown", side);
+  app.classList.toggle("side-shown", showSide);
   // The list on the left stays in the page (only its rows are made anew) and where it was scrolled to.
-  const oldSide = app.querySelector<HTMLElement>(":scope > .side");
-  const sideTop = oldSide?.scrollTop ?? 0;
+  const sideWasIn = side.isConnected;
   if (!state.token) body.push(pairScreen());
   else if (!state.welcomed) body.push(h("p", { class: "center muted" }, state.connected ? "Connecting…" : "Not connected. Trying again…"));
   else if (wide) {
-    if (side) {
-      const aside = oldSide ?? h("aside", { class: "side", "aria-label": "Agents" });
-      aside.replaceChildren(listScreen());
-      body.push(aside);
+    if (showSide) {
+      side.replaceChildren(listScreen());
+      body.push(side);
     }
     body.push(state.watching ? conversationScreen(state.watching) : h("p", { class: "center muted" }, "Choose an agent."));
   }
@@ -574,14 +583,13 @@ function render(): void {
   }
   if (state.toast) body.push(h("div", { class: "toast", role: "status" }, state.toast));
   const nodes = body.filter((c): c is Node | string => !!c);
-  const focused = document.activeElement?.id;
   // Keep each agent's composer text (its own) across renders.
   const old = document.getElementById("composer-text") as HTMLTextAreaElement | null;
   if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
   const kept = keepScreen(nodes);
-  if (!kept) { fillItems(nodes); app.replaceChildren(...nodes); }
-  const sideNow = app.querySelector(":scope > .side");
-  if (sideNow) sideNow.scrollTop = sideTop;
+  // Nodes already in their place stay (the list on the left; see `syncChildren`).
+  if (!kept) { fillItems(nodes); syncChildren(app, nodes); }
+  if (side.isConnected && !sideWasIn) side.scrollTop = sideScroll;
   if (!kept?.composer) {
     // Another screen, pane or composer: that pane's own draft comes back (not the text of the composer before).
     const fresh = document.getElementById("composer-text") as HTMLTextAreaElement | null;
@@ -605,19 +613,26 @@ function render(): void {
     box.focus({ preventScroll: true });
   }
   if (focused && document.activeElement !== document.getElementById(focused)) document.getElementById(focused)?.focus({ preventScroll: true });
-  if (anchor) {
-    // Older rows came in above: the row that was on top stays where it was on screen.
-    const row = [...document.querySelectorAll<HTMLElement>(".items > [data-id]")].find((e) => e.dataset.id === anchor.id);
-    const moved = row ? row.getBoundingClientRect().top - anchor.top : 0;
-    if (Math.abs(moved) >= 1) {
-      window.scrollBy(0, moved);
-      // Not the reader's move: the round goes on from the same rows.
-      reader.from += moved; reader.last += moved; reader.endTop += moved;
-    }
-  }
+  // Older rows came in above, or the column changed width: the row that was on top stays where it was on screen.
+  if (anchor) putBack(anchor);
+  noteSeenRow();
   dropPictures();
   toBottom();
 }
+function putBack(anchor: { id: string; top: number }): void {
+  const row = [...document.querySelectorAll<HTMLElement>(".items > [data-id]")].find((e) => e.dataset.id === anchor.id);
+  const moved = row ? row.getBoundingClientRect().top - anchor.top : 0;
+  if (Math.abs(moved) >= 1) {
+    window.scrollBy(0, moved);
+    // Not the reader's move: the round goes on from the same rows.
+    reader.from += moved; reader.last += moved; reader.endTop += moved;
+  }
+}
+/** The row a reader who scrolled up was reading, noted after each render and each round. A turn or a resize lays the
+ *  rows out again before the page hears of it: the row goes back to where it was then. */
+let seenRow: { id: string; top: number } | null = null;
+function noteSeenRow(): void { seenRow = state.watching && !following ? topRow() : null; }
+addEventListener("resize", () => { if (seenRow && state.watching && !following && !reader.active) putBack(seenRow); });
 
 // --- Pictures (remote-protocol.md 3.4). The hub sends none with the conversation: a picture is asked for when it comes
 // near the view and let go when it leaves. Kept in memory only (blob URLs), never in a cache or storage.
@@ -1004,7 +1019,7 @@ function listScreen(): HTMLElement {
   const all = agentPanes(state.workspaces);
   const needs = all.filter((x) => x.p.agent?.status === "blocked");
   const row = (x: { w: Workspace; t: Tab; p: Pane }, showWs: boolean): HTMLElement =>
-    h("li", {}, h("button", { class: "row glass-float", "data-pane": x.p.id, "aria-current": split() && x.p.id === state.watching ? "true" : null, onclick: () => open(x.p.id) },
+    h("li", {}, h("button", { id: `row-${x.p.id}`, class: "row glass-float", "data-pane": x.p.id, "aria-current": split() && x.p.id === state.watching ? "page" : null, onclick: () => open(x.p.id) },
       dot(x.p.agent!.status),
       h("span", { class: "row-text" },
         h("span", { class: "row-title" }, x.p.agent!.title || x.t.label),
@@ -1043,7 +1058,7 @@ function conversationScreen(pane: string): HTMLElement {
   const shown = sideShown();
   const head = h("header", { class: "top bar glass-bar" },
     split()
-      ? h("button", { id: "side-toggle", class: "back side-toggle", type: "button", "aria-expanded": shown ? "true" : "false",
+      ? h("button", { id: "side-toggle", class: "back side-toggle", type: "button", "aria-controls": "agents", "aria-expanded": shown ? "true" : "false",
           "aria-label": shown ? "Hide agents" : "Show agents", title: shown ? "Hide agents" : "Show agents", onclick: toggleSide }, sidebarGlyph())
       : h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));

@@ -268,7 +268,7 @@ main.split.side-shown { --side: calc(320px + env(safe-area-inset-left)); --gl: 1
 .side { position: fixed; top: 0; bottom: 0; left: 0; z-index: 4; width: var(--side); overflow-y: auto; overscroll-behavior: contain;
   padding: 0 16px calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   background: var(--solid-bar); border-right: .5px solid var(--sep); }
-.side .row[aria-current="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--solid-float)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.side .row[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, var(--solid-float)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .side .head-pills { flex-wrap: wrap; justify-content: flex-end; }
 .split .top { margin: 0 calc(-1 * var(--gr)) 0 calc(-1 * var(--gl)); padding-left: var(--gl); padding-right: var(--gr); background: var(--solid-bar); }
 .split .conversation > :not(.top, .earlier-pill) { max-width: 760px; margin-left: auto; margin-right: auto; }

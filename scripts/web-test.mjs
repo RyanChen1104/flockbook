@@ -1553,15 +1553,16 @@ async function twoColumns() {
   await p.eval("document.getElementById('app').style.maxWidth = ''; window.dispatchEvent(new Event('resize'))");
 
   // A draft, its box and the focus stay across 768.
-  await p.eval("location.hash = '#pane=w2%3Ap2'");
-  await p.until("!!document.querySelector('#composer-text') && document.querySelector('section.conversation')?.dataset.pane === 'w2:p2'", 8000);
+  // (w1:p2: earlier checks leave a prompt open on w2:p2, which turns its composer off.)
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  await p.until("document.querySelector('#composer-text')?.disabled === false && document.querySelector('section.conversation')?.dataset.pane === 'w1:p2'", 8000);
   await p.type("#composer-text", "Half a thought.");
   await p.eval("window.__box = document.getElementById('composer-text'); window.__box.focus()");
   for (const [w, ht] of [[767, 1024], [1024, 768]]) {
     await p.scale(dpr, w, ht);
     await p.until(w < 768 ? "!document.querySelector('.side')" : "!!document.querySelector('.side')");
     check(await p.eval("document.getElementById('composer-text') === window.__box && window.__box.value === 'Half a thought.' && document.activeElement === window.__box") === true,
-      `${w}: the draft, its box and the focus stay across 768`);
+      `${w}: the draft, its box and the focus stay across 768 (${await p.eval("JSON.stringify([document.getElementById('composer-text') === window.__box, document.getElementById('composer-text')?.value, document.activeElement?.id, document.getElementById('composer-text')?.disabled])")})`);
   }
   await p.type("#composer-text", "");
   await p.eval("document.activeElement?.blur(); location.hash = '#pane=w2%3Ap1'");
