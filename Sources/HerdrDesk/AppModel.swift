@@ -320,9 +320,11 @@ final class AppModel {
     }
 
     /// Tells the store which logs are on screen (both panes of a split, only the zoomed one when zoomed) so they
-    /// load deep (2 MB) while every other log stays short. Nothing is on screen outside the tab screen.
+    /// load deep (2 MB) while every other log stays short. Nothing is on screen outside the tab screen; under Settings the
+    /// tab screen stays (hidden), so its logs keep their depth and the older messages it shows.
     func updateVisibleSessions() {
-        guard screen == .tab, let t = tab else { store.setVisibleSessions([]); return }
+        let tabScreen = screen == .tab || (screen == .settings && screenBeforeSettings == .tab)
+        guard tabScreen, let t = tab else { store.setVisibleSessions([]); return }
         let zoomed = zoomedPaneID(in: t)
         let panes = zoomed.map { id in t.panes.filter { $0.id == id } } ?? t.panes
         store.setVisibleSessions(Set(panes.compactMap { $0.agent?.sessionId }))

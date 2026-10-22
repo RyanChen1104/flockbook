@@ -1,5 +1,6 @@
 import HerdrKit
 import SwiftUI
+import SwiftTerm
 
 enum AppSettings { static let allowInputKey = "allowInput" }
 
@@ -239,10 +240,13 @@ extension View {
 }
 
 /// Keys while Settings shows go to Settings, not to the hidden screen under it: opening it takes the window's first
-/// responder (the composer, say) away and keeps it; Back gives that same responder its focus again.
+/// responder (the composer, say) away and keeps it; Back gives that same responder its focus again. While it shows, a
+/// typing view that takes the focus anyway (a fresh session focuses its composer, a focused pane its terminal, Tab walks
+/// the key views) loses it again at once: keys typed there would go to an agent no one sees.
 struct SettingsFocus: NSViewRepresentable {
     let open: Bool
-    final class Coordinator { weak var saved: NSResponder?; var open = false }
+    final class Coordinator { weak var saved: NSResponder?; var open = false; var watch: NSKeyValueObservation? }
+    static func typing(_ r: NSResponder?) -> Bool { r is NSText || r is TerminalView }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
@@ -253,7 +257,19 @@ struct SettingsFocus: NSViewRepresentable {
         if open {
             c.saved = win.firstResponder === win ? nil : win.firstResponder
             win.makeFirstResponder(nil)
-        } else if let saved = c.saved {
+            c.watch = win.observe(\.firstResponder, options: [.new]) { [weak c] win, _ in
+                MainActor.assumeIsolated {
+                    guard Self.typing(win.firstResponder) else { return }
+                    // Not inside the responder change; and not after Back, which gives the focus back on purpose.
+                    DispatchQueue.main.async { [weak win, weak c] in
+                        if let win, c?.open == true, Self.typing(win.firstResponder) { win.makeFirstResponder(nil) }
+                    }
+                }
+            }
+            return
+        }
+        c.watch?.invalidate(); c.watch = nil
+        if let saved = c.saved {
             c.saved = nil
             // After this update: the screen under Settings is enabled again first.
             DispatchQueue.main.async { [weak win, weak saved] in
