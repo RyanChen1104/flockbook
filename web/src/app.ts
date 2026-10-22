@@ -3,8 +3,11 @@
 import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
-const TOKEN_KEY = "flockbook.token";
+const TOKEN_KEY = "flockbook.token", SIDE_KEY = "flockbook.side";
 const app = document.getElementById("app") as HTMLElement;
+/** An iPad's width (portrait too) and up: two columns (see `split`). */
+const wideScreen = matchMedia("(min-width: 768px)");
+wideScreen.addEventListener("change", () => render());
 
 // --- Storage (may be blocked: private mode, cleared site data).
 function load(key: string): string | null {
@@ -69,6 +72,8 @@ const state = {
   revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
+  /** On a wide screen, the reader hid the agents beside the conversation (kept on this device). */
+  sideHidden: load(SIDE_KEY) === "hidden",
 };
 
 // The QR link: `#pair=<secret>&fp=<sha256>`. Read once, then removed from the address bar.
@@ -528,14 +533,39 @@ function explain(code?: string, message?: string): string {
 }
 
 // --- Screens.
+// --- Wide screens (an iPad, 768 pt and up): the agents on the left, the conversation on the right; choosing an agent
+// changes only the right column. The reader may hide the list while an agent is open. Narrower (a phone, Split View at a
+// third): one screen at a time, the list or a conversation (`wideScreen`).
+function split(): boolean { return !!state.token && state.welcomed && wideScreen.matches; }
+function sideShown(): boolean { return split() && (!state.watching || !state.sideHidden); }
+function toggleSide(): void {
+  state.sideHidden = !state.sideHidden;
+  save(SIDE_KEY, state.sideHidden ? "hidden" : null);
+  render();
+}
+
 function render(): void {
   const anchor = keepTopRow ? topRow() : null;
   keepTopRow = false;
   const count = blockedPanes(state.workspaces).length;
   document.title = count ? `(${count}) Flockbook` : "Flockbook";
   const body: Child[] = [];
+  const wide = split(), side = sideShown();
+  app.classList.toggle("split", wide);
+  app.classList.toggle("side-shown", side);
+  // The list on the left stays in the page (only its rows are made anew) and where it was scrolled to.
+  const oldSide = app.querySelector<HTMLElement>(":scope > .side");
+  const sideTop = oldSide?.scrollTop ?? 0;
   if (!state.token) body.push(pairScreen());
   else if (!state.welcomed) body.push(h("p", { class: "center muted" }, state.connected ? "Connecting…" : "Not connected. Trying again…"));
+  else if (wide) {
+    if (side) {
+      const aside = oldSide ?? h("aside", { class: "side", "aria-label": "Agents" });
+      aside.replaceChildren(listScreen());
+      body.push(aside);
+    }
+    body.push(state.watching ? conversationScreen(state.watching) : h("p", { class: "center muted" }, "Choose an agent."));
+  }
   else if (state.watching) body.push(conversationScreen(state.watching));
   else body.push(listScreen());
   if (state.banner && state.token) {
@@ -550,6 +580,8 @@ function render(): void {
   if (old && state.composerPane) state.drafts[state.composerPane] = old.value;
   const kept = keepScreen(nodes);
   if (!kept) { fillItems(nodes); app.replaceChildren(...nodes); }
+  const sideNow = app.querySelector(":scope > .side");
+  if (sideNow) sideNow.scrollTop = sideTop;
   if (!kept?.composer) {
     // Another screen, pane or composer: that pane's own draft comes back (not the text of the composer before).
     const fresh = document.getElementById("composer-text") as HTMLTextAreaElement | null;
@@ -972,7 +1004,7 @@ function listScreen(): HTMLElement {
   const all = agentPanes(state.workspaces);
   const needs = all.filter((x) => x.p.agent?.status === "blocked");
   const row = (x: { w: Workspace; t: Tab; p: Pane }, showWs: boolean): HTMLElement =>
-    h("li", {}, h("button", { class: "row glass-float", "data-pane": x.p.id, onclick: () => open(x.p.id) },
+    h("li", {}, h("button", { class: "row glass-float", "data-pane": x.p.id, "aria-current": split() && x.p.id === state.watching ? "true" : null, onclick: () => open(x.p.id) },
       dot(x.p.agent!.status),
       h("span", { class: "row-text" },
         h("span", { class: "row-title" }, x.p.agent!.title || x.t.label),
@@ -1007,8 +1039,13 @@ function conversationScreen(pane: string): HTMLElement {
   const v = view(pane);
   const title = where ? (where.p.agent?.title || where.t.label) : pane;
   const status = where?.p.agent?.status ?? "unknown";
+  // Wide: the list stays beside the conversation; the button hides or shows it. Narrow: Back to the list.
+  const shown = sideShown();
   const head = h("header", { class: "top bar glass-bar" },
-    h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
+    split()
+      ? h("button", { id: "side-toggle", class: "back side-toggle", type: "button", "aria-expanded": shown ? "true" : "false",
+          "aria-label": shown ? "Hide agents" : "Show agents", title: shown ? "Hide agents" : "Show agents", onclick: toggleSide }, sidebarGlyph())
+      : h("button", { class: "back", onclick: () => { location.hash = ""; } }, "‹ Agents"),
     h("span", { class: "bar-title" }, dot(status), h("span", {}, title)));
   // Older rows on the way: a notice under the bar, over the rows (it moves none of them).
   const notice = earlierOf(pane);
@@ -1034,6 +1071,20 @@ function conversationScreen(pane: string): HTMLElement {
   const list = h("div", { class: "items" });
   itemsOf.set(list, items);
   return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, composer(pane, !!card, where?.p.agent?.name));
+}
+
+/** A window with a column on its left (the sidebar symbol). */
+function sidebarGlyph(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 20");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [tag, attrs] of [["rect", { x: "1.5", y: "1.5", width: "21", height: "17", rx: "3.5" }], ["path", { d: "M9 1.5v17" }]] as const) {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    svg.append(e);
+  }
+  return svg;
 }
 
 function itemView(it: Item, pane: string): HTMLElement {
