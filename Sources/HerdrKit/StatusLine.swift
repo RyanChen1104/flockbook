@@ -408,7 +408,7 @@ public enum StatusTagRow {
     }
 
     /// The chevron's SF Symbol: closed, up (the tags open upwards); open, down (they close back down).
-    public static func chevronSymbol(open: Bool) -> String { open ? "chevron.up" : "chevron.down" }
+    public static func chevronSymbol(open: Bool) -> String { open ? "chevron.down" : "chevron.up" }
 }
 
 /// The wrapper's folder in the app's support folder: per session `<id>.json` (the input) and `<id>.out` (the owner's

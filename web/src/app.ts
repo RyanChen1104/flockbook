@@ -1071,7 +1071,7 @@ function statusLineView(pane: string): HTMLElement | null {
   const open = state.statusOpen.has(pane);
   const more = h("button", { class: "status-more", type: "button", "aria-expanded": open ? "true" : "false",
     "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { if (open) state.statusOpen.delete(pane); else state.statusOpen.add(pane); render(); } },
-    h("span", { class: `chev${open ? " up" : ""}`, "aria-hidden": "true" }));
+    h("span", { class: `chev${open ? "" : " up"}`, "aria-hidden": "true" }));
   // Open, the row wraps and holds every tag.
   const row = h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags);
   const head = h("div", { class: "status-head" }, row, more);
