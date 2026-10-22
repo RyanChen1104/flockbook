@@ -8,14 +8,22 @@ struct ClaudeHookRow: View {
     @State private var sheet = false
 
     var body: some View {
-        LabeledContent {
-            Button(setup.state == .on ? "Uninstall…" : "Install…") { sheet = true }
-        } label: {
-            Text("Answer Claude questions from the phone")
-            Text(note).foregroundStyle(isProblem ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+        SettingsGroup("Claude Code", note: note, noteColor: isProblem ? .red : nil) {
+            SettingsRow("Answer Claude questions from the phone", value: value, valueColor: isProblem ? .red : nil) {
+                Button(setup.state == .on ? "Uninstall…" : "Install…") { sheet = true }
+            }
+            .settingsControl(.claudeQuestions)
         }
         .sheet(isPresented: $sheet) { ClaudeHookSheet(setup: setup) }
         .onAppear { setup.refresh() }
+    }
+
+    private var value: String {
+        switch setup.state {
+        case .off: "Off"
+        case .on: "On"
+        case .problem: "Problem"
+        }
     }
 
     private var isProblem: Bool { if case .problem = setup.state { true } else { false } }
