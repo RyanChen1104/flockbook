@@ -117,14 +117,18 @@ func checksHerdrPath() async throws {
           "herdrpath: herdr not found after a frame -> still retried (\(retries(vanished.events)) retries, \(failed(vanished.events) ?? "not failed"))")
 
     // A child of herdr that keeps stderr open does not hold the terminal: after exit, stderr gets a second to end.
-    let holder = dir + "/holder.sh"
-    try "#!/bin/sh\n(exec 1>&-; sleep 6) &\necho 'held' >&2\nexit 127\n".write(toFile: holder, atomically: true, encoding: .utf8)
+    // The child still writes after that, and is not killed for it (the pipe stays open until EOF).
+    let holder = dir + "/holder.sh", alive = dir + "/alive"
+    try "#!/bin/sh\n(exec 1>&-; sleep 1.6; echo 'late' >&2; echo ok > '\(alive)') &\necho 'held' >&2\nexit 127\n"
+        .write(toFile: holder, atomically: true, encoding: .utf8)
     try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: holder)
     let t0 = Date()
     let held = await run(TerminalSession(terminalId: "term_x", session: .default(), launcher: [holder]), 4)
     let took = Date().timeIntervalSince(t0)
     check(held.ended && failed(held.events) == "held" && took < 3,
           "herdrpath: stderr held open by a child -> ends within the grace (\(String(format: "%.1f", took)) s, \(failed(held.events) ?? "not failed"))")
+    while Date().timeIntervalSince(t0) < 3.5, !fm.fileExists(atPath: alive) { try? await Task.sleep(nanoseconds: 50_000_000) }
+    check(fm.fileExists(atPath: alive), "herdrpath: a child that writes stderr after the grace is not killed (SIGPIPE)")
 
     // The real start: the found program with --session and the terminal's arguments, PATH with ~/.local/bin.
     let argsLog = dir + "/args", spy = dir + "/spy.sh"
