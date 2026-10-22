@@ -389,6 +389,7 @@ extension ChromeTests {
         func name(_ r: NSResponder?) -> String { r.map { "\(type(of: $0))" } ?? "nil" }
         step("while Settings shows, keys do not go to the composer (first responder \(name(win.firstResponder)))", !typing(win.firstResponder))
         if let composer { win.makeFirstResponder(composer) }
+        step("the hidden composer loses the keys at once, in the same call (\(name(win.firstResponder)))", composer != nil && !typing(win.firstResponder))
         try? await Task.sleep(for: .milliseconds(300))
         step("a focus call on the hidden composer does not take the keys (\(name(win.firstResponder)))", composer != nil && !typing(win.firstResponder))
         let terminal = views(root, TerminalView.self).first

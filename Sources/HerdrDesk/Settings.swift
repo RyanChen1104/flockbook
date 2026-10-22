@@ -1,6 +1,5 @@
 import HerdrKit
 import SwiftUI
-import SwiftTerm
 
 enum AppSettings { static let allowInputKey = "allowInput" }
 
@@ -241,14 +240,27 @@ extension View {
 
 /// Keys while Settings shows go to Settings, not to the hidden screen under it: opening it takes the window's first
 /// responder (the composer, say) away and keeps it; Back gives that same responder its focus again. While it shows, a
-/// typing view that takes the focus anyway (a fresh session focuses its composer, a focused pane its terminal, Tab walks
-/// the key views) loses it again at once: keys typed there would go to an agent no one sees.
+/// view of the hidden screen that takes the focus anyway (a fresh session focuses its composer, a focused pane its
+/// terminal, Tab walks the key views) loses it again at once: keys typed there would go to an agent no one sees. Only
+/// that screen: the hidden screen is everything in the detail column's hosting view, where this view sits too. Views
+/// over the window (the ⌘/ panel's search field) and sheets keep the focus; the page itself has no text fields.
 struct SettingsFocus: NSViewRepresentable {
     let open: Bool
     final class Coordinator { weak var saved: NSResponder?; var open = false; var watch: NSKeyValueObservation? }
-    static func typing(_ r: NSResponder?) -> Bool { r is NSText || r is TerminalView }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
+    /// The hosting view of the detail column: the hidden screen's views are inside it.
+    static func column(of view: NSView) -> NSView? {
+        var v = view.superview
+        while let cur = v, !String(describing: type(of: cur)).hasPrefix("NSHostingView<") { v = cur.superview }
+        return v
+    }
+    /// The responder is (in) a view of the hidden screen. A field editor counts as the field it edits.
+    static func covered(_ r: NSResponder?, in column: NSView) -> Bool {
+        guard var v = r as? NSView else { return false }
+        if let t = v as? NSText, t.isFieldEditor, let field = t.delegate as? NSView { v = field }
+        return v.isDescendant(of: column)
+    }
     func updateNSView(_ view: NSView, context: Context) {
         let c = context.coordinator
         guard open != c.open else { return }
@@ -257,13 +269,11 @@ struct SettingsFocus: NSViewRepresentable {
         if open {
             c.saved = win.firstResponder === win ? nil : win.firstResponder
             win.makeFirstResponder(nil)
-            c.watch = win.observe(\.firstResponder, options: [.new]) { [weak c] win, _ in
+            guard let column = Self.column(of: view) else { return }
+            c.watch = win.observe(\.firstResponder, options: [.new]) { [weak c, weak column] win, _ in
                 MainActor.assumeIsolated {
-                    guard Self.typing(win.firstResponder) else { return }
-                    // Not inside the responder change; and not after Back, which gives the focus back on purpose.
-                    DispatchQueue.main.async { [weak win, weak c] in
-                        if let win, c?.open == true, Self.typing(win.firstResponder) { win.makeFirstResponder(nil) }
-                    }
+                    guard c?.open == true, let column, Self.covered(win.firstResponder, in: column) else { return }
+                    win.makeFirstResponder(nil)
                 }
             }
             return
