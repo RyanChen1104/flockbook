@@ -360,6 +360,7 @@ struct TerminalNSView: NSViewRepresentable {
     }
 
     func updateNSView(_ tv: PasteTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         let c = context.coordinator
         c.writable = writable; c.onClosed = onClosed
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
@@ -566,6 +567,7 @@ struct HistoryTerminalNSView: NSViewRepresentable {
         return tv
     }
     func updateNSView(_ tv: HistoryTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         tv.onBottomScroll = { onExit(nil) }
         tv.onExit = onExit
     }

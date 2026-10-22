@@ -512,6 +512,7 @@ struct DetailView: View {
                         case .settings: EmptyView()
                         }
                     }
+                    .environment(\.underSettings, settings)
                     .opacity(settings ? 0 : 1)
                     .allowsHitTesting(!settings)
                     .disabled(settings)

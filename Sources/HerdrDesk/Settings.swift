@@ -238,28 +238,33 @@ extension View {
     }
 }
 
+private struct UnderSettingsKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// The screen is covered by the Settings page (hidden, inert, kept for Back).
+    var underSettings: Bool { get { self[UnderSettingsKey.self] } set { self[UnderSettingsKey.self] = newValue } }
+}
+
 /// Keys while Settings shows go to Settings, not to the hidden screen under it: opening it takes the window's first
 /// responder (the composer, say) away and keeps it; Back gives that same responder its focus again. While it shows, a
-/// view of the hidden screen that takes the focus anyway (a fresh session focuses its composer, a focused pane its
-/// terminal, Tab walks the key views) loses it again at once: keys typed there would go to an agent no one sees. Only
-/// that screen: the hidden screen is everything in the detail column's hosting view, where this view sits too. Views
-/// over the window (the ⌘/ panel's search field) and sheets keep the focus; the page itself has no text fields.
+/// typing view of the hidden screen that takes the focus anyway (a fresh session focuses its composer, a focused pane
+/// its terminal, Tab walks the key views) loses it again at once: keys typed there would go to an agent no one sees.
+/// Those views are our own AppKit ones (`.disabled` keeps SwiftUI's controls from taking the focus): each marks itself
+/// with `cover(_:_:)` from `underSettings`. Nothing else loses the focus: the page's own controls, the ⌘/ panel's
+/// search field, sheets.
 struct SettingsFocus: NSViewRepresentable {
     let open: Bool
     final class Coordinator { weak var saved: NSResponder?; var open = false; var watch: NSKeyValueObservation? }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
-    /// The hosting view of the detail column: the hidden screen's views are inside it.
-    static func column(of view: NSView) -> NSView? {
-        var v = view.superview
-        while let cur = v, !String(describing: type(of: cur)).hasPrefix("NSHostingView<") { v = cur.superview }
-        return v
-    }
-    /// The responder is (in) a view of the hidden screen. A field editor counts as the field it edits.
-    static func covered(_ r: NSResponder?, in column: NSView) -> Bool {
-        guard var v = r as? NSView else { return false }
-        if let t = v as? NSText, t.isFieldEditor, let field = t.delegate as? NSView { v = field }
-        return v.isDescendant(of: column)
+    private static let covered = NSHashTable<NSView>.weakObjects()
+    /// Marks a typing view of the hidden screen while Settings covers it. Called from its representable's updates.
+    static func cover(_ view: NSView, _ on: Bool) { on ? covered.add(view) : covered.remove(view) }
+    /// The responder is (in) a covered view. A field editor counts as the field it edits.
+    static func covered(_ r: NSResponder?) -> Bool {
+        var v = r as? NSView
+        if let t = v as? NSText, t.isFieldEditor { v = t.delegate as? NSView }
+        while let cur = v { if covered.contains(cur) { return true }; v = cur.superview }
+        return false
     }
     func updateNSView(_ view: NSView, context: Context) {
         let c = context.coordinator
@@ -269,10 +274,9 @@ struct SettingsFocus: NSViewRepresentable {
         if open {
             c.saved = win.firstResponder === win ? nil : win.firstResponder
             win.makeFirstResponder(nil)
-            guard let column = Self.column(of: view) else { return }
-            c.watch = win.observe(\.firstResponder, options: [.new]) { [weak c, weak column] win, _ in
+            c.watch = win.observe(\.firstResponder, options: [.new]) { [weak c] win, _ in
                 MainActor.assumeIsolated {
-                    guard c?.open == true, let column, Self.covered(win.firstResponder, in: column) else { return }
+                    guard c?.open == true, Self.covered(win.firstResponder) else { return }
                     win.makeFirstResponder(nil)
                 }
             }

@@ -423,6 +423,7 @@ struct OtherField: NSViewRepresentable {
     }
     func updateNSView(_ f: NSTextField, context: Context) {
         context.coordinator.parent = self
+        SettingsFocus.cover(f, context.environment.underSettings)
         let editing = (f.currentEditor() as? NSTextView)?.hasMarkedText() == true
         if f.stringValue != text, !editing { f.stringValue = text }
     }

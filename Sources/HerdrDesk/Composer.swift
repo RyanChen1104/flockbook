@@ -45,6 +45,7 @@ struct ComposerTextView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        SettingsFocus.cover(scroll, context.environment.underSettings)
         guard let tv = context.coordinator.textView else { return }
         if tv.string != text, !tv.hasMarkedText() { tv.string = text; context.coordinator.recalc() }
     }

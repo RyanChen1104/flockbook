@@ -336,7 +336,10 @@ struct InlineRenameField: NSViewRepresentable {
         f.setAccessibilityLabel(placeholder)
         return f
     }
-    func updateNSView(_ f: Field, context: Context) { context.coordinator.parent = self }
+    func updateNSView(_ f: Field, context: Context) {
+        context.coordinator.parent = self
+        SettingsFocus.cover(f, context.environment.underSettings)
+    }
 
     final class Field: NSTextField {
         private var focusedOnce = false
