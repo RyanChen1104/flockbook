@@ -18,11 +18,19 @@ final class AppModel {
     var tabID: String? { didSet { updateVisibleSessions() } }
     var showTerminal = false
     /// Settings is a page of the main window (sidebar foot, ⌘,).
-    func showSettings() { screen = .settings }
+    /// While it shows, Settings has the sidebar (Back and its tabs) and the toolbar has no tab row.
+    func showSettings() {
+        if screen != .settings { screenBeforeSettings = screen }
+        screen = .settings
+    }
     /// ⌘,: opens Settings, or leaves it when it is open.
-    func toggleSettings() { showSettings() }
-    /// Back and Esc: the screen from before Settings.
-    func closeSettings() {}
+    func toggleSettings() { screen == .settings ? closeSettings() : showSettings() }
+    /// Back and Esc: the screen from before Settings, its workspace and tab as they were (Settings never changes them).
+    func closeSettings() {
+        guard screen == .settings else { return }
+        screen = screenBeforeSettings
+    }
+    private var screenBeforeSettings: Screen = .tab
     var splitDirection: String = "down"
     var searchText = ""
     /// Width of the tab row toolbar item. Follows the detail column, never the tab count (see `setDetailWidth`).

@@ -138,13 +138,16 @@ struct SettingsView: View {
 }
 
 /// Settings: the tab list on the left, the chosen tab's form on the right, like System Settings. Opens on the tab
-/// chosen last (`SettingsTab.key`). `fixed`: snapshots show that tab and leave the remembered one alone.
+/// chosen last (`SettingsTab.key`). `fixed`: snapshots show that tab and leave the remembered one alone. `list` false: the
+/// form alone (the page while the window's sidebar holds the tabs); `back`: a Back row above the tabs.
 struct SettingsSplit: View {
     @AppStorage(SettingsTab.key, store: AppDefaults.store) private var stored = SettingsTab.general.rawValue
     var fixed: SettingsTab? = nil
     var remote: RemoteHub? = nil
     var scrolls = false
     var reduceTransparency: Bool? = nil
+    var list = true
+    var back: (() -> Void)? = nil
     /// Widest the form gets; wider columns centre it.
     static let column: CGFloat = 640
     static let listWidth: CGFloat = 196
@@ -154,10 +157,14 @@ struct SettingsSplit: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            SettingsTabList(selection: Binding(get: { tab }, set: { if fixed == nil { stored = $0.rawValue } }))
-                .frame(width: Self.listWidth)
-                .frame(maxHeight: .infinity, alignment: .top)
-            Divider()
+            if list {
+                SettingsTabList(selection: Binding(get: { tab }, set: { if fixed == nil { stored = $0.rawValue } }), back: back)
+                    .frame(width: Self.listWidth)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .probe { SettingsProbe.pageList = $0 }
+                    .onDisappear { SettingsProbe.pageList = .zero }
+                Divider()
+            }
             SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, scrolls: scrolls)
                 .contentMargins(.horizontal, scrolls ? max(0, (width - Self.column) / 2) : 0, for: .scrollContent)
                 .frame(maxWidth: scrolls ? .infinity : nil, maxHeight: scrolls ? .infinity : nil, alignment: .top)
@@ -172,9 +179,20 @@ struct SettingsSplit: View {
 /// The tabs as sidebar rows: a coloured icon tile and the name, the chosen row filled with the accent colour.
 struct SettingsTabList: View {
     @Binding var selection: SettingsTab
+    var back: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if let back {
+                Button(action: back) {
+                    SidebarLine(title: "Back", symbol: "chevron.left").padding(.horizontal, 8).frame(height: 30)
+                }
+                .buttonStyle(.plain)
+                .help("Back (Esc)")
+                .probe { SettingsProbe.back = $0 }
+                .onDisappear { SettingsProbe.back = .zero }
+                .padding(.bottom, 6)
+            }
             ForEach(SettingsTab.allCases) { t in
                 let on = t == selection
                 Button { selection = t } label: {
@@ -208,14 +226,17 @@ struct SettingsTabList: View {
     }
 }
 
-/// Settings as a page of the main window (the sidebar's foot row, ⌘,): the tab list and the form fill the detail column;
-/// the form scrolls, so the wheel works over its side margins too, and its rows keep a readable column in the middle.
+/// Settings as a page of the main window (the sidebar's foot row, ⌘,): the form fills the detail column, and the window's
+/// sidebar holds Back and the tabs (`SettingsSidebar`). With the sidebar hidden the page brings that list itself. The form
+/// scrolls, so the wheel works over its side margins too, and its rows keep a readable column in the middle. Esc goes back.
 struct SettingsPage: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        SettingsSplit(remote: model.remote, scrolls: true)
+        let own = model.sidebarVisibility == .detailOnly
+        SettingsSplit(remote: model.remote, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { Button("Back") { model.closeSettings() }.keyboardShortcut(.cancelAction).hidden() }
             .probe { SettingsProbe.page = $0 }
             .onDisappear { SettingsProbe.page = .zero }
     }

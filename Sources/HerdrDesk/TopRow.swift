@@ -397,8 +397,11 @@ struct TopRowToolbar: ToolbarContent {
     let model: AppModel   // passed explicitly: toolbar items are hosted outside the content's environment
     var body: some ToolbarContent {
         // Centered in the toolbar. No system background: TopRow draws its own glass capsule, so no wider shape sits behind it.
-        PrincipalToolbarItem { TopRow().environment(model).environment(\.islandHost, .toolbar) }
-        TopRowActions(model: model)
+        // None while Settings shows: it is not about a workspace.
+        if model.screen != .settings {
+            PrincipalToolbarItem { TopRow().environment(model).environment(\.islandHost, .toolbar) }
+            TopRowActions(model: model)
+        }
     }
 }
 

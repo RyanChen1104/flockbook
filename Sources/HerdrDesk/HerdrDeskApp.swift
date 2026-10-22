@@ -222,9 +222,10 @@ struct DeskCommands: Commands {
     var body: some Commands {
         // Settings is a page of the main window (no Settings window): ⌘, shows it there, opening the window if it was closed.
         CommandGroup(replacing: .appSettings) {
+            // Again while it shows: back where it was opened from.
             Button("Settings…") {
-                model.showSettings()
-                if let w = model.mainWindow, w.isVisible { w.makeKeyAndOrderFront(nil) } else { openWindow(id: "main") }
+                if let w = model.mainWindow, w.isVisible { model.toggleSettings(); w.makeKeyAndOrderFront(nil) }
+                else { model.showSettings(); openWindow(id: "main") }
             }
             .keyboardShortcut(",")
         }
@@ -351,7 +352,7 @@ struct RootView: View {
         // tab row where the system toolbar lays it out (that toolbar shows the same row while revealed). Outside the split
         // view: while it shows the sidebar, the split moves its overlays' space sideways for a moment (up to ~130 pt).
         .overlay(alignment: .topLeading) { if model.fullScreen { FullScreenChrome().ignoresSafeArea() } }
-        .overlay(alignment: .topLeading) { if model.fullScreen { FullScreenTopRow().ignoresSafeArea() } }
+        .overlay(alignment: .topLeading) { if model.fullScreen, model.screen != .settings { FullScreenTopRow().ignoresSafeArea() } }
         .background(WindowFixer(model: model))
     }
 }

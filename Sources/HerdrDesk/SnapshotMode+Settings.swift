@@ -201,10 +201,10 @@ enum SettingsProbe {
 
 extension ChromeTests {
     /// `--test-settings-page`: Settings is a page of the main window, not a window of its own. A Settings row at the foot of
-    /// the sidebar opens it in the detail column (a real click), the page fills that column with the tab list on its left
-    /// and the chosen tab's form beside it, the form scrolls (the long Remote tab, chosen last), ⌘,'s action opens it from
-    /// any screen, and another sidebar row leaves it. Offscreen window only; stills of the page in light and dark, top and
-    /// scrolled, go to build/snapshots-settings-page/.
+    /// the sidebar opens it in the detail column (a real click); the sidebar then holds Back and the tabs, the toolbar has no
+    /// tab row, the form fills the column and scrolls (the long Remote tab, chosen last). Back, Esc and ⌘, again return to
+    /// the screen from before, unchanged; with the sidebar hidden the page brings its own Back and tabs. Offscreen window
+    /// only; stills of every tab in light and dark, and of the scrolled page, go to build/snapshots-settings-page/.
     static func runSettingsPageTest() async {
         let dir = "build/snapshots-settings-page"
         AppDefaults.store.set(SettingsTab.remote.rawValue, forKey: SettingsTab.key)
@@ -219,6 +219,8 @@ extension ChromeTests {
         host.frame = NSRect(origin: .zero, size: size)
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
+        // Light stills light even on a Mac set to dark.
+        win.appearance = NSAppearance(named: .aqua)
         win.contentView = host
         win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))
@@ -234,6 +236,12 @@ extension ChromeTests {
             if let table = v as? NSTableView {
                 let row = table.row(at: table.convert(p, from: nil))
                 if row >= 0 { table.selectRowIndexes([row], byExtendingSelection: false) }
+            } else {
+                // Not a list row (the page's own Back and tabs are buttons): a plain mouse click.
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: win.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { win.sendEvent(e) }
+                }
             }
             try? await Task.sleep(for: .milliseconds(600))
         }
@@ -307,7 +315,7 @@ extension ChromeTests {
             step("dark: back at the top origin (\(Int(back.x)), \(Int(back.y))) = (\(Int(top.x)), \(Int(top.y)))", abs(back.x - top.x) < 1 && abs(back.y - top.y) < 1)
             topCheck("dark, top")
             ContentTests.capture(win, to: "\(dir)/settings-page-dark.png")
-            win.appearance = nil
+            win.appearance = NSAppearance(named: .aqua)
         } else { step("a scroll view under the page (\(hit.map { "\(type(of: $0))" } ?? "no view"))", false) }
 
         // Every tab, chosen from the sidebar, light and dark.
@@ -317,7 +325,7 @@ extension ChromeTests {
             ContentTests.capture(win, to: "\(dir)/settings-\(t.rawValue)-light.png")
             win.appearance = NSAppearance(named: .darkAqua); try? await Task.sleep(for: .milliseconds(500))
             ContentTests.capture(win, to: "\(dir)/settings-\(t.rawValue)-dark.png")
-            win.appearance = nil; try? await Task.sleep(for: .milliseconds(300))
+            win.appearance = NSAppearance(named: .aqua); try? await Task.sleep(for: .milliseconds(300))
         }
 
         // A tab row in the sidebar chooses the tab, and it is remembered.
@@ -362,7 +370,17 @@ extension ChromeTests {
         ContentTests.capture(win, to: "\(dir)/settings-page-sidebar-hidden-light.png")
         await click(SettingsProbe.back)
         step("sidebar hidden: Back returns (\(model.screen)), the sidebar stays hidden (\(model.sidebarVisibility))", model.screen == .tab && model.sidebarVisibility == .detailOnly)
-        model.sidebarVisibility = .all
+        model.sidebarVisibility = .all; try? await Task.sleep(for: .milliseconds(600))
+
+        // Full screen (the model's flag: the row there is window content, FullScreenTopRow): none while Settings shows.
+        model.fullScreen = true; try? await Task.sleep(for: .milliseconds(600))
+        let rowsFull = TabProbe.rowsShown
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(600))
+        step("full screen: no tab row while Settings shows (\(TabProbe.rowsShown), \(rowsFull) before)", rowsFull > 0 && TabProbe.rowsShown == 0)
+        model.toggleSettings(); try? await Task.sleep(for: .milliseconds(600))
+        step("full screen: ⌘, again brings the rows back (\(TabProbe.rowsShown))", model.screen == .tab && TabProbe.rowsShown == rowsFull)
+        model.fullScreen = false
+
         AppDefaults.store.removeObject(forKey: SettingsTab.key)
         print("settings-page-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
