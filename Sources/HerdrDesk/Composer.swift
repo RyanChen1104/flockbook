@@ -45,6 +45,7 @@ struct ComposerTextView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        SettingsFocus.cover(scroll, context.environment.underSettings)
         guard let tv = context.coordinator.textView else { return }
         if tv.string != text, !tv.hasMarkedText() { tv.string = text; context.coordinator.recalc() }
     }
@@ -153,6 +154,7 @@ struct ComposerDraft: Equatable {
 }
 
 struct ComposerView: View {
+    @Environment(\.underSettings) private var underSettings
     let agentName: String
     var readOnly = false
     var branch: String? = nil
@@ -203,7 +205,7 @@ struct ComposerView: View {
                 }
                 ComposerTextView(text: $text, height: $height, composing: $composing, pasteboard: pasteboard,
                                  onPasteImages: { images.append(contentsOf: $0) },
-                                 onSubmit: { send() }, canSubmit: !readOnly, handle: handle)
+                                 onSubmit: { send() }, canSubmit: !readOnly && !underSettings, handle: handle)
                     .frame(height: height)
             }
             if let sendError {
@@ -268,7 +270,7 @@ struct ComposerView: View {
     /// Message = text, then the absolute image paths (agents read an image path as an attachment).
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !readOnly, !(t.isEmpty && images.isEmpty) else { return }
+        guard !readOnly, !underSettings, !(t.isEmpty && images.isEmpty) else { return }   // the draft stays
         let paths = images.map { ComposerHandle.quoted($0) }.joined(separator: " ")
         let message = [t, paths].filter { !$0.isEmpty }.joined(separator: " ")
         let sent = (text: text, images: images)

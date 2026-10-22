@@ -38,6 +38,8 @@ public final class HerdrStore {
     @ObservationIgnored private var reliefPending = false
 
     public func setVisibleSessions(_ ids: Set<String>?) { visibleOverride = ids; applyDepth() }
+    /// What `setVisibleSessions` set last (nil: never set).
+    public var visibleSessions: Set<String>? { visibleOverride }
 
     /// Without `setVisibleSessions`, a log read in the last 2 s counts as visible. (Only "the last one read" made two
     /// panes read in turn swap full/short on every call, and each swap re-parsed 2 MB.)

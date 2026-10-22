@@ -8,6 +8,21 @@ extension HerdrStore {
         return s
     }
 
+    /// The mock tree with a session id on every agent (`s-<agent name>`): for checks of which logs count as on screen.
+    public static var previewWithSessions: HerdrStore {
+        let s = HerdrStore(session: .default())
+        s.setPreview(workspaces: PreviewData.workspaces.map { ws in
+            Workspace(id: ws.id, label: ws.label, tabs: ws.tabs.map { t in
+                Tab(id: t.id, label: t.label, number: t.number, panes: t.panes.map { p in
+                    var p = p
+                    if var a = p.agent { a.sessionId = "s-\(a.name)"; p.agent = a }
+                    return p
+                }, status: t.status)
+            })
+        }, connected: true)
+        return s
+    }
+
     /// Workspaces with many tabs and long names: for sidebar layout checks.
     public static var previewDense: HerdrStore {
         let sts: [AgentStatus] = [.idle, .done, .working, .blocked, .done, .idle, .done, .working, .idle, .done, .idle, .done, .idle, .done]

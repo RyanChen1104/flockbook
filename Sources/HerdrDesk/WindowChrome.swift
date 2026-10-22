@@ -31,6 +31,8 @@ enum ChromeProbe {
     nonisolated(unsafe) static var sheetClose: (() -> Void)?
     nonisolated(unsafe) static var sheetHandle: TerminalHandle?
     nonisolated(unsafe) static var rows: [String: CGRect] = [:]
+    /// Whether each sidebar nav row is in the window now (rows keep their last frame in `rows` after they go).
+    nonisolated(unsafe) static var rowsShown: [String: Bool] = [:]
 }
 
 /// Window chrome the app depends on. The real window (WindowFixer) and every offscreen test window call this same code,

@@ -222,9 +222,10 @@ struct DeskCommands: Commands {
     var body: some Commands {
         // Settings is a page of the main window (no Settings window): ⌘, shows it there, opening the window if it was closed.
         CommandGroup(replacing: .appSettings) {
+            // Again while it shows: back where it was opened from.
             Button("Settings…") {
-                model.showSettings()
-                if let w = model.mainWindow, w.isVisible { w.makeKeyAndOrderFront(nil) } else { openWindow(id: "main") }
+                if let w = model.mainWindow, w.isVisible { model.toggleSettings(); w.makeKeyAndOrderFront(nil) }
+                else { model.showSettings(); openWindow(id: "main") }
             }
             .keyboardShortcut(",")
         }
@@ -351,7 +352,7 @@ struct RootView: View {
         // tab row where the system toolbar lays it out (that toolbar shows the same row while revealed). Outside the split
         // view: while it shows the sidebar, the split moves its overlays' space sideways for a moment (up to ~130 pt).
         .overlay(alignment: .topLeading) { if model.fullScreen { FullScreenChrome().ignoresSafeArea() } }
-        .overlay(alignment: .topLeading) { if model.fullScreen { FullScreenTopRow().ignoresSafeArea() } }
+        .overlay(alignment: .topLeading) { if model.fullScreen, model.screen != .settings { FullScreenTopRow().ignoresSafeArea() } }
         .background(WindowFixer(model: model))
     }
 }
@@ -498,13 +499,27 @@ struct DetailView: View {
             if model.screen != .settings, !model.store.connected, model.store.workspaces.isEmpty, let problem = model.store.problem {
                 ConnectionProblemView(problem: problem) { await model.store.refresh() }
             } else {
-                switch model.screen {
-                case .tab: TabScreen()
-                case .inbox: InboxView()
-                case .overview: OverviewView()
-                case .search: SearchView()
-                case .settings: SettingsPage()
+                // Settings covers the screen it was opened from and leaves it in place (hidden, inert), not rebuilt: Back
+                // shows the conversation at the same place, older messages still open, the composer still focused.
+                let settings = model.screen == .settings
+                ZStack {
+                    Group {
+                        switch settings ? model.screenBeforeSettings : model.screen {
+                        case .tab: TabScreen()
+                        case .inbox: InboxView()
+                        case .overview: OverviewView()
+                        case .search: SearchView()
+                        case .settings: EmptyView()
+                        }
+                    }
+                    .environment(\.underSettings, settings)
+                    .opacity(settings ? 0 : 1)
+                    .allowsHitTesting(!settings)
+                    .disabled(settings)
+                    .accessibilityHidden(settings)
+                    if settings { SettingsPage() }
                 }
+                .background { SettingsFocus(open: settings) }
             }
         }
         // The window's surface again: the split view's detail column paints its own system background over the window's.

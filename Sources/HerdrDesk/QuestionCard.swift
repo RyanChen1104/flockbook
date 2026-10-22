@@ -118,6 +118,7 @@ struct QuestionFlow: Equatable {
 /// AskUserQuestion in the composer slot: number keys pick, Return goes on or sends, Esc leaves "Other" or goes back one
 /// question. `canSend` off (read-only Desk, or an answer Desk cannot deliver): the card says to answer in the terminal.
 struct QuestionCard: View {
+    @Environment(\.underSettings) private var underSettings
     let model: QuestionRequest
     let agentName: String
     var canSend = false
@@ -150,8 +151,12 @@ struct QuestionCard: View {
     }
 
     /// Words for a failed send or read. Nothing was typed for `.notOnScreen` and `.unsupported`.
+    /// The answer was held back: the Settings page covered the card when it was to be sent.
+    struct HeldUnderSettings: Error {}
+
     static func problemText(_ error: Error) -> String {
-        switch error as? QuestionAdapter.Failure {
+        if error is HeldUnderSettings { return "Not sent while Settings was open. Press Return to send." }
+        return switch error as? QuestionAdapter.Failure {
         case .notOnScreen?: "The question is no longer on screen. Nothing was sent."
         case .unsupported(let why)?: "Desk cannot send this answer (\(why)). Nothing was sent. Answer in the terminal."
         case .stuck?: "The terminal did not move on as expected. Check it before you try again."
@@ -207,7 +212,8 @@ struct QuestionCard: View {
         .focusEffectDisabled()
         .focused($focus, equals: .card)
         .onKeyPress(phases: .down) { press in key(press) }
-        .onAppear { focus = .card }
+        .onAppear { if !underSettings { focus = .card } }
+        .onChange(of: underSettings) { _, on in if !on { focus = .card } }   // came under the page: Back focuses it
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(agentName) asks you")
     }
@@ -314,6 +320,7 @@ struct QuestionCard: View {
     }
 
     private func returnKey() {
+        guard !underSettings else { return }
         focus = .card
         guard !busy else { return }
         if flow.needsLoad, flow.valid {
@@ -340,6 +347,7 @@ struct QuestionCard: View {
     }
 
     private func key(_ press: KeyPress) -> KeyPress.Result {
+        guard !underSettings else { return .ignored }
         guard press.modifiers.subtracting(.shift).isEmpty else { return .ignored }
         switch press.key {
         case .return: returnKey(); return .handled
@@ -423,6 +431,7 @@ struct OtherField: NSViewRepresentable {
     }
     func updateNSView(_ f: NSTextField, context: Context) {
         context.coordinator.parent = self
+        SettingsFocus.cover(f, context.environment.underSettings)
         let editing = (f.currentEditor() as? NSTextView)?.hasMarkedText() == true
         if f.stringValue != text, !editing { f.stringValue = text }
     }

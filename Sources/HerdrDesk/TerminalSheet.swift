@@ -158,6 +158,7 @@ struct SheetWindowSizer: NSViewRepresentable {
 /// Live terminal for one pane. Writable: a `TerminalSession` in control mode (keys, paste, resize). Read-only: observe.
 /// Shows why the session ended (taken over by another client, refused, not found); it never takes over by itself.
 struct ObservedTerminal: View {
+    @Environment(\.underSettings) private var underSettings
     let client: HerdrClient
     let paneId: String
     let terminalId: String
@@ -197,7 +198,7 @@ struct ObservedTerminal: View {
     /// - `.history`: scroll up opens the history view. `.none`: nothing.
     /// - observe/read-only on an agent pane: the notice only.
     private func wheel(_ dy: CGFloat, precise: Bool) {
-        guard history == nil else { return }
+        guard history == nil, !underSettings else { return }
         let st = wheelState
         if let k = st.kind, Date().timeIntervalSince(st.kindAt) < 1.5 { act(k, dy, precise); return }
         guard !fetching else { return }
@@ -406,8 +407,9 @@ struct TerminalNSView: NSViewRepresentable {
     }
 
     func updateNSView(_ tv: PasteTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         let c = context.coordinator
-        c.writable = writable; c.onClosed = onClosed; c.onStartError = onStartError
+        c.writable = writable; c.onClosed = onClosed; c.onStartError = onStartError; c.covered = context.environment.underSettings
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
         tv.allowMouseReporting = writable
         if c.colors != colorsKey {
@@ -469,6 +471,9 @@ struct TerminalNSView: NSViewRepresentable {
         nonisolated(unsafe) var task: Task<Void, Never>?
         nonisolated(unsafe) var session: TerminalSession?
         var writable = false
+        /// Under the Settings page: nothing goes to the pane, whatever reaches the view (SwiftTerm's own mouse-moved
+        /// reports do not go through hit-testing).
+        var covered = false
         weak var handle: TerminalHandle?
         var wasFocused = false
         /// The colours last applied: scheme, setting and theme read.
@@ -481,7 +486,7 @@ struct TerminalNSView: NSViewRepresentable {
         nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
             let bytes = [UInt8](data)
             Task { @MainActor in
-                guard writable, !bytes.isEmpty else { return }
+                guard writable, !covered, !bytes.isEmpty else { return }
                 handle?.sentBytes += bytes.count
                 _ = session?.send(bytes: bytes)
             }
@@ -523,19 +528,22 @@ final class PasteTerminalView: TerminalView {
     nonisolated(unsafe) var rightMonitor: Any?
     /// Right clicks go to the program (xterm report through the control session) instead of the pane menu.
     var rightClickToPane = false
+    /// Checks: right clicks the monitor took for the program.
+    static var rightClicksTaken = 0
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
         if let m = rightMonitor { NSEvent.removeMonitor(m); rightMonitor = nil }
         guard window != nil else { return }
         rightMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] e in
-            guard let self, self.rightClickToPane, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, self.rightClickToPane, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let t = self.getTerminal()
             guard t.cols > 0, t.rows > 0 else { return e }
             let col = min(t.cols, max(1, Int(p.x / (self.bounds.width / CGFloat(t.cols))) + 1))
             let yTop = self.isFlipped ? p.y : self.bounds.height - p.y
             let row = min(t.rows, max(1, Int(yTop / (self.bounds.height / CGFloat(t.rows))) + 1))
-            _ = self.coordinator?.session?.rightClick(col: col, row: row)
+            Self.rightClicksTaken += 1
+            if self.coordinator?.covered != true { _ = self.coordinator?.session?.rightClick(col: col, row: row) }
             return nil
         }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
@@ -547,10 +555,11 @@ final class PasteTerminalView: TerminalView {
     }
     /// True when the history view is open over this one: it takes the wheel itself.
     var historyOpen: () -> Bool = { false }
-    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() }
+    /// Hidden, under the history view, or under the Settings page.
+    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() || SettingsFocus.covered(self) }
     deinit { if let m = monitor { NSEvent.removeMonitor(m) }; if let m = rightMonitor { NSEvent.removeMonitor(m) } }
     override func paste(_ sender: Any) {
-        guard let c = coordinator, c.writable, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        guard let c = coordinator, c.writable, !c.covered, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         _ = c.session?.paste(text)
     }
 }
@@ -596,7 +605,7 @@ final class HistoryTerminalView: TerminalView {
         guard window != nil else { return }
         // Wheel down while already at the bottom leaves the history. Everything else scrolls the view itself.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            guard let self, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let atBottom = !self.canScroll || self.scrollPosition >= 0.999
             self.flashScroller()
             if e.scrollingDeltaY < 0, atBottom, e.momentumPhase.isEmpty { self.onBottomScroll?(); return nil }
@@ -644,6 +653,7 @@ struct HistoryTerminalNSView: NSViewRepresentable {
         return tv
     }
     func updateNSView(_ tv: HistoryTerminalView, context: Context) {
+        SettingsFocus.cover(tv, context.environment.underSettings)
         tv.onBottomScroll = { onExit(nil) }
         tv.onExit = onExit
     }

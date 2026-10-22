@@ -27,6 +27,7 @@ struct MessageText: NSViewRepresentable {
 
     func updateNSView(_ tv: MessageTextView, context: Context) {
         Self.updates += 1
+        SettingsFocus.cover(tv, context.environment.underSettings)
         if tv.contentID != content.id { tv.load(content) }
         if tv.fold != maxHeight { tv.fold = maxHeight }
     }
