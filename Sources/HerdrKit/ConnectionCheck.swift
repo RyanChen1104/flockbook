@@ -48,17 +48,24 @@ public enum ConnectionCheck {
         return rc == 0 ? 0 : errno
     }
 
-    /// The `herdr` program on `PATH` or in the usual install folders (a Finder launch has a short `PATH`). Nil: none.
-    /// `usual`: those folders (nil: Homebrew, /usr/local/bin, ~/.local/bin, ~/.cargo/bin).
+    /// The `herdr` program: `HERDR_BIN`, else on `PATH`, else in the usual install folders (a Finder launch has a short
+    /// `PATH`). Nil: none. `usual`: those folders (nil: `usualFolders`).
     public static func findHerdr(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
-        let onPath = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let usual = usual ?? ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.cargo/bin"]
-        return (onPath + usual).lazy.map { $0 + "/herdr" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+        let onPath = (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/herdr" }
+        let usual = (usual ?? usualFolders(home: home)).map { $0 + "/herdr" }
+        return ([environment["HERDR_BIN"]].compactMap { $0 } + onPath + usual).first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    public static func usualFolders(home: String) -> [String] { [] }
-    public static let notFound = ""
-    public static func programWarning(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? { nil }
+    /// Where herdr is installed when it is not on `PATH`: its installer's folder first, then Homebrew, then cargo.
+    public static func usualFolders(home: String) -> [String] { [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", home + "/.cargo/bin"] }
+
+    /// Why a terminal cannot start when `findHerdr` finds nothing.
+    public static let notFound = "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin."
+
+    /// Connected but no `herdr` program where the app looks: the agents show, but terminals cannot start. Nil: found.
+    public static func programWarning(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
+        findHerdr(environment: environment, home: home, usual: usual) == nil ? "herdr program not found: terminals can't start" : nil
+    }
 }
 
 extension ConnectionProblem {

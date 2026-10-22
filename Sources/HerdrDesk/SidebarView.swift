@@ -65,10 +65,10 @@ struct SidebarView: View {
                 RemoteFooter(hub: hub)
             }
             // Connection state only when something is wrong (as Mail): nothing while connected.
-            if !model.store.connected {
+            if !model.store.connected || model.store.programWarning != nil {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).imageScale(.small)
-                    Text(connectionText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(model.store.connected ? model.store.programWarning ?? "" : connectionText).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     Spacer()
                 }
                 .padding(.horizontal, 18).padding(.vertical, 10)

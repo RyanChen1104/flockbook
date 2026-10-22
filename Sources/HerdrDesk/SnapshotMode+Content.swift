@@ -428,7 +428,8 @@ import SwiftUI
                 let before = starts()
                 step("exit 127: not retried by itself (\(before) start)", before == 1)
                 TerminalProbe.retry?()
-                step("Retry starts it again (\(starts()) starts)", await until(3) { starts() == before + 1 })
+                let again = await until(3) { starts() == before + 1 }
+                step("Retry starts it again (\(starts()) starts)", again)
             }
             win.orderOut(nil)
         }

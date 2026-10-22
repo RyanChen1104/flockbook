@@ -212,11 +212,12 @@ public actor HerdrClient {
         let isNamed = session.name != nil
         return AsyncThrowingStream { cont in
             let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            proc.arguments = ["herdr"] + prefix + ["terminal", "session", "observe", terminalId]
+            guard let herdr = ConnectionCheck.findHerdr() else { cont.finish(throwing: HerdrError.socket(ConnectionCheck.notFound)); return }
+            proc.executableURL = URL(fileURLWithPath: herdr)
+            proc.arguments = prefix + ["terminal", "session", "observe", terminalId]
             var env = ProcessInfo.processInfo.environment
             if isNamed { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
-            env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin"
+            env["PATH"] = TerminalSession.childPath(environment: env, home: NSHomeDirectory())
             proc.environment = env
             let out = Pipe()
             proc.standardOutput = out

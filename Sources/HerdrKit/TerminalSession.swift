@@ -26,7 +26,10 @@ public final class TerminalSession: @unchecked Sendable {
     public let events: AsyncStream<TerminalEvent>
 
     private let cont: AsyncStream<TerminalEvent>.Continuation
-    private let argvPrefix: [String]
+    /// The program and its first arguments; nil: herdr's, found when each process starts (`find`).
+    private let launcher: [String]?
+    private let cliPrefix: [String]
+    private let find: @Sendable () -> String?
     private let stripHerdrEnv: Bool
     private let lock = NSLock()
     private var proc: Process?
@@ -38,12 +41,14 @@ public final class TerminalSession: @unchecked Sendable {
     private var lastSize: (cols: Int, rows: Int)?
     private var bracketed = true      // herdr frames do not carry DEC private modes (see README); assume yes until a frame says ?2004l
 
-    /// `launcher` replaces `/usr/bin/env herdr --session <name>` (tests use a fake script).
+    /// `launcher` replaces `<herdr> --session <name>` (tests use a fake script). `find` gives herdr's full path.
     public init(terminalId: String, session: HerdrSession, mode: Mode = .control(takeover: false),
                 cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil, find: @escaping @Sendable () -> String? = { ConnectionCheck.findHerdr() }) {
         self.terminalId = terminalId
         self.mode = mode
-        self.argvPrefix = launcher ?? ["/usr/bin/env", "herdr"] + session.cliPrefix
+        self.launcher = launcher
+        self.cliPrefix = session.cliPrefix
+        self.find = find
         self.stripHerdrEnv = session.name != nil
         self.wantCols = cols.flatMap { $0 > 0 ? $0 : nil }
         self.wantRows = rows.flatMap { $0 > 0 ? $0 : nil }
@@ -60,8 +65,15 @@ public final class TerminalSession: @unchecked Sendable {
     /// this stays true unless a frame carries `ESC[?2004l` (then false until `ESC[?2004h`). Override with `paste(_:bracketed:)`.
     public var bracketedPaste: Bool { lock.withLock { bracketed } }
 
-    static func launcher(session: HerdrSession, environment: [String: String], home: String) -> [String]? { ["/usr/bin/env", "herdr"] + session.cliPrefix }
-    static func childPath(environment: [String: String], home: String) -> String { (environment["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin" }
+    /// herdr's full path and the session's arguments; nil when there is no herdr program.
+    static func launcher(session: HerdrSession, environment: [String: String], home: String) -> [String]? {
+        ConnectionCheck.findHerdr(environment: environment, home: home).map { [$0] + session.cliPrefix }
+    }
+    /// `PATH` for the herdr process: the app's, then the usual install folders it lacks.
+    static func childPath(environment: [String: String], home: String) -> String {
+        let have = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        return (have + ConnectionCheck.usualFolders(home: home).filter { !have.contains($0) }).joined(separator: ":")
+    }
 
     public func start() {
         let go = lock.withLock { () -> Bool in defer { started = true }; return !started && !stopped }
@@ -185,6 +197,10 @@ public final class TerminalSession: @unchecked Sendable {
 
     private func runOnce(onFrame: @escaping @Sendable () -> Void) async -> Outcome {
         let (cols, rows) = lock.withLock { () -> (Int?, Int?) in (wantCols, wantRows) }
+        guard let argvPrefix = launcher ?? find().map({ [$0] + cliPrefix }) else {
+            cont.yield(.failed(reason: ConnectionCheck.notFound))
+            return .final
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: argvPrefix[0])
         var args = Array(argvPrefix.dropFirst())
@@ -195,12 +211,14 @@ public final class TerminalSession: @unchecked Sendable {
         p.arguments = args
         var env = ProcessInfo.processInfo.environment
         if stripHerdrEnv { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
-        env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin"
+        env["PATH"] = Self.childPath(environment: env, home: NSHomeDirectory())
         p.environment = env
         let out = Pipe(), err = Pipe(), inp = Pipe()
         p.standardOutput = out; p.standardError = err; p.standardInput = inp
 
         let finalReason = Locked<String?>(nil)
+        // Exit 127 before any frame: the program is not there (`env: herdr: …`) or cannot run. Final, with its last words.
+        let framed = Locked(false), lastErr = Locked<String?>(nil), status = Locked<Int32>(0)
         let outReader = LineAccumulator { [self] line in
             guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
             switch o["type"] as? String {
@@ -215,6 +233,7 @@ public final class TerminalSession: @unchecked Sendable {
                         bracketed = true
                     } else if bytes.range(of: Data("\u{1b}[?2004l".utf8)) != nil { bracketed = false }
                 }
+                framed.set(true)
                 onFrame()
                 cont.yield(.frame(f))
             case "terminal.closed":
@@ -225,7 +244,7 @@ public final class TerminalSession: @unchecked Sendable {
             }
         }
         let errReader = LineAccumulator { [cont] line in
-            if let s = String(data: line, encoding: .utf8), !s.isEmpty { cont.yield(.notice(s)) }
+            if let s = String(data: line, encoding: .utf8), !s.isEmpty { lastErr.set(s); cont.yield(.notice(s)) }
         }
         // two things must finish: stdout EOF and process exit
         return await withCheckedContinuation { (k: CheckedContinuation<Outcome, Never>) in
@@ -233,6 +252,13 @@ public final class TerminalSession: @unchecked Sendable {
             let done: @Sendable () -> Void = { [self] in
                 guard pending.update({ $0 -= 1; return $0 }) == 0 else { return }
                 lock.withLock { proc = nil; stdin = nil }
+                if finalReason.get() == nil, status.get() == 127, !framed.get() {
+                    err.fileHandleForReading.readabilityHandler = nil
+                    errReader.feed(err.fileHandleForReading.readDataToEndOfFile())
+                    let why = lastErr.get() ?? "herdr could not start (exit 127)."
+                    finalReason.set(why)
+                    cont.yield(.failed(reason: why))
+                }
                 k.resume(returning: finalReason.get() != nil ? .final : .retry)
             }
             out.fileHandleForReading.readabilityHandler = { h in
@@ -245,7 +271,7 @@ public final class TerminalSession: @unchecked Sendable {
                 if d.isEmpty { h.readabilityHandler = nil; return }
                 errReader.feed(d)
             }
-            p.terminationHandler = { _ in done() }
+            p.terminationHandler = { p in status.set(p.terminationStatus); done() }
             do {
                 lock.withLock { proc = p; stdin = inp.fileHandleForWriting }
                 try p.run()
@@ -254,7 +280,7 @@ public final class TerminalSession: @unchecked Sendable {
                 lock.withLock { proc = nil; stdin = nil }
                 out.fileHandleForReading.readabilityHandler = nil
                 err.fileHandleForReading.readabilityHandler = nil
-                cont.yield(.notice("cannot start herdr: \(error.localizedDescription)"))
+                cont.yield(.failed(reason: "cannot start herdr: \(error.localizedDescription)"))
                 finalReason.set("start failed")
                 k.resume(returning: .final)
             }
