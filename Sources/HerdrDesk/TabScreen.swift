@@ -3,6 +3,7 @@ import SwiftUI
 
 struct TabScreen: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.underSettings) private var underSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,8 +34,9 @@ struct TabScreen: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.notice)
-        .sheet(isPresented: Bindable(model).showTerminal) { TerminalSheet() }
-        .confirmationDialog("Close this pane?", isPresented: Binding(get: { model.closingPane != nil }, set: { if !$0 { model.closingPane = nil } }),
+        // Not over the Settings page (a late approval result asks for the terminal): they wait for Back.
+        .sheet(isPresented: Binding(get: { model.showTerminal && !underSettings }, set: { model.showTerminal = $0 })) { TerminalSheet() }
+        .confirmationDialog("Close this pane?", isPresented: Binding(get: { model.closingPane != nil && !underSettings }, set: { if !$0 { model.closingPane = nil } }),
                             titleVisibility: .visible) {
             Button("Close pane", role: .destructive) { if let p = model.closingPane { model.closePane(p) } }
             Button("Cancel", role: .cancel) {}
@@ -424,6 +426,7 @@ struct SearchView: View {
             .listRowInsets(EdgeInsets(top: 0, leading: ScreenColumn.margin(area.width) + 8, bottom: 0, trailing: ScreenColumn.margin(area.width) + 8))
             .tag(h.id)
         }
+        .background { CoveredList() }      // under the Settings page the list does not take the keys
         .listStyle(.sidebar)                // the sidebar's rounded, inset selection
         .scrollContentBackground(.hidden)   // on the window surface: no lighter list panel next to the sidebar
         .contextMenu(forSelectionType: String.self) { _ in } primaryAction: { ids in open(ids.first, in: hits) }

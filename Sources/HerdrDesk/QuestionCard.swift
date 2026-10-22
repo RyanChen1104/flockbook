@@ -118,6 +118,7 @@ struct QuestionFlow: Equatable {
 /// AskUserQuestion in the composer slot: number keys pick, Return goes on or sends, Esc leaves "Other" or goes back one
 /// question. `canSend` off (read-only Desk, or an answer Desk cannot deliver): the card says to answer in the terminal.
 struct QuestionCard: View {
+    @Environment(\.underSettings) private var underSettings
     let model: QuestionRequest
     let agentName: String
     var canSend = false
@@ -207,7 +208,7 @@ struct QuestionCard: View {
         .focusEffectDisabled()
         .focused($focus, equals: .card)
         .onKeyPress(phases: .down) { press in key(press) }
-        .onAppear { focus = .card }
+        .onAppear { if !underSettings { focus = .card } }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(agentName) asks you")
     }
@@ -340,6 +341,7 @@ struct QuestionCard: View {
     }
 
     private func key(_ press: KeyPress) -> KeyPress.Result {
+        guard !underSettings else { return .ignored }
         guard press.modifiers.subtracting(.shift).isEmpty else { return .ignored }
         switch press.key {
         case .return: returnKey(); return .handled

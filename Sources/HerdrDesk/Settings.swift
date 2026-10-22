@@ -251,6 +251,25 @@ extension EnvironmentValues {
 /// Those views are our own AppKit ones (`.disabled` keeps SwiftUI's controls from taking the focus): each marks itself
 /// with `cover(_:_:)` from `underSettings`. Nothing else loses the focus: the page's own controls, the ⌘/ panel's
 /// search field, sheets.
+/// A SwiftUI List's table under the Settings page: marked like our own views. SwiftUI places this view beside the
+/// table, not around it, so it finds the table by place: the smallest table whose scroll view holds this view's frame
+/// (the scroll view runs on under the toolbar and the sidebar).
+struct CoveredList: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        let on = context.environment.underSettings
+        // After this update: the view has its place in the window.
+        DispatchQueue.main.async { [weak view] in
+            guard let view, let root = view.window?.contentView?.superview else { return }
+            let mine = view.convert(view.bounds, to: nil).insetBy(dx: 1, dy: 1)
+            func tables(_ v: NSView) -> [NSTableView] { ((v as? NSTableView).map { [$0] } ?? []) + v.subviews.flatMap(tables) }
+            let table = tables(root).compactMap { t in t.enclosingScrollView.map { (t, $0.convert($0.bounds, to: nil)) } }
+                .filter { $0.1.contains(mine) }.min { $0.1.width * $0.1.height < $1.1.width * $1.1.height }?.0
+            if let table { SettingsFocus.cover(table, on) }
+        }
+    }
+}
+
 struct SettingsFocus: NSViewRepresentable {
     let open: Bool
     final class Coordinator { weak var saved: NSResponder?; var open = false; var watch: NSKeyValueObservation? }

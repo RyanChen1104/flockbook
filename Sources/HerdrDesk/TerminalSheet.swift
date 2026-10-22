@@ -452,7 +452,7 @@ final class PasteTerminalView: TerminalView {
         if let m = rightMonitor { NSEvent.removeMonitor(m); rightMonitor = nil }
         guard window != nil else { return }
         rightMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] e in
-            guard let self, self.rightClickToPane, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, self.rightClickToPane, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let t = self.getTerminal()
             guard t.cols > 0, t.rows > 0 else { return e }
             let col = min(t.cols, max(1, Int(p.x / (self.bounds.width / CGFloat(t.cols))) + 1))
@@ -470,7 +470,8 @@ final class PasteTerminalView: TerminalView {
     }
     /// True when the history view is open over this one: it takes the wheel itself.
     var historyOpen: () -> Bool = { false }
-    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() }
+    /// Hidden, under the history view, or under the Settings page.
+    private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() || SettingsFocus.covered(self) }
     deinit { if let m = monitor { NSEvent.removeMonitor(m) }; if let m = rightMonitor { NSEvent.removeMonitor(m) } }
     override func paste(_ sender: Any) {
         guard let c = coordinator, c.writable, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
@@ -519,7 +520,7 @@ final class HistoryTerminalView: TerminalView {
         guard window != nil else { return }
         // Wheel down while already at the bottom leaves the history. Everything else scrolls the view itself.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            guard let self, let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
+            guard let self, !SettingsFocus.covered(self), let p = eventPoint(e, in: self), self.bounds.contains(p) else { return e }
             let atBottom = !self.canScroll || self.scrollPosition >= 0.999
             self.flashScroller()
             if e.scrollingDeltaY < 0, atBottom, e.momentumPhase.isEmpty { self.onBottomScroll?(); return nil }
