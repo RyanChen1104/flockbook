@@ -45,7 +45,7 @@ public enum GhosttyThemeProblem: Error, Sendable, Hashable {
         case .themeNotFound(let name): "Ghostty theme “\(name)” not found."
         case .badTheme(let name): "Ghostty theme “\(name)” has no colors."
         case .badValue(let value): "Ghostty's theme setting “\(value)” is not valid."
-        case .badColor: ""
+        case .badColor(let line): "Ghostty's “\(line)” is not a color Flockbook can read; it is skipped."
         }
     }
 }
@@ -55,9 +55,11 @@ public enum GhosttyThemeProblem: Error, Sendable, Hashable {
 ///   `~/Library/Application Support/com.mitchellh.ghostty`; in each, `config` then `config.ghostty`.
 /// - `config-file = [?]path`: relative to the file it is in, loaded after that file (so its keys win); a file
 ///   already read (a cycle) is skipped. A missing file is skipped, with or without `?`.
-/// - `theme = name`, `theme = light:A,dark:B` (both, any order) or an absolute path. A name is looked up in the
+/// - `theme = name`, `theme = light:A,dark:B` (both, any order), an absolute path or `~/path`. A name is looked up in the
 ///   user's `themes` folder, then in Ghostty.app's (`resources` = `Ghostty.app/Contents/Resources/ghostty`).
-/// - Colour keys in the config override the theme's; an empty value resets one to Ghostty's default.
+/// - Colour keys in the config override the theme's; an empty value resets one to Ghostty's default; a value that is
+///   not a colour is skipped and listed in `skipped`.
+/// - Only plain files up to 1 MB are read (a device or a FIFO would block).
 public enum GhosttyConfig {
     public static func load(home: String = NSHomeDirectory(), environment: [String: String] = ProcessInfo.processInfo.environment,
                             resources: String?) -> Result<GhosttyThemes, GhosttyThemeProblem> {
@@ -72,9 +74,10 @@ public enum GhosttyConfig {
         guard let themeValue else {
             guard !config.isEmpty else { return .failure(.noTheme) }
             let t = config.resolved(name: "Ghostty config", over: Colors())
-            return .success(GhosttyThemes(light: t, dark: t))
+            return .success(GhosttyThemes(light: t, dark: t, skipped: config.bad))
         }
-        guard let names = names(themeValue) else { return .failure(.badValue(themeValue)) }
+        guard let names = names(themeValue, home: home) else { return .failure(.badValue(themeValue)) }
+        var skipped = config.bad
         let folders = [ghosttyFolder(home: home, environment: environment) + "/themes"] + (resources.map { [$0 + "/themes"] } ?? [])
         func theme(_ name: String) -> Result<TerminalTheme, GhosttyThemeProblem> {
             let path = name.hasPrefix("/") ? (isFile(name) ? name : nil) : folders.map { $0 + "/" + name }.first(where: isFile)
@@ -82,11 +85,12 @@ public enum GhosttyConfig {
             var colors = Colors()
             for (key, value) in lines(String(decoding: data, as: UTF8.self)) where key != "theme" && key != "config-file" { colors.set(key, value) }
             guard !colors.isEmpty else { return .failure(.badTheme(name)) }
+            skipped = colors.bad + skipped
             return .success(config.resolved(name: (name as NSString).lastPathComponent, over: colors))
         }
         return theme(names.light).flatMap { light in
             names.dark == names.light ? .success(GhosttyThemes(light: light, dark: light)) : theme(names.dark).map { GhosttyThemes(light: light, dark: $0) }
-        }
+        }.map { var t = $0; t.skipped = skipped; return t }
     }
 
     /// Ghostty's config files in load order (later wins). They may not exist.
@@ -100,10 +104,11 @@ public enum GhosttyConfig {
         return xdg + "/ghostty"
     }
 
-    /// `#RRGGBB` or `RRGGBB`, optionally in double quotes. Nil: anything else (X11 colour names are not read).
+    /// `#RRGGBB`, `RRGGBB` or `#RGB`, optionally in double quotes. Nil: anything else (X11 colour names are not read).
     public static func color(_ s: String) -> RGB8? {
         var hex = unquote(s.trimmingCharacters(in: .whitespaces))
         if hex.hasPrefix("#") { hex.removeFirst() }
+        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
         guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return nil }
         return RGB8(UInt8(v >> 16 & 0xff), UInt8(v >> 8 & 0xff), UInt8(v & 0xff))
     }
@@ -123,13 +128,15 @@ public enum GhosttyConfig {
         static let keys: Set<String> = ["background", "foreground", "cursor-color", "cursor-text", "selection-background", "selection-foreground"]
         var keys: [String: Value?] = [:]
         var palette: [Int: RGB8?] = [:]
+        /// `key = value` lines whose value is not a colour.
+        var bad: [String] = []
         var isEmpty: Bool { keys.isEmpty && palette.isEmpty }
 
         mutating func set(_ key: String, _ value: String) {
             if key == "palette" {
                 let parts = value.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
                 guard parts.count == 2, let i = GhosttyConfig.index(parts[0]), (0..<16).contains(i) else { return }
-                if parts[1].isEmpty { palette[i] = .some(nil) } else if let c = GhosttyConfig.color(parts[1]) { palette[i] = c }
+                if parts[1].isEmpty { palette[i] = .some(nil) } else if let c = GhosttyConfig.color(parts[1]) { palette[i] = c } else { bad.append("palette = \(value)") }
                 return
             }
             guard Self.keys.contains(key) else { return }
@@ -137,7 +144,7 @@ public enum GhosttyConfig {
             case "": keys[key] = .some(nil)
             case "cell-foreground": keys[key] = .cellForeground
             case "cell-background": keys[key] = .cellBackground
-            default: if let c = GhosttyConfig.color(value) { keys[key] = .rgb(c) }
+            default: if let c = GhosttyConfig.color(value) { keys[key] = .rgb(c) } else { bad.append("\(key) = \(value)") }
             }
         }
 
@@ -163,14 +170,15 @@ public enum GhosttyConfig {
     }
 
     /// `theme`'s value: the light and the dark name (the same name twice for one theme). Nil: not valid.
-    static func names(_ value: String) -> (light: String, dark: String)? {
+    static func names(_ value: String, home: String) -> (light: String, dark: String)? {
         func valid(_ n: String) -> Bool { !n.isEmpty && (n.hasPrefix("/") || !n.contains("/")) }
+        func expand(_ n: String) -> String { n.hasPrefix("~/") ? home + n.dropFirst() : n }
         let parts = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard parts.contains(where: { $0.hasPrefix("light:") || $0.hasPrefix("dark:") }) else { return valid(value) ? (value, value) : nil }
+        guard parts.contains(where: { $0.hasPrefix("light:") || $0.hasPrefix("dark:") }) else { let v = expand(value); return valid(v) ? (v, v) : nil }
         var light: String?, dark: String?
         for part in parts {
-            if part.hasPrefix("light:") { light = part.dropFirst(6).trimmingCharacters(in: .whitespaces) }
-            else if part.hasPrefix("dark:") { dark = part.dropFirst(5).trimmingCharacters(in: .whitespaces) }
+            if part.hasPrefix("light:") { light = expand(part.dropFirst(6).trimmingCharacters(in: .whitespaces)) }
+            else if part.hasPrefix("dark:") { dark = expand(part.dropFirst(5).trimmingCharacters(in: .whitespaces)) }
             else { return nil }
         }
         guard let light, let dark, valid(light), valid(dark) else { return nil }
@@ -211,8 +219,9 @@ public enum GhosttyConfig {
         s.count >= 2 && s.hasPrefix("\"") && s.hasSuffix("\"") ? String(s.dropFirst().dropLast()) : s
     }
 
+    /// A plain file (symlinks followed) of at most 1 MB: never a device, FIFO or folder.
     static func isFile(_ path: String) -> Bool {
-        var folder: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &folder) && !folder.boolValue
+        var st = stat()
+        return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFREG && st.st_size <= 1 << 20
     }
 }

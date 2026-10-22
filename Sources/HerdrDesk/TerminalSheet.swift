@@ -437,6 +437,7 @@ struct TerminalNSView: NSViewRepresentable {
         let dark = scheme == .dark
         tv.scroller?.isHidden = true
         if let t = TerminalThemes.shared.theme(mode, dark: dark) {
+            themed.add(tv)
             tv.nativeBackgroundColor = t.background.ns
             tv.backgroundOpacity = 1
             tv.nativeForegroundColor = t.foreground.ns
@@ -447,11 +448,12 @@ struct TerminalNSView: NSViewRepresentable {
             tv.selectedTextForegroundColor = t.selectionForeground.ns
             return
         }
-        // Themed before: SwiftTerm's own palette, cursor and selection again.
-        if tv.backgroundOpacity > 0 {
+        // Themed before: SwiftTerm's own palette, cursor (drawn in the foreground) and selection again. Never on a view
+        // that was not themed: it keeps what the program in it set (OSC 4, OSC 12).
+        if themed.contains(tv) {
+            themed.remove(tv)
             tv.installColors(SwiftTerm.Color.terminalAppColors)
-            tv.caretColor = .selectedControlColor
-            tv.caretTextColor = nil
+            tv.setCursorColor(source: tv.getTerminal(), color: nil, textColor: nil)
             tv.selectedTextBackgroundColor = NSColor(srgbRed: 0, green: 166 / 255, blue: 178 / 255, alpha: 1)
             tv.selectedTextForegroundColor = .black
         }
@@ -459,6 +461,9 @@ struct TerminalNSView: NSViewRepresentable {
         tv.backgroundOpacity = 0
         tv.nativeForegroundColor = dark ? NSColor(srgbRed: 0.91, green: 0.91, blue: 0.918, alpha: 1) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1)
     }
+
+    /// Views in a Ghostty theme's colours now.
+    @MainActor private static let themed = NSHashTable<TerminalView>.weakObjects()
 
     @MainActor final class Coordinator: NSObject, TerminalViewDelegate {
         nonisolated(unsafe) var task: Task<Void, Never>?

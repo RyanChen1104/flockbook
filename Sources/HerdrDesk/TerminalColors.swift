@@ -38,10 +38,17 @@ enum TerminalColors: String, CaseIterable, Identifiable {
         return try? loaded?.get().theme(dark: dark)
     }
 
-    /// Why the Ghostty theme is not used, for Settings. Nil: it is used, or the setting is Flockbook.
+    /// Why the Ghostty theme is not used, or which value of it is skipped, for Settings. Nil: Flockbook's colours, or
+    /// the theme is used as it is. Reads the theme when nothing read it yet; a new read tells observers.
     func problem(_ mode: TerminalColors) -> String? {
-        guard mode == .ghostty, case .failure(let p) = loaded else { return nil }
-        return p.reason
+        _ = generation
+        guard mode == .ghostty else { return nil }
+        if loaded == nil { reload() }
+        switch loaded {
+        case .failure(let p): return p.reason
+        case .success(let t): return t.skipped.first.map { GhosttyThemeProblem.badColor($0).reason }
+        case nil: return nil
+        }
     }
 
     /// Ghostty.app's resources folder, wherever the app is installed. Nil: no Ghostty.app.
