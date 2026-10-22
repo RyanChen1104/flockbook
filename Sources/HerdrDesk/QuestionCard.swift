@@ -209,6 +209,7 @@ struct QuestionCard: View {
         .focused($focus, equals: .card)
         .onKeyPress(phases: .down) { press in key(press) }
         .onAppear { if !underSettings { focus = .card } }
+        .onChange(of: underSettings) { _, on in if !on { focus = .card } }   // came under the page: Back focuses it
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(agentName) asks you")
     }
@@ -315,6 +316,7 @@ struct QuestionCard: View {
     }
 
     private func returnKey() {
+        guard !underSettings else { return }
         focus = .card
         guard !busy else { return }
         if flow.needsLoad, flow.valid {

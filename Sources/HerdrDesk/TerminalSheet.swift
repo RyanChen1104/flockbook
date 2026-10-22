@@ -158,6 +158,7 @@ struct SheetWindowSizer: NSViewRepresentable {
 /// Live terminal for one pane. Writable: a `TerminalSession` in control mode (keys, paste, resize). Read-only: observe.
 /// Shows why the session ended (taken over by another client, refused, not found); it never takes over by itself.
 struct ObservedTerminal: View {
+    @Environment(\.underSettings) private var underSettings
     let client: HerdrClient
     let paneId: String
     let terminalId: String
@@ -195,7 +196,7 @@ struct ObservedTerminal: View {
     /// - `.history`: scroll up opens the history view. `.none`: nothing.
     /// - observe/read-only on an agent pane: the notice only.
     private func wheel(_ dy: CGFloat, precise: Bool) {
-        guard history == nil else { return }
+        guard history == nil, !underSettings else { return }
         let st = wheelState
         if let k = st.kind, Date().timeIntervalSince(st.kindAt) < 1.5 { act(k, dy, precise); return }
         guard !fetching else { return }
@@ -362,7 +363,7 @@ struct TerminalNSView: NSViewRepresentable {
     func updateNSView(_ tv: PasteTerminalView, context: Context) {
         SettingsFocus.cover(tv, context.environment.underSettings)
         let c = context.coordinator
-        c.writable = writable; c.onClosed = onClosed
+        c.writable = writable; c.onClosed = onClosed; c.covered = context.environment.underSettings
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
         tv.allowMouseReporting = writable
         if c.scheme != scheme { c.scheme = scheme; Self.applyColors(tv, scheme) }
@@ -394,6 +395,9 @@ struct TerminalNSView: NSViewRepresentable {
         nonisolated(unsafe) var task: Task<Void, Never>?
         nonisolated(unsafe) var session: TerminalSession?
         var writable = false
+        /// Under the Settings page: nothing goes to the pane, whatever reaches the view (SwiftTerm's own mouse-moved
+        /// reports do not go through hit-testing).
+        var covered = false
         weak var handle: TerminalHandle?
         var wasFocused = false
         var scheme: ColorScheme?
@@ -404,7 +408,7 @@ struct TerminalNSView: NSViewRepresentable {
         nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
             let bytes = [UInt8](data)
             Task { @MainActor in
-                guard writable, !bytes.isEmpty else { return }
+                guard writable, !covered, !bytes.isEmpty else { return }
                 handle?.sentBytes += bytes.count
                 _ = session?.send(bytes: bytes)
             }
@@ -461,7 +465,7 @@ final class PasteTerminalView: TerminalView {
             let yTop = self.isFlipped ? p.y : self.bounds.height - p.y
             let row = min(t.rows, max(1, Int(yTop / (self.bounds.height / CGFloat(t.rows))) + 1))
             Self.rightClicksTaken += 1
-            _ = self.coordinator?.session?.rightClick(col: col, row: row)
+            if self.coordinator?.covered != true { _ = self.coordinator?.session?.rightClick(col: col, row: row) }
             return nil
         }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
@@ -477,7 +481,7 @@ final class PasteTerminalView: TerminalView {
     private func isHiddenOrCovered(by e: NSEvent) -> Bool { isHiddenOrHasHiddenAncestor || historyOpen() || SettingsFocus.covered(self) }
     deinit { if let m = monitor { NSEvent.removeMonitor(m) }; if let m = rightMonitor { NSEvent.removeMonitor(m) } }
     override func paste(_ sender: Any) {
-        guard let c = coordinator, c.writable, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        guard let c = coordinator, c.writable, !c.covered, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         _ = c.session?.paste(text)
     }
 }

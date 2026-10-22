@@ -17,6 +17,8 @@ final class AppModel {
     var workspaceID: String? { didSet { updateVisibleSessions() } }
     var tabID: String? { didSet { updateVisibleSessions() } }
     var showTerminal = false
+    /// The Settings page covers the screen under it (`underSettings` in its views): nothing there sends to a pane.
+    var coveredBySettings: Bool { screen == .settings }
     /// Settings is a page of the main window (sidebar foot, ⌘,).
     /// While it shows, Settings has the sidebar (Back and its tabs) and the toolbar has no tab row.
     func showSettings() {
