@@ -399,6 +399,17 @@ extension ChromeTests {
         for _ in 0..<4 { win.selectNextKeyView(nil) }
         try? await Task.sleep(for: .milliseconds(300))
         step("Tab does not reach the hidden screen (\(name(win.firstResponder)))", !typing(win.firstResponder))
+        // The page's own controls keep the keys (Full Keyboard Access walks them with Tab).
+        let height = win.contentView?.bounds.height ?? 0
+        let control = views(root, NSControl.self).first { v in
+            let f = v.convert(v.bounds, to: nil)
+            return v.acceptsFirstResponder && SettingsProbe.content.contains(CGPoint(x: f.midX, y: height - f.midY))
+        }
+        if let control { win.makeFirstResponder(control) }
+        try? await Task.sleep(for: .milliseconds(300))
+        step("a control of the page keeps the keys (\(control.map { "\(type(of: $0))" } ?? "no control"): \(name(win.firstResponder)))",
+             control != nil && win.firstResponder === control)
+        win.makeFirstResponder(nil)
         // Only the hidden screen loses the keys: a field over Settings (the ⌘/ panel's search) keeps them.
         ShortcutsPanel.open(); try? await Task.sleep(for: .seconds(1))
         let search = views(root, NSSearchField.self).first
