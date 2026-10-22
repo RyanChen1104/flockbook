@@ -1,5 +1,6 @@
 import AppKit
 import HerdrKit
+import Observation
 import SwiftTerm
 
 /// Where the embedded terminal takes its colours: Flockbook's own (transparent, on the window surface) or the
@@ -12,21 +13,22 @@ enum TerminalColors: String, CaseIterable, Identifiable {
     static var current: TerminalColors { TerminalColors(rawValue: AppDefaults.store.string(forKey: key) ?? "") ?? .flockbook }
 }
 
-/// The Ghostty theme, read when a terminal opens and on `reload()` (Settings), never per frame.
-@MainActor final class TerminalThemes {
+/// The Ghostty theme, read when a terminal opens and on `reload()` (Settings), never per frame. Open terminals watch
+/// `generation` and take a changed theme.
+@MainActor @Observable final class TerminalThemes {
     static let shared = TerminalThemes()
 
     /// Where to read. Tests point it at synthetic files.
     struct Source { var home = NSHomeDirectory(); var environment = ProcessInfo.processInfo.environment; var resources: String? = TerminalThemes.ghosttyResources() }
-    var source: Source?
-    private(set) var loaded: Result<GhosttyThemes, GhosttyThemeProblem>?
-    /// Goes up on every read, so open terminals see a new read.
+    @ObservationIgnored var source: Source?
+    @ObservationIgnored private(set) var loaded: Result<GhosttyThemes, GhosttyThemeProblem>?
+    /// Goes up when a read finds other colours (or another reason), so open terminals take them.
     private(set) var generation = 0
 
     func reload() {
         let s = source ?? Source()
-        loaded = GhosttyConfig.load(home: s.home, environment: s.environment, resources: s.resources)
-        generation += 1
+        let new = GhosttyConfig.load(home: s.home, environment: s.environment, resources: s.resources)
+        if new != loaded { loaded = new; generation += 1 }
     }
 
     /// The theme to use, nil for Flockbook's colours (that setting, or a theme that cannot be read).

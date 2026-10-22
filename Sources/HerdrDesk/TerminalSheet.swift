@@ -291,11 +291,14 @@ struct ObservedTerminal: View {
             .overlay {
                 // Not a blank view: the transparent terminal shows only the window behind it until a frame comes.
                 if let e = startError {
+                    // On a card: readable on an opaque Ghostty-theme background too.
                     VStack(spacing: 10) {
                         Label(Self.startErrorLine(e), systemImage: "exclamationmark.triangle.fill")
                             .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button("Retry") { startError = nil; closedReason = nil; epoch += 1 }.controlSize(.small)
                     }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
                     .padding(20)
                 }
             }
@@ -352,8 +355,12 @@ struct TerminalNSView: NSViewRepresentable {
     /// Why the terminal does not start (nil again once a frame comes).
     var onStartError: (String?) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
+    @AppStorage(TerminalColors.key, store: AppDefaults.store) private var colorsSetting = TerminalColors.flockbook.rawValue
 
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    private var mode: TerminalColors { TerminalColors(rawValue: colorsSetting) ?? .flockbook }
+    private var colorsKey: String { "\(scheme)-\(mode.rawValue)-\(TerminalThemes.shared.generation)" }
 
     func makeNSView(context: Context) -> PasteTerminalView {
         let tv = PasteTerminalView(frame: .zero)
@@ -367,7 +374,10 @@ struct TerminalNSView: NSViewRepresentable {
         tv.coordinator = c
         tv.terminalDelegate = c
         tv.allowMouseReporting = writable
-        Self.applyColors(tv, scheme)
+        // A new terminal reads the theme again (the user may have changed it in Ghostty).
+        if mode == .ghostty { TerminalThemes.shared.reload() }
+        Self.applyColors(tv, scheme, mode: mode)
+        c.colors = colorsKey
         let session = client.terminalSession(terminalId: terminalId, mode: writable ? .control(takeover: takeover) : .observe, launcher: Self.testLauncher)
         c.session = session
         handle?.session = session
@@ -400,7 +410,12 @@ struct TerminalNSView: NSViewRepresentable {
         c.writable = writable; c.onClosed = onClosed; c.onStartError = onStartError
         tv.onWheel = onWheel; tv.historyOpen = historyOpen; tv.rightClickToPane = rightClickToPane && writable
         tv.allowMouseReporting = writable
-        if c.scheme != scheme { c.scheme = scheme; Self.applyColors(tv, scheme) }
+        if c.colors != colorsKey {
+            // Just turned on in Settings: read the theme now.
+            if mode == .ghostty, c.colors?.contains("-\(TerminalColors.ghostty.rawValue)-") == false { TerminalThemes.shared.reload() }
+            c.colors = colorsKey
+            Self.applyColors(tv, scheme, mode: mode)
+        }
         if focused, !c.wasFocused, writable {
             DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
         }
@@ -416,13 +431,33 @@ struct TerminalNSView: NSViewRepresentable {
     /// The default background is transparent, so a terminal sits on the same window surface as every other pane
     /// (an opaque fill was a lighter block next to the conversation). Cells with their own colour, the caret and
     /// selections stay opaque. SwiftTerm's scroller is hidden: the live view never scrolls (wheel = history), and the
-    /// history view shows it only while scrolling.
+    /// history view shows it only while scrolling. With the Ghostty-theme setting: the theme's background (opaque),
+    /// foreground, palette, cursor and selection; a theme that cannot be read gives Flockbook's colours.
     static func applyColors(_ tv: TerminalView, _ scheme: ColorScheme, mode: TerminalColors = .current) {
         let dark = scheme == .dark
+        tv.scroller?.isHidden = true
+        if let t = TerminalThemes.shared.theme(mode, dark: dark) {
+            tv.nativeBackgroundColor = t.background.ns
+            tv.backgroundOpacity = 1
+            tv.nativeForegroundColor = t.foreground.ns
+            tv.installColors(t.palette.map(\.term))
+            tv.caretColor = t.cursor.ns
+            tv.caretTextColor = t.cursorText.ns
+            tv.selectedTextBackgroundColor = t.selectionBackground.ns
+            tv.selectedTextForegroundColor = t.selectionForeground.ns
+            return
+        }
+        // Themed before: SwiftTerm's own palette, cursor and selection again.
+        if tv.backgroundOpacity > 0 {
+            tv.installColors(SwiftTerm.Color.terminalAppColors)
+            tv.caretColor = .selectedControlColor
+            tv.caretTextColor = nil
+            tv.selectedTextBackgroundColor = NSColor(srgbRed: 0, green: 166 / 255, blue: 178 / 255, alpha: 1)
+            tv.selectedTextForegroundColor = .black
+        }
         tv.nativeBackgroundColor = (dark ? NSColor(srgbRed: 0.118, green: 0.118, blue: 0.118, alpha: 1) : .white)
         tv.backgroundOpacity = 0
         tv.nativeForegroundColor = dark ? NSColor(srgbRed: 0.91, green: 0.91, blue: 0.918, alpha: 1) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1)
-        tv.scroller?.isHidden = true
     }
 
     @MainActor final class Coordinator: NSObject, TerminalViewDelegate {
@@ -431,7 +466,8 @@ struct TerminalNSView: NSViewRepresentable {
         var writable = false
         weak var handle: TerminalHandle?
         var wasFocused = false
-        var scheme: ColorScheme?
+        /// The colours last applied: scheme, setting and theme read.
+        var colors: String?
         var onClosed: (String) -> Void = { _ in }
         var onStartError: (String?) -> Void = { _ in }
         private var resizeTask: Task<Void, Never>?

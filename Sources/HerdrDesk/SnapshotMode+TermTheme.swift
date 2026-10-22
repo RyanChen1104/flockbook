@@ -21,7 +21,7 @@ extension ContentTests {
         func palette(_ hex: [String]) -> String { hex.enumerated().map { "palette = \($0.offset)=#\($0.element)" }.joined(separator: "\n") }
         let paper = palette(["3b3228", "b23a2c", "4d7a2a", "9a6a00", "2f5f9a", "8a3f8a", "2a7a7a", "d8cfbd",
                              "6b6052", "d0473a", "5e9632", "b88300", "3a74bd", "a64fa6", "339494", "fbf6ea"])
-        let ink = palette(["14161f", "e06c75", "98c379", "e5c07b", "61afef", "c678dd", "56b6c2", "abb2bf",
+        let ink = palette(["3a3f4b", "e06c75", "98c379", "e5c07b", "61afef", "c678dd", "56b6c2", "abb2bf",
                            "5c6370", "ff7a85", "b5e890", "ffd68a", "7cc4ff", "dc8ff0", "6fd3df", "ffffff"])
         try? "\(paper)\nbackground = #f4ecd8\nforeground = #3b3228\ncursor-color = #b8860b\nselection-background = #d8c8a8\n"
             .write(toFile: ghostty + "/themes/Paper", atomically: true, encoding: .utf8)
@@ -68,9 +68,15 @@ extension ContentTests {
             let path = "\(dir)/termtheme\(dark ? "-dark" : "").png"
             capture(win, to: path)
             let px = pixels(path, host)?(size.width / 2, size.height - 12)
-            step("\(dark ? "dark" : "light"): the empty rows are the theme's background (\(hex(px)))", same(px, (dark ? inkBg : paperBg).ns)
-                 || px.map { abs($0.redComponent - (dark ? inkBg : paperBg).ns.redComponent) < 0.03 } == true)
             win.orderOut(nil)
+            // The same colour as a plain view of the theme's background, through the same capture (display colour space).
+            let (ref, refHost) = offscreen(Color(nsColor: (dark ? inkBg : paperBg).ns), NSSize(width: 40, height: 40))
+            ref.appearance = win.appearance
+            try? await Task.sleep(for: .milliseconds(300))
+            capture(ref, to: "\(dir)/termtheme-ref.png")
+            let want = pixels("\(dir)/termtheme-ref.png", refHost)?(20, 20)
+            ref.orderOut(nil)
+            step("\(dark ? "dark" : "light"): the empty rows are exactly the theme's background (\(hex(px)) = \(hex(want)))", want != nil && same(px, want))
         }
 
         // The start error on the dark theme: a card that stays readable.
