@@ -74,8 +74,9 @@ func checksHerdrPath() async throws {
         ts.start()
         let t = Date()
         while Date().timeIntervalSince(t) < sec, !ended.get() { try? await Task.sleep(nanoseconds: 20_000_000) }
+        let endedByItself = ended.get()   // before stop(): stop ends the stream too
         ts.stop(); reader.cancel()
-        return (box.all, ended.get())
+        return (box.all, endedByItself)
     }
     func failed(_ e: [TerminalEvent]) -> String? { e.lazy.compactMap { if case .failed(let r) = $0 { return r } else { return nil } }.first }
     func retries(_ e: [TerminalEvent]) -> Int { e.filter { if case .reconnecting = $0 { return true } else { return false } }.count }

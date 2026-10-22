@@ -275,6 +275,7 @@ public final class TerminalSession: @unchecked Sendable {
                 done()
             }
             err.fileHandleForReading.readabilityHandler = { h in
+                withExtendedLifetime(err) {}   // the pipe stays open until EOF, after the run too
                 let d = h.availableData
                 if d.isEmpty { h.readabilityHandler = nil; endErr(); return }
                 errEnded.update { ended in if !ended { errReader.feed(d) } }
@@ -282,10 +283,10 @@ public final class TerminalSession: @unchecked Sendable {
             p.terminationHandler = { p in
                 status.set(p.terminationStatus)
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                    // End the run with what came. The handler keeps reading, and drops, until EOF: closing the pipe
+                    // would kill a child that still writes (SIGPIPE), and a queued handler would read a closed handle.
                     guard !errEnded.get() else { return }
-                    err.fileHandleForReading.readabilityHandler = nil
                     endErr()
-                    try? err.fileHandleForReading.close()
                 }
                 done()
             }
