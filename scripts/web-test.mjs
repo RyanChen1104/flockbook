@@ -141,6 +141,10 @@ async function page(context) {
     },
     /** Pixel ratio: the headless shell draws backdrop-filter (the blur) only at 1. */
     async scale(dpr, width = 390, height = 844) { await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: true }, sessionId); },
+    /** The page's colour scheme, as the phone's setting would switch it. */
+    async scheme(dark) {
+      await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
+    },
     async shot(name, dark = false) {
       if (!shots) return;
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: dark ? "dark" : "light" }] }, sessionId);
@@ -657,6 +661,102 @@ async function fakeRun() {
   check(await p.until("!document.querySelector('.queue')") === true, "queue: the bubbles go when the agent's queue is empty");
   await p.shot("queue-pulled");
   await p.shot("queue-pulled", true);
+  // Claude Code's status line (the Mac's switch on): a row of tags over the composer's field (model, effort, context
+  // with its bar, cost marked as an estimate, then the owner's line cut into parts without the repeats), the chevron at
+  // the right; open: every tag, wrapped, in the parts' colours, and when it was updated; no raw line (appendix D).
+  await p.type("#composer-text", "status me");
+  await p.click("#composer-send");
+  const sline = "document.querySelector('form.composer > .statusline')";
+  const rowTags = `[...document.querySelectorAll('form.composer > .statusline > .status-head > .status-tags > .status-tag')]`;
+  const shownTags = `${rowTags}.filter((t) => t.offsetTop === t.parentElement.firstElementChild.offsetTop).map((t) => t.textContent)`;
+  const more = "document.querySelector('form.composer > .statusline > .status-head > .status-more')";
+  check(await p.until(`${shownTags}.slice(0, 4).join('|') === 'Opus 5.5|high|ctx 42%|$3.27 est.' && ${shownTags}.length < ${rowTags}.length`) === true
+    && await p.eval(`${rowTags}.map((t) => t.textContent).join('|')`) === "Opus 5.5|high|ctx 42%|$3.27 est.|⎇ main|turn $0.18|day $11.40/$25|month $212/$300|rate limit 5h: 23%",
+    `status line: Claude Code's tags, then the owner's parts without the repeats; one row (${await p.eval(`JSON.stringify(${shownTags})`)})`);
+  check(await p.eval(`${sline} === document.querySelector('form.composer').firstElementChild
+    && ${sline}.getBoundingClientRect().bottom <= document.querySelector('form.composer > .composer-row').getBoundingClientRect().top
+    && ${sline}.getBoundingClientRect().height < 34 && !document.querySelector('.status-detail') && ${noScroll}`) === true,
+    `status line: one row over the composer's field (${await p.eval(`${sline}?.getBoundingClientRect().height`)} px); the page does not scroll sideways`);
+  check(await p.eval(`+getComputedStyle(${rowTags}[0]).fontWeight >= 600 && ${rowTags}[2].querySelector('.status-fill')?.style.width === '42%'`) === true,
+    "status line: the model in bold; the context's bar at 42%");
+  check(await p.eval(`!!${more} && !${more}.hidden && ${more}.getAttribute('aria-label') === 'Show the whole status line' && ${more}.getAttribute('aria-expanded') === 'false'`) === true,
+    "status line: tags left out: the chevron at the right, with a label");
+  check(await p.eval(`!!${more}.querySelector('.chev.up')`) === true, "status line: closed, the chevron points up (the tags open upwards)");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("statusline");
+  await p.shot("statusline", true);
+  await p.click("form.composer .status-more");
+  const openTags = "[...document.querySelectorAll('.statusline.open > .status-head > .status-tags.all > .status-tag')]";
+  check(await p.until(`${openTags}.length === 9`) === true && await p.eval(`!document.querySelector('.status-lines, .status-row') && ${noScroll}`) === true,
+    "status line: open, every tag wrapped; no raw line; the page does not scroll sideways");
+  const dark = await p.eval("matchMedia('(prefers-color-scheme: dark)').matches");
+  const part = (t) => `${openTags}.find((e) => e.textContent === ${JSON.stringify(t)})`;
+  const red = await p.eval(`getComputedStyle(${part("month $212/$300")}.children[1]).color`), cyan = await p.eval(`getComputedStyle(${part("⎇ main")}.firstElementChild).color`);
+  check(dark ? cyan === "rgb(0, 205, 205)" && red !== "rgb(205, 0, 0)" : red === "rgb(205, 0, 0)" && cyan !== "rgb(0, 205, 205)",
+    `status line: a part's colour where it reads on the tag, else the tag's text colour (${dark ? "dark" : "light"}: red ${red}, cyan ${cyan})`);
+  const dimEl = `${part("rate limit 5h: 23%")}.firstElementChild`;
+  const dimSeen = await p.eval(`[getComputedStyle(${dimEl}).color, getComputedStyle(${dimEl}).opacity].join(' ')`);
+  check(dimSeen === (dark ? "rgb(150, 150, 150) 1" : "rgb(107, 107, 107) 1"), `status line: dim text is a fixed grey that reads on the tag (${dimSeen})`);
+  // The phone switches light or dark with the line kept (not rebuilt): the parts' colours follow.
+  await p.scheme(!dark);
+  await p.until("false", 200);
+  const red2 = await p.eval(`getComputedStyle(${part("month $212/$300")}.children[1]).color`), cyan2 = await p.eval(`getComputedStyle(${part("⎇ main")}.firstElementChild).color`);
+  check(!dark ? cyan2 === "rgb(0, 205, 205)" && red2 !== "rgb(205, 0, 0)" : red2 === "rgb(205, 0, 0)" && cyan2 !== "rgb(0, 205, 205)",
+    `status line: switched to ${dark ? "light" : "dark"}, the parts' colours follow (red ${red2}, cyan ${cyan2})`);
+  await p.scheme(dark);
+  check(await p.eval(`${openTags}.map((t) => t.textContent).join('|')`) === "Opus 5.5|high|ctx 42%|$3.27 est.|⎇ main|turn $0.18|day $11.40/$25|month $212/$300|rate limit 5h: 23%"
+    && /^Updated \d/.test(await p.eval("document.querySelector('.status-detail > .status-time')?.textContent ?? ''")),
+    `status line: open, every tag and when it was updated (${await p.eval("document.querySelector('.status-time')?.textContent")})`);
+  check(await p.eval(`${more}.getAttribute('aria-expanded') === 'true' && ${more}.getAttribute('aria-label') === 'Hide the whole status line'`) === true,
+    "status line: open, the chevron says it hides");
+  check(await p.eval(`!!${more}.querySelector('.chev') && !${more}.querySelector('.chev.up')`) === true, "status line: open, the chevron points down");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("statusline-open");
+  await p.shot("statusline-open", true);
+  // Open is per pane: another Claude pane's line starts closed; back here, this one is still open.
+  await p.eval("location.hash = '#pane=w1%3Ap1'");
+  await p.until("location.hash === '#pane=w1%3Ap1' && !!document.querySelector('#composer-text')");
+  await p.type("#composer-text", "status me");
+  await p.click("#composer-send");
+  check(await p.until("!!document.querySelector('.statusline') && !document.querySelector('.statusline.open')") === true,
+    "status line: open is per pane: another pane's line starts closed");
+  await p.type("#composer-text", "status off");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.statusline')");
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  check(await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('.statusline.open')") === true,
+    "status line: back to the first pane, its line is still open");
+  await p.eval("window.__keptLine = document.querySelector('.statusline')");
+  await p.until("false", 1500);
+  check(await p.eval("window.__keptLine === document.querySelector('.statusline')") === true, "status line: hub news does not rebuild an unchanged line");
+  await p.click("form.composer .status-more");
+  check(await p.until("!document.querySelector('.status-detail')") === true, "status line: a second tap closes it");
+  // A narrow phone: the tags that fit, then the chevron.
+  await p.scale(3, 300, 844);
+  check(await p.until(`${shownTags}.length > 0 && ${shownTags}.length < 4 && !${more}.hidden && ${noScroll}`) === true,
+    `status line: narrow, the tags that fit and the chevron (${await p.eval(`JSON.stringify(${shownTags})`)})`);
+  await p.scale(3);
+  // A nearly full context: the context tag and its bar orange (the orange that reads on the tag, light or dark).
+  await p.type("#composer-text", "status hot");
+  await p.click("#composer-send");
+  check(await p.until(`${rowTags}[2]?.classList.contains('warn') && ${rowTags}[2].textContent === 'ctx 86%'`) === true
+    && await p.eval(`getComputedStyle(${rowTags}[2]).color`) === (await p.eval("matchMedia('(prefers-color-scheme: dark)').matches") ? "rgb(255, 160, 74)" : "rgb(160, 75, 0)"),
+    `status line: context 86%, orange (${await p.eval(`getComputedStyle(${rowTags}[2]).color`)})`);
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("statusline-hot");
+  await p.shot("statusline-hot", true);
+  // Facts, no own line: every tag fits, nothing more to open, no chevron.
+  await p.type("#composer-text", "status tags");
+  await p.click("#composer-send");
+  check(await p.until(`${shownTags}.length === 4 && ${more}?.hidden === true`) === true, "status line: facts only, all fit: no chevron");
+  // No facts (Claude Code's JSON not read): the owner's parts are the tags.
+  await p.type("#composer-text", "status plain");
+  await p.click("#composer-send");
+  check(await p.until(`${rowTags}.map((t) => t.textContent).slice(0, 3).join('|') === 'Opus 5.5|⎇ main|ctx 42%' && !document.querySelector('.status-plain')`) === true,
+    `status line: no facts: the owner's parts as tags (${await p.eval(`JSON.stringify(${rowTags}.map((t) => t.textContent))`)})`);
+  await p.type("#composer-text", "status off");
+  await p.click("#composer-send");
+  check(await p.until("!document.querySelector('.statusline')") === true, "status line: none from the hub: nothing shown");
   await p.type("#composer-text", "queue busy");
   await p.click("#composer-send");
   check(await p.until("document.querySelector('#pull-queued')?.disabled === true") === true, "queue: text in the agent's input box: Pull back is off");

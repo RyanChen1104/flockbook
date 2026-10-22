@@ -111,7 +111,7 @@ extension SnapshotRunner {
         _ = await shoot(SettingsSplit(fixed: .remote, remote: direct), dark: false, to: nil) { _ in seen.formUnion(shown()) }
         var offAgents: Set<SettingsControl> = []
         _ = await shoot(SettingsSplit(fixed: .agents, remote: RemoteHub.preview(running: false, devices: [], offer: false)), dark: false, to: nil) { _ in offAgents = shown() }
-        step("agents with Remote access off: [\(names(offAgents))], no question hook", offAgents == [.allowInput])
+        step("agents with Remote access off: [\(names(offAgents))], no question hook", offAgents == [.allowInput, .statusLine])
         // Sparkle never starts in a check run (UpdaterGate), so the automatic-update switch cannot show here.
         let missing = Set(SettingsControl.allCases).subtracting(seen).subtracting([.autoUpdate])
         step("every control shows in some tab (missing: [\(names(missing))])", missing.isEmpty)

@@ -927,18 +927,23 @@ struct FlowLayout: Layout {
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let r = arrange(bounds.width, subviews)
-        for (i, p) in r.points.enumerated() { subviews[i].place(at: CGPoint(x: bounds.minX + p.x, y: bounds.minY + p.y), proposal: .unspecified) }
+        for (i, p) in r.points.enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX + p.x, y: bounds.minY + p.y), proposal: ProposedViewSize(r.sizes[i]))
+        }
     }
-    private func arrange(_ width: CGFloat, _ subviews: Subviews) -> (size: CGSize, points: [CGPoint]) {
+    /// A subview wider than the width gets the width (it wraps or cuts its text).
+    private func arrange(_ width: CGFloat, _ subviews: Subviews) -> (size: CGSize, points: [CGPoint], sizes: [CGSize]) {
         var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, maxW: CGFloat = 0
-        var pts: [CGPoint] = []
+        var pts: [CGPoint] = [], sizes: [CGSize] = []
         for s in subviews {
-            let sz = s.sizeThatFits(.unspecified)
+            var sz = s.sizeThatFits(.unspecified)
+            if sz.width > width, width.isFinite { sz = s.sizeThatFits(ProposedViewSize(width: width, height: nil)); sz.width = min(sz.width, width) }
+            sizes.append(sz)
             if x + sz.width > width, x > 0 { x = 0; y += rowH + spacing; rowH = 0 }
             pts.append(CGPoint(x: x, y: y))
             x += sz.width + spacing; rowH = max(rowH, sz.height); maxW = max(maxW, x - spacing)
         }
-        return (CGSize(width: maxW, height: y + rowH), pts)
+        return (CGSize(width: maxW, height: y + rowH), pts, sizes)
     }
 }
 

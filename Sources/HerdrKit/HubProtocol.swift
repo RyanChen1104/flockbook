@@ -8,7 +8,7 @@ public enum Hub {
     /// Every client message type. Intent only: there is no type for keys or terminal bytes (`attach` carries image
     /// data, which the hub re-encodes into a file of its own; it never reaches the terminal).
     public static let clientTypes = ["pair", "hello", "watch", "unwatch", "loadEarlier", "send", "attach", "approve", "answer", "ping", "pushSubscribe", "pushUnsubscribe", "pullQueued", "pulledAck", "picture"]
-    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled", "picturePart"]
+    public static let hubTypes = ["paired", "welcome", "reply", "snapshot", "status", "conversation", "screen", "prompt", "attached", "pong", "queued", "pulled", "picturePart", "statusLine"]
     /// Finished uploads a `send` may name.
     public static let maxAttachments = 4
 
@@ -333,6 +333,34 @@ public struct HubQueued: Codable, Hashable, Sendable {
     }
 }
 
+/// Claude Code's status line of a watched pane (opt-in, `StatusLineFolder`): the owner's own status line as styled
+/// lines, and Claude Code's facts for the row's tags (cost: its own estimate). No lines and no facts: none to show now.
+public struct HubStatusLine: Codable, Hashable, Sendable {
+    public var pane: String
+    /// The owner's status line as parts, one tag each, without the ones that repeat the facts (appendix D).
+    public var segments: [[StyledRun]]
+    public var model: String?
+    public var costUSD: Double?
+    public var contextPercent: Int?
+    public var contextSize: Int?
+    public var effort: String?
+    /// When Claude Code last ran the line, seconds since 1970.
+    public var time: Double?
+    public init(pane: String, segments: [[StyledRun]], model: String? = nil, costUSD: Double? = nil, contextPercent: Int? = nil, contextSize: Int? = nil,
+                effort: String? = nil, time: Double? = nil) {
+        self.pane = pane; self.segments = segments; self.model = model; self.costUSD = costUSD; self.contextPercent = contextPercent; self.contextSize = contextSize
+        self.effort = effort; self.time = time
+    }
+    /// Nothing to show: no own line and no facts.
+    public var isEmpty: Bool { segments.isEmpty && model == nil && effort == nil && costUSD == nil && contextPercent == nil }
+    public init(pane: String, record: StatusLineRecord?) {
+        guard let record, !record.isEmpty else { self.init(pane: pane, segments: []); return }
+        let i = record.info
+        self.init(pane: pane, segments: record.parts, model: i?.model, costUSD: i?.costUSD, contextPercent: i?.contextPercent, contextSize: i?.contextSize,
+                  effort: i?.effort, time: record.time.timeIntervalSince1970.rounded())
+    }
+}
+
 /// The queue's text, out of the agent and into the composer. `interrupted`: the agent's turn stopped meanwhile.
 /// `id`: the hub keeps the text until `pulledAck` with it (sent again after each hello); nil: not kept, no ack.
 /// `note`: the pull stopped early and some of the text may still be in the agent's input box (why).
@@ -391,6 +419,8 @@ public enum HubMessage: Codable, Hashable, Sendable {
     case pulled(HubPulled)
     /// One part of a picture the device asked for.
     case picturePart(HubPicturePart)
+    /// Claude Code's status line in a watched pane. Empty lines: none now.
+    case statusLine(HubStatusLine)
 
     public var type: String {
         switch self {
@@ -407,6 +437,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .queued: "queued"
         case .pulled: "pulled"
         case .picturePart: "picturePart"
+        case .statusLine: "statusLine"
         }
     }
 
@@ -428,6 +459,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case "queued": self = .queued(try HubQueued(from: decoder))
         case "pulled": self = .pulled(try HubPulled(from: decoder))
         case "picturePart": self = .picturePart(try HubPicturePart(from: decoder))
+        case "statusLine": self = .statusLine(try HubStatusLine(from: decoder))
         case let t: throw Hub.DecodeError.unknownType(t)
         }
     }
@@ -443,6 +475,7 @@ public enum HubMessage: Codable, Hashable, Sendable {
         case .queued(let q): try q.encode(to: encoder)
         case .pulled(let p): try p.encode(to: encoder)
         case .picturePart(let p): try p.encode(to: encoder)
+        case .statusLine(let l): try l.encode(to: encoder)
         case .snapshot, .status, .screen, .pong: break
         }
         var c = encoder.container(keyedBy: K.self)

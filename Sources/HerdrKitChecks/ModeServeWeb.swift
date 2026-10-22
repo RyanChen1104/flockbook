@@ -156,6 +156,17 @@ import ImageIO
                 let lines = String(decoding: fixture("queued.jsonl"), as: UTF8.self).split(separator: "\n").map(String.init)
                 b.items[sid, default: []] += SessionLog.parse(lines: lines)
             }
+            // "status me": Claude Code's status line for this session (as the wrapper saves it); "status hot": the
+            // context nearly full; "status tags": the facts, no own line; "status plain": no facts; "status off": none.
+            if text.hasPrefix("status "), text != "status off" {
+                let e = "\u{1B}"
+                let line = "\(e)[38;5;141mOpus 5.5\(e)[0m \(e)[2m·\(e)[0m \(e)[36m⎇ main\(e)[0m \(e)[2m·\(e)[0m ctx \(e)[33m42%\(e)[0m \(e)[2m·\(e)[0m turn \(e)[32m$0.18\(e)[0m "
+                    + "\(e)[2m·\(e)[0m session \(e)[32m$3.27\(e)[0m \(e)[2m·\(e)[0m day \(e)[1m$11.40\(e)[0m/$25 \(e)[2m·\(e)[0m month \(e)[1;31m$212\(e)[0m/$300\n\(e)[2mrate limit 5h: 23%\(e)[0m"
+                let used = text == "status hot" ? 86.2 : 41.6
+                let info = ClaudeStatusInfo(json: Data(#"{"session_id":"s-web","model":{"display_name":"Opus 5.5"},"effort":{"level":"high"},"cost":{"total_cost_usd":3.274},"context_window":{"context_window_size":1000000,"used_percentage":\#(used)}}"#.utf8))
+                b.statusLines[sid] = StatusLineRecord(lines: text == "status tags" ? [] : ANSIText.lines(line), info: text == "status plain" ? nil : info, time: Date())
+            }
+            if text == "status off" { b.statusLines[sid] = nil }
             // "long history": 350 older rows in front of this session (more than the hub sends at once).
             if text == "long history" {
                 b.items[sid] = (0..<350).map { i in

@@ -340,6 +340,8 @@ final class AppModel {
     var composerResets: [String: Int] = [:]
     /// The agents' own queues by pane id (`checkQueue`), and the pulls in flight.
     var queued: [String: QueuedInput] = [:]
+    /// Claude Code's status line per pane (`StatusLineSetup`), while "Show Claude Code status line" is on.
+    var statusLines: [String: StatusLineRecord] = [:]
     /// Panes with a pull running, from the Mac or a phone: one at a time per pane, and no send meanwhile.
     var pulling: Set<String> = []
     /// Panes with a pull or a send running (Mac or phone): one at a time per pane, for the whole of it, so a send never
@@ -385,6 +387,7 @@ final class AppModel {
         for (k, d) in drafts where !panes.contains(k) { d.images.forEach(PasteImages.remove) }
         drafts = drafts.filter { panes.contains($0.key) }
         queued = queued.filter { panes.contains($0.key) }
+        statusLines = statusLines.filter { panes.contains($0.key) }
         rightClickToPane = rightClickToPane.filter { panes.contains($0) }
         let live = Set(tabs.map(\.id))
         focusedPane = focusedPane.filter { live.contains($0.key) }

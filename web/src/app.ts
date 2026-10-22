@@ -1,6 +1,6 @@
 // Flockbook PWA: pair, agent list (Needs you first), conversation, approval and question cards, composer (input only).
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
-import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, Tab, Workspace } from "./protocol.ts";
+import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, StatusLine, StyledRun, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
 
 const TOKEN_KEY = "flockbook.token", SIDE_KEY = "flockbook.side";
@@ -38,7 +38,7 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, 
 interface Attachment { name: string; file: File; preview: string; uploaded: boolean }
 const MAX_IMAGES = 4, MAX_IMAGE_BYTES = 10 * 1024 * 1024, PART_BYTES = 640 * 1024;
 /** `waiting`: older rows that came in and go in front of `items` a few per frame (oldest first). */
-interface PaneView { session?: string; items: Item[]; waiting?: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue }
+interface PaneView { session?: string; items: Item[]; waiting?: Item[]; hasEarlier: boolean; screen?: string; approval?: Approval; question?: QuestionRequest; queue?: Queue; statusLine?: StatusLine }
 const state = {
   token: load(TOKEN_KEY),
   pairSecret: null as string | null,
@@ -73,6 +73,8 @@ const state = {
   revs: {} as Record<string, number>,
   /** Ids of pulled texts already in a composer: one the hub sends again (no ack reached it) is not added twice. */
   placed: new Set<string>(),
+  /** Panes whose Claude Code status line is open: every tag and when it was updated. */
+  statusOpen: new Set<string>(),
   /** On a wide screen, the reader hid the agents beside the conversation (kept on this device). */
   sideHidden: load(SIDE_KEY) === "hidden",
 };
@@ -223,6 +225,9 @@ function receive(m: HubMessage): void {
     }
     case "screen":
       view(m.pane).screen = m.text;
+      break;
+    case "statusLine":
+      view(m.pane).statusLine = statusTags(m).length ? m : undefined;
       break;
     case "queued":
       view(m.pane).queue = m.items.length ? { agent: m.agent, items: m.items, pullable: m.pullable, pullsAll: m.pullsAll } : undefined;
@@ -953,6 +958,9 @@ function keepScreen(nodes: (Node | string)[]): { composer: boolean } | null {
   else fillItems([newSection]);
   const form = keepComposer(oldSection, newSection);
   if (form) swap.set(form.fresh, form.old);
+  // A read-only device's status line at the foot stays while it is the same (its sideways scroll too).
+  const oldFoot = oldSection.querySelector<HTMLElement>(":scope > .status-foot"), newFoot = newSection.querySelector<HTMLElement>(":scope > .status-foot");
+  if (oldFoot && newFoot && oldFoot.querySelector<HTMLElement>(".statusline")?.dataset.key === newFoot.querySelector<HTMLElement>(".statusline")?.dataset.key) swap.set(newFoot, oldFoot);
   syncChildren(oldSection, [...newSection.childNodes].map((n) => swap.get(n) ?? n));
   syncChildren(app, nodes.map((n) => (typeof n === "string" ? n : swap.get(n) ?? n)));
   return { composer: !!form };
@@ -971,7 +979,10 @@ function keepComposer(oldSection: HTMLElement, newSection: HTMLElement): { old: 
   if (!oldRow || !newRow || !oldBox || !newBox) return null;
   // Everything around a kept element is replaced; the kept element itself never leaves the page.
   syncChildren(oldRow, [...newRow.childNodes].map((n) => (n === newBox ? oldBox : n)));
-  syncChildren(oldForm, [...newForm.childNodes].map((n) => (n === newRow ? oldRow : n)));
+  // The status line stays while it is the same (its sideways scroll too).
+  const oldLine = oldForm.querySelector<HTMLElement>(":scope > .statusline"), newLine = newForm.querySelector<HTMLElement>(":scope > .statusline");
+  const sameLine = oldLine && newLine && oldLine.dataset.key === newLine.dataset.key;
+  syncChildren(oldForm, [...newForm.childNodes].map((n) => (n === newRow ? oldRow : sameLine && n === newLine ? oldLine : n)));
   for (const a of ["placeholder", "aria-label"]) oldBox.setAttribute(a, newBox.getAttribute(a) ?? "");
   (oldBox as HTMLTextAreaElement).disabled = (newBox as HTMLTextAreaElement).disabled;
   return { old: oldForm, fresh: newForm };
@@ -1094,7 +1105,95 @@ function conversationScreen(pane: string): HTMLElement {
   // new list here would take them out of the page.
   const list = h("div", { class: "items" });
   itemsOf.set(list, items);
-  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, composer(pane, !!card, where?.p.agent?.name));
+  const form = composer(pane, !!card, where?.p.agent?.name);
+  // Claude Code's status line: in the composer, over the text field; a read-only device has it at the foot alone.
+  const line = statusLineView(pane);
+  if (form && line) form.prepend(line);
+  return h("section", { class: "conversation", "data-pane": pane }, head, pill, list, card, form, form ? null : line && h("div", { class: "status-foot glass-float" }, line));
+}
+
+/** Claude Code's status line (appendices C and D): a row of tags over the composer's field (the model in bold, effort,
+ *  context with its bar, orange from 80%, the cost marked as an estimate, then the owner's line cut into parts in their
+ *  colours), only the ones that fit in one row, and a chevron at the right when one is left out. Open: every tag,
+ *  wrapped, and when it was updated. Nothing when the hub sends none (the Mac's switch is off, or no line yet). */
+function statusLineView(pane: string): HTMLElement | null {
+  const s = view(pane).statusLine;
+  const tags = s ? statusTags(s) : [];
+  if (!s || !tags.length) return null;
+  const open = state.statusOpen.has(pane);
+  const more = h("button", { class: "status-more", type: "button", "aria-expanded": open ? "true" : "false",
+    "aria-label": open ? "Hide the whole status line" : "Show the whole status line", onclick: () => { if (open) state.statusOpen.delete(pane); else state.statusOpen.add(pane); render(); } },
+    h("span", { class: `chev${open ? "" : " up"}`, "aria-hidden": "true" }));
+  // Open, the row wraps and holds every tag.
+  const row = h("div", { class: `status-tags${open ? " all" : ""}` }, ...tags);
+  const head = h("div", { class: "status-head" }, row, more);
+  // The chevron shows when a tag is left out of the row (wrapped onto the hidden second line).
+  if (!open) {
+    const fit = (): void => {
+      // Measured without the chevron: with it, its own room could push the last tag out.
+      more.hidden = true;
+      const first = row.firstElementChild as HTMLElement | null;
+      more.hidden = ![...row.children].some((t) => (t as HTMLElement).offsetTop !== first?.offsetTop);
+    };
+    new ResizeObserver(fit).observe(row);
+  }
+  const time = s.time ? new Date(s.time * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  const body = open && time ? h("div", { class: "status-detail" }, h("div", { class: "status-time" }, `Updated ${time}`)) : null;
+  return h("div", { class: `statusline${open ? " open" : ""}`, "data-key": JSON.stringify([s, open]) }, head, body);
+}
+
+/** One tag per fact Claude Code's JSON gives (none for a fact it did not send), then one per part of the owner's line. */
+function statusTags(s: StatusLine): HTMLElement[] {
+  const tag = (kind: string, text: string, spoken: string, ...extra: (HTMLElement | string)[]): HTMLElement =>
+    h("span", { class: `status-tag tag-${kind}`, role: "text", "aria-label": spoken }, text, ...extra);
+  const out: HTMLElement[] = [];
+  if (s.model) out.push(tag("model", s.model, `Model ${s.model}`));
+  if (s.effort) out.push(tag("effort", s.effort, `Effort ${s.effort}`));
+  if (s.contextPercent !== undefined) {
+    const p = s.contextPercent;
+    const fill = h("span", { class: "status-fill" });
+    fill.style.width = `${Math.min(Math.max(p, 0), 100)}%`;
+    const t = tag("context", `ctx ${p}%`, `Context ${p}% used`, h("span", { class: "status-bar", "aria-hidden": "true" }, fill));
+    if (p >= 80) t.classList.add("warn");
+    out.push(t);
+  }
+  if (s.costUSD !== undefined) {
+    const d = `$${s.costUSD.toFixed(2)}`;
+    out.push(tag("cost", `${d} est.`, `Session cost about ${d}, an estimate`));
+  }
+  for (const part of s.segments ?? []) {
+    const text = part.map((r) => r.text).join("");
+    out.push(h("span", { class: "status-tag tag-own", role: "text", "aria-label": text }, ...part.map(runView)));
+  }
+  return out;
+}
+
+/** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that
+ *  does not read on the tag (under 4.5:1, StatusTag.readable) is left to the tag's own; dim text is a fixed grey. Light and dark are decided
+ *  apart (--fg-light, --fg-dark; the stylesheet picks one), so a kept line follows the phone's switch. */
+function runView(r: StyledRun): HTMLElement {
+  const el = h("span", {}, r.text);
+  const lum = (hex: string): number => {
+    const v = parseInt(hex.slice(1), 16);
+    const lin = (c: number): number => { const x = (c & 255) / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * lin(v >> 16) + 0.7152 * lin(v >> 8) + 0.0722 * lin(v);
+  };
+  const reads = (hex: string, dark: boolean): boolean => {
+    const [a, b] = [lum(hex), lum(dark ? "#2e2e2e" : "#f0f0f0")];
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5;
+  };
+  // Dim text: a fixed grey that reads on the tag (StatusTag.dimHex), coloured or not.
+  if (r.dim) {
+    el.style.setProperty("--fg-light", "#6b6b6b");
+    el.style.setProperty("--fg-dark", "#969696");
+  } else if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg)) {
+    if (reads(r.fg, false)) el.style.setProperty("--fg-light", r.fg);
+    if (reads(r.fg, true)) el.style.setProperty("--fg-dark", r.fg);
+  }
+  if (r.bold) el.style.fontWeight = "700";
+  if (r.italic) el.style.fontStyle = "italic";
+  if (r.underline) el.style.textDecoration = "underline";
+  return el;
 }
 
 /** A window with a column on its left (the sidebar symbol). */

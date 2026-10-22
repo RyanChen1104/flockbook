@@ -49,7 +49,15 @@ export type HubMessage =
   /** One part of a picture for the `picture` message `re`; all parts come before its reply. */
   | { type: "picturePart"; re: string; pane: string; item: string; index: number; full: boolean; part: number; parts: number;
       mime: string; width: number; height: number; data: string }
+  /** Claude Code's status line of a watched pane: Claude Code's facts (its cost is an estimate) and the owner's own line
+   *  cut into parts, one tag each (appendix D). No parts and no facts: none to show now. */
+  | ({ type: "statusLine" } & StatusLine)
   | { type: "pong" };
+
+/** A piece of a status line in one style; colours are `#rrggbb`. */
+export interface StyledRun { text: string; fg?: string; bg?: string; bold?: boolean; dim?: boolean; italic?: boolean; underline?: boolean }
+/** `time`: when Claude Code last ran the line, seconds since 1970. */
+export interface StatusLine { pane: string; segments: StyledRun[][]; model?: string; effort?: string; costUSD?: number; contextPercent?: number; contextSize?: number; time?: number }
 
 /** The agent's own queue: messages typed while it works, not taken yet. A null item: its text is not readable yet. */
 export interface Queue { agent: string; items: (string | null)[]; pullable: boolean; pullsAll: boolean }

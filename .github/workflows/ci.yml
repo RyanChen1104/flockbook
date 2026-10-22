@@ -113,16 +113,17 @@ jobs:
           key: spm15-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
 
       # The headless checks and the agents' command come first: they also run when the app does not build.
-      - name: Build HerdrKitChecks and flockbook-notify
+      - name: Build HerdrKitChecks, flockbook-notify and flockbook-statusline
         id: kit
         run: |
           swift build --product HerdrKitChecks
           swift build --product flockbook-notify
+          swift build --product flockbook-statusline
           BIN="$(swift build --show-bin-path)"
-          scripts/check-min-os.sh 15.0 "$BIN/HerdrKitChecks" "$BIN/flockbook-notify"
-          otool -L "$BIN/HerdrKitChecks" "$BIN/flockbook-notify"
+          scripts/check-min-os.sh 15.0 "$BIN/HerdrKitChecks" "$BIN/flockbook-notify" "$BIN/flockbook-statusline"
+          otool -L "$BIN/HerdrKitChecks" "$BIN/flockbook-notify" "$BIN/flockbook-statusline"
           # Archive with the build's own path: upload-artifact drops the executable bit.
-          tar -czf kit-macos15.tgz -C / "${BIN#/}/HerdrKitChecks" "${BIN#/}/flockbook-notify"
+          tar -czf kit-macos15.tgz -C / "${BIN#/}/HerdrKitChecks" "${BIN#/}/flockbook-notify" "${BIN#/}/flockbook-statusline"
           echo "bin=$BIN" >> "$GITHUB_OUTPUT"
           echo "ok=1" >> "$GITHUB_OUTPUT"
 
@@ -137,7 +138,7 @@ jobs:
         id: app
         run: |
           scripts/bundle.sh
-          scripts/check-min-os.sh 15.0 build/Flockbook.app build/Flockbook.app/Contents/MacOS/flockbook-notify
+          scripts/check-min-os.sh 15.0 build/Flockbook.app build/Flockbook.app/Contents/MacOS/flockbook-notify build/Flockbook.app/Contents/MacOS/flockbook-statusline
           otool -L build/Flockbook.app/Contents/MacOS/HerdrDesk
           tar -czf app-macos15.tgz build/Flockbook.app
           echo "ok=1" >> "$GITHUB_OUTPUT"
@@ -174,6 +175,7 @@ jobs:
           "$BIN/HerdrKitChecks"
           # The agents' command loads and runs on 15: --help prints its usage and exits 0.
           "$BIN/flockbook-notify" --help
+          "$BIN/flockbook-statusline" --help
 
       - uses: actions/download-artifact@v4
         if: ${{ !cancelled() && needs.build-macos15.outputs.app == '1' }}

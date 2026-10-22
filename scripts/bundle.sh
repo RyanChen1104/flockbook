@@ -20,16 +20,19 @@ mkdir -p build
 if [ -z "${ARCHS:-}" ]; then
   swift build -c release --product HerdrDesk ${SP[@]+"${SP[@]}"}
   swift build -c release --product flockbook-notify ${SP[@]+"${SP[@]}"}
+  swift build -c release --product flockbook-statusline ${SP[@]+"${SP[@]}"}
   BIN="$(swift build -c release --show-bin-path ${SP[@]+"${SP[@]}"})"
   EXE="$BIN/HerdrDesk"
   NOTIFY="$BIN/flockbook-notify"
+  STATUSLINE="$BIN/flockbook-statusline"
 else
-  EXES=(); NOTIFYS=()
+  EXES=(); NOTIFYS=(); STATUSLINES=()
   for a in $ARCHS; do
     swift build -c release --product HerdrDesk --arch "$a" ${SP[@]+"${SP[@]}"}
     swift build -c release --product flockbook-notify --arch "$a" ${SP[@]+"${SP[@]}"}
+    swift build -c release --product flockbook-statusline --arch "$a" ${SP[@]+"${SP[@]}"}
     BIN="$(swift build -c release --arch "$a" --show-bin-path ${SP[@]+"${SP[@]}"})"
-    EXES+=("$BIN/HerdrDesk"); NOTIFYS+=("$BIN/flockbook-notify")
+    EXES+=("$BIN/HerdrDesk"); NOTIFYS+=("$BIN/flockbook-notify"); STATUSLINES+=("$BIN/flockbook-statusline")
   done
   EXE="build/HerdrDesk-universal"
   lipo -create "${EXES[@]}" -output "$EXE"
@@ -37,6 +40,9 @@ else
   NOTIFY="build/flockbook-notify-universal"
   lipo -create "${NOTIFYS[@]}" -output "$NOTIFY"
   lipo -info "$NOTIFY"
+  STATUSLINE="build/flockbook-statusline-universal"
+  lipo -create "${STATUSLINES[@]}" -output "$STATUSLINE"
+  lipo -info "$STATUSLINE"
 fi
 
 APP="${APP:-build/Flockbook.app}"
@@ -46,6 +52,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Framewor
 cp "$EXE" "$APP/Contents/MacOS/HerdrDesk"
 # The agents' command (Settings > Remote access shows its path; nothing changes the owner's PATH).
 cp "$NOTIFY" "$APP/Contents/MacOS/flockbook-notify"
+# Claude Code's statusLine wrapper (Settings > Agents puts its path in ~/.claude/settings.json only when switched on).
+cp "$STATUSLINE" "$APP/Contents/MacOS/flockbook-statusline"
 # Sparkle.framework (universal), found through the rpath @executable_path/../Frameworks (Package.swift).
 ditto "$BIN/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
@@ -135,8 +143,10 @@ codesign --force "${SIGN[@]}" "$FW/Autoupdate"
 codesign --force "${SIGN[@]}" "$FW/Updater.app"
 codesign --force "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
 codesign --force "${SIGN[@]}" --identifier "$BUNDLE_ID.notify" "$APP/Contents/MacOS/flockbook-notify"
+codesign --force "${SIGN[@]}" --identifier "$BUNDLE_ID.statusline" "$APP/Contents/MacOS/flockbook-statusline"
 codesign --force "${SIGN[@]}" "$APP"
 echo "signed: ${SIGN_ID:-ad-hoc}${SIGN_ID:+ (hardened runtime)}"
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$APP/Contents/MacOS/flockbook-notify"
+codesign --verify --strict "$APP/Contents/MacOS/flockbook-statusline"
 echo "built: $APP"
