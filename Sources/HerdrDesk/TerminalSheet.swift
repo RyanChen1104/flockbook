@@ -446,6 +446,8 @@ final class PasteTerminalView: TerminalView {
     nonisolated(unsafe) var rightMonitor: Any?
     /// Right clicks go to the program (xterm report through the control session) instead of the pane menu.
     var rightClickToPane = false
+    /// Checks: right clicks the monitor took for the program.
+    static var rightClicksTaken = 0
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
@@ -458,6 +460,7 @@ final class PasteTerminalView: TerminalView {
             let col = min(t.cols, max(1, Int(p.x / (self.bounds.width / CGFloat(t.cols))) + 1))
             let yTop = self.isFlipped ? p.y : self.bounds.height - p.y
             let row = min(t.rows, max(1, Int(yTop / (self.bounds.height / CGFloat(t.rows))) + 1))
+            Self.rightClicksTaken += 1
             _ = self.coordinator?.session?.rightClick(col: col, row: row)
             return nil
         }

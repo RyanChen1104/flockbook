@@ -399,17 +399,22 @@ extension ChromeTests {
         for _ in 0..<4 { win.selectNextKeyView(nil) }
         try? await Task.sleep(for: .milliseconds(300))
         step("Tab does not reach the hidden screen (\(name(win.firstResponder)))", !typing(win.firstResponder))
-        // The page's own controls keep the keys (Full Keyboard Access walks them with Tab).
-        let height = win.contentView?.bounds.height ?? 0
-        let control = views(root, NSControl.self).first { v in
-            let f = v.convert(v.bounds, to: nil)
-            return v.acceptsFirstResponder && SettingsProbe.content.contains(CGPoint(x: f.midX, y: height - f.midY))
+        // The page's own controls keep the keys (Full Keyboard Access walks them with Tab). `under`: the views of the
+        // screen under the page, which are not its controls.
+        func pageKeeps(_ how: String, under: [NSView] = []) async {
+            let height = win.contentView?.bounds.height ?? 0
+            let control = views(root, NSControl.self).first { v in
+                let f = v.convert(v.bounds, to: nil)
+                return v.acceptsFirstResponder && !under.contains { v === $0 || v.isDescendant(of: $0) }
+                    && SettingsProbe.content.contains(CGPoint(x: f.midX, y: height - f.midY))
+            }
+            if let control { win.makeFirstResponder(control) }
+            try? await Task.sleep(for: .milliseconds(300))
+            step("\(how)a control of the page keeps the keys (\(control.map { "\(type(of: $0))" } ?? "no control"): \(name(win.firstResponder)))",
+                 control != nil && win.firstResponder === control)
+            win.makeFirstResponder(nil)
         }
-        if let control { win.makeFirstResponder(control) }
-        try? await Task.sleep(for: .milliseconds(300))
-        step("a control of the page keeps the keys (\(control.map { "\(type(of: $0))" } ?? "no control"): \(name(win.firstResponder)))",
-             control != nil && win.firstResponder === control)
-        win.makeFirstResponder(nil)
+        await pageKeeps("")
         // The mouse too: the hidden terminal's own wheel monitor (it does not go through hit-testing) lets the wheel pass.
         if let terminal = terminal as? PasteTerminalView {
             var wheels = 0
@@ -423,15 +428,33 @@ extension ChromeTests {
             try? await Task.sleep(for: .milliseconds(300))
             terminal.onWheel = saved
             step("a wheel over the hidden terminal does not reach it (\(wheels) wheels)", wheels == 0)
+            // Nothing goes out of it, whatever reaches it (SwiftTerm's own mouse-moved reports, say). No session here:
+            // were the gate open, the bytes would only be counted.
+            if let c = terminal.coordinator, let h = c.handle {
+                let session = c.session, writable = c.writable, sent = h.sentBytes
+                c.session = nil; c.writable = true
+                c.send(source: terminal, data: ArraySlice(Array("x".utf8)))
+                try? await Task.sleep(for: .milliseconds(300))
+                step("the hidden terminal sends nothing (\(h.sentBytes - sent) bytes)", h.sentBytes == sent)
+                c.session = session; c.writable = writable
+            } else { step("the hidden terminal sends nothing: no coordinator or handle", false) }
         } else { step("a wheel over the hidden terminal: no terminal", false) }
         // A terminal sheet asked for under Settings (a late approval result) does not open over the page.
         model.showTerminal = true; try? await Task.sleep(for: .milliseconds(800))
         step("no terminal sheet over Settings (\(win.attachedSheet.map { "\(type(of: $0))" } ?? "none"))", win.attachedSheet == nil)
         model.showTerminal = false; try? await Task.sleep(for: .milliseconds(800))
         if let sheet = win.attachedSheet { win.endSheet(sheet); try? await Task.sleep(for: .milliseconds(400)) }
+        // The close-pane question neither.
+        model.closingPane = model.tab?.panes.first; try? await Task.sleep(for: .milliseconds(800))
+        step("no close-pane dialog over Settings (\(win.attachedSheet.map { "\(type(of: $0))" } ?? "none"))", win.attachedSheet == nil)
+        model.closingPane = nil; try? await Task.sleep(for: .milliseconds(800))
+        if let sheet = win.attachedSheet { win.endSheet(sheet); try? await Task.sleep(for: .milliseconds(400)) }
         // Only the hidden screen loses the keys: a field over Settings (the ⌘/ panel's search) keeps them.
         ShortcutsPanel.open(); try? await Task.sleep(for: .seconds(1))
         let search = views(root, NSSearchField.self).first
+        // The field focuses itself a turn after it is made, which may come before it is in the window: focused here.
+        if let search { win.makeFirstResponder(search) }
+        try? await Task.sleep(for: .milliseconds(300))
         let editor = win.firstResponder as? NSTextView
         step("⌘/ over Settings: its search field has the keys (\(search == nil ? "no field" : name(win.firstResponder)))",
              search != nil && editor != nil && search?.currentEditor() === editor)
@@ -461,8 +484,14 @@ extension ChromeTests {
         model.screen = .search; try? await Task.sleep(for: .milliseconds(800))
         // The tables of the Search screen: those still in the window once Settings shows (the sidebar's list is replaced).
         let onSearch = views(root, NSTableView.self)
-        model.showSettings(); try? await Task.sleep(for: .milliseconds(800))
+        // A query in the focused search field: Back gives the field its focus again.
         let searchField = views(win.contentView?.superview ?? root, NSSearchField.self).first
+        model.searchText = "a"; try? await Task.sleep(for: .milliseconds(400))
+        if let searchField { win.makeFirstResponder(searchField) }
+        try? await Task.sleep(for: .milliseconds(400))
+        step("Search: its field has the keys (\(name(win.firstResponder)))", searchField?.currentEditor() != nil && searchField?.currentEditor() === win.firstResponder)
+        model.showSettings(); try? await Task.sleep(for: .milliseconds(800))
+        await pageKeeps("from Search: ", under: onSearch)
         let lists = onSearch.filter { $0.window === win }
         var taken: [String] = []
         if let searchField {
@@ -478,8 +507,51 @@ extension ChromeTests {
         try? await Task.sleep(for: .milliseconds(300))
         step("from Search under Settings: no search field or list takes the keys (search field \(searchField == nil ? "gone" : "there"), \(lists.count) lists; taken \(taken))", !lists.isEmpty && taken.isEmpty)
         model.closeSettings(); try? await Task.sleep(for: .milliseconds(600))
-        step("from Search, Back returns to Search (\(model.screen))", model.screen == .search)
+        step("from Search, Back returns to Search, the search field focused again (\(model.screen), \(name(win.firstResponder)))",
+             model.screen == .search && searchField?.currentEditor() != nil && searchField?.currentEditor() === win.firstResponder)
+        model.searchText = ""
         model.screen = .tab; try? await Task.sleep(for: .milliseconds(400))
+
+        // The live terminal's right-click monitor (right clicks to the program): under the page it lets the click through,
+        // with the page gone it takes it. A view of its own in a window of its own (no session: nothing goes out), so the
+        // click let through lands there.
+        for covered in [true, false] {
+            let tv = PasteTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+            tv.rightClickToPane = true
+            SettingsFocus.cover(tv, covered)
+            let tw = OffscreenWindow(contentRect: tv.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            tw.contentView = tv; tw.setFrameOrigin(NSPoint(x: -3000, y: -2000)); tw.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(400))
+            let taken = PasteTerminalView.rightClicksTaken
+            let mid = tw.convertPoint(toScreen: NSPoint(x: 200, y: 100))
+            if let cg = CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown, mouseCursorPosition: CGPoint(x: mid.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mid.y), mouseButton: .right),
+               let e = NSEvent(cgEvent: cg) { NSApp.sendEvent(e) }
+            try? await Task.sleep(for: .milliseconds(300))
+            step("live terminal \(covered ? "under the page" : "uncovered"): a right click \(covered ? "passes" : "is taken") (\(PasteTerminalView.rightClicksTaken - taken) taken)",
+                 PasteTerminalView.rightClicksTaken - taken == (covered ? 0 : 1))
+            SettingsFocus.cover(tv, false); tw.orderOut(nil); tw.contentView = nil
+        }
+        // The history view's wheel monitor: under the page a wheel down at its foot does not leave it; with the page gone
+        // it does.
+        for covered in [true, false] {
+            var exits = 0
+            let hv = NSHostingView(rootView: HistoryTerminalNSView(text: "one\r\ntwo", writable: false, scheme: .light, onExit: { _ in exits += 1 })
+                .environment(\.underSettings, covered).frame(width: 400, height: 200))
+            hv.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+            let hw = OffscreenWindow(contentRect: hv.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            hw.contentView = hv; hw.setFrameOrigin(NSPoint(x: -3000, y: -2000)); hw.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(600))
+            if let h = views(hv, HistoryTerminalView.self).first {
+                let mid = hw.convertPoint(toScreen: h.convert(NSPoint(x: h.bounds.midX, y: h.bounds.midY), to: nil))
+                if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0) {
+                    cg.location = CGPoint(x: mid.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mid.y)
+                    if let e = NSEvent(cgEvent: cg) { NSApp.sendEvent(e) }
+                }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            step("history view \(covered ? "under the page" : "uncovered"): a wheel down at its foot \(covered ? "stays" : "leaves") (\(exits) exits)", exits == (covered ? 0 : 1))
+            hw.orderOut(nil); hw.contentView = nil
+        }
 
         // The sidebar hidden: the page brings its own list, Back on top.
         model.sidebarVisibility = .detailOnly; try? await Task.sleep(for: .milliseconds(800))
