@@ -117,14 +117,15 @@ struct StatusTagView: View {
         .onAppear { if tag.warn { StatusLineProbe.warn = true } }
     }
 
-    /// An owner's part in its colours where they read on the tag (`StatusTag.readable`); else the tag's text colour.
+    /// An owner's part in its colours where they read on the tag, dim text in a fixed grey (`StatusTag.runHex`); else
+    /// the tag's text colour.
     static func parts(_ runs: [StyledRun], dark: Bool) -> AttributedString {
         var out = AttributedString()
         for r in runs {
             var a = AttributedString(r.text)
-            if let hex = r.fg, StatusTag.readable(hex, dark: dark), let c = StatusLineBar.rgb(hex) {
-                a.foregroundColor = Color(red: c.r, green: c.g, blue: c.b).opacity(r.dim ? 0.6 : 1)
-            } else if r.dim { a.foregroundColor = Color(nsColor: .tertiaryLabelColor) }
+            if let hex = StatusTag.runHex(r, dark: dark), let c = StatusLineBar.rgb(hex) {
+                a.foregroundColor = Color(red: c.r, green: c.g, blue: c.b)
+            }
             var intent: InlinePresentationIntent = []
             if r.bold { intent.insert(.stronglyEmphasized) }
             if r.italic { intent.insert(.emphasized) }

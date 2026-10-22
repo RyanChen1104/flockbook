@@ -1108,7 +1108,7 @@ function statusTags(s: StatusLine): HTMLElement[] {
 }
 
 /** One run in its colours (set through the style object: the page's policy allows no style attributes). A colour that
- *  does not read on the tag (under 4.5:1, StatusTag.readable) is left to the tag's own. Light and dark are decided
+ *  does not read on the tag (under 4.5:1, StatusTag.readable) is left to the tag's own; dim text is a fixed grey. Light and dark are decided
  *  apart (--fg-light, --fg-dark; the stylesheet picks one), so a kept line follows the phone's switch. */
 function runView(r: StyledRun): HTMLElement {
   const el = h("span", {}, r.text);
@@ -1121,12 +1121,15 @@ function runView(r: StyledRun): HTMLElement {
     const [a, b] = [lum(hex), lum(dark ? "#2e2e2e" : "#f0f0f0")];
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5;
   };
-  if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg)) {
+  // Dim text: a fixed grey that reads on the tag (StatusTag.dimHex), coloured or not.
+  if (r.dim) {
+    el.style.setProperty("--fg-light", "#6b6b6b");
+    el.style.setProperty("--fg-dark", "#969696");
+  } else if (r.fg && /^#[0-9a-f]{6}$/i.test(r.fg)) {
     if (reads(r.fg, false)) el.style.setProperty("--fg-light", r.fg);
     if (reads(r.fg, true)) el.style.setProperty("--fg-dark", r.fg);
   }
   if (r.bold) el.style.fontWeight = "700";
-  if (r.dim) el.style.opacity = "0.6";
   if (r.italic) el.style.fontStyle = "italic";
   if (r.underline) el.style.textDecoration = "underline";
   return el;
