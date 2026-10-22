@@ -1483,7 +1483,25 @@ async function twoColumns() {
   check(await p.until("!!document.querySelector('section.conversation .msg')", 8000) === true, "wide: choosing an agent shows its conversation");
   check(await p.eval("window.__samePage === true && document.querySelector('.side') === window.__side && !!window.__side?.isConnected && getComputedStyle(window.__side).display !== 'none'") === true,
     "wide: choosing an agent keeps the page and the list (the right column changes)");
-  check(await p.eval("document.querySelector(\".side [data-pane='w2:p1']\")?.getAttribute('aria-current')") === "true", "wide: the chosen agent is marked in the list");
+  check(await p.eval("document.querySelector(\".side [data-pane='w2:p1']\")?.getAttribute('aria-current')") === "page", "wide: the chosen agent is marked in the list");
+  check(await p.eval("document.querySelector('.side')?.getAttribute('aria-live')") === "off", "wide: the list is not read out again on every tick");
+  check(await p.eval("!!document.querySelector('.side')?.id && document.querySelector('#side-toggle')?.getAttribute('aria-controls') === document.querySelector('.side').id") === true,
+    "wide: the list button names the list it hides");
+  // Another agent: the list stays in the page, nothing writes its scroll on each tick, and the row pressed keeps the focus.
+  await p.eval(`window.__sideOut = 0; window.__sideWrites = 0;
+    new MutationObserver((ms) => { for (const m of ms) for (const n of m.removedNodes) if (n === window.__side) window.__sideOut++; }).observe(document.getElementById('app'), { childList: true });
+    { const d = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+      Object.defineProperty(window.__side, 'scrollTop', { get() { return d.get.call(this); }, set(v) { window.__sideWrites++; d.set.call(this, v); }, configurable: true }); }
+    { const r = document.querySelector(".side [data-pane='w1:p2']"); r?.focus(); r?.click(); }`);
+  await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w1:p2'", 8000);
+  await new Promise((r) => setTimeout(r, 1500));
+  check(await p.eval("window.__sideOut === 0 && document.querySelector('.side') === window.__side") === true, `wide: another agent keeps the list in the page (taken out ${await p.eval("window.__sideOut")}x)`);
+  check(await p.eval("window.__sideWrites") === 0, `wide: no scroll written to the list on each tick (${await p.eval("window.__sideWrites")})`);
+  check(await p.eval("document.activeElement?.dataset?.pane") === "w1:p2", `wide: the row pressed keeps the focus (${await p.eval("document.activeElement?.outerHTML.slice(0, 80)")})`);
+  // Back: the agent before, beside the same list.
+  await p.eval("history.back()");
+  check(await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w2:p1' && document.querySelector('.side') === window.__side", 8000) === true,
+    "wide: Back -> the agent before, beside the same list");
   const geo = async (w) => {
     const top = await p.eval(box("section.conversation > .top")), items = await p.eval(box("section.conversation > .items"));
     const form = await p.eval(box("section.conversation > form.composer")), s = await p.eval(box(".side"));
@@ -1505,6 +1523,49 @@ async function twoColumns() {
   await geo(1024);
   check(await p.click("#side-toggle") === true && await p.until("document.querySelector('.side') && getComputedStyle(document.querySelector('.side')).display !== 'none'") === true,
     "wide: the button shows the list again");
+  // The row being read stays in place when the list is hidden or shown and across 768 (rotation, Split View).
+  const mark = `(() => { for (const e of document.querySelectorAll('.items > [data-id]')) { const r = e.getBoundingClientRect(); if (r.bottom > 0) return JSON.stringify({ id: e.dataset.id, top: Math.round(r.top) }); } return 'null'; })()`;
+  const stays = async (at, what) => {
+    await new Promise((r) => setTimeout(r, 400));
+    const now = await p.eval(`Math.round([...document.querySelectorAll('.items > [data-id]')].find((e) => e.dataset.id === ${JSON.stringify(at?.id ?? "")})?.getBoundingClientRect().top ?? -9999)`);
+    check(!!at && Math.abs(now - at.top) <= 2, `${what}: the row being read stays in place (${JSON.stringify(at)} -> ${now})`);
+    return JSON.parse(await p.eval(mark));
+  };
+  // Safari has no scroll anchoring: without it here, Chrome would keep the row in place by itself.
+  await p.eval("document.documentElement.style.overflowAnchor = document.body.style.overflowAnchor = 'none'");
+  await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, Math.round(document.documentElement.scrollHeight / 2))");
+  await new Promise((r) => setTimeout(r, 400));
+  let at = JSON.parse(await p.eval(mark));
+  await p.click("#side-toggle");
+  at = await stays(at, "wide: hiding the list");
+  await p.click("#side-toggle");
+  at = await stays(at, "wide: showing the list");
+  await p.scale(dpr, 767, 1024);
+  await p.until("!document.querySelector('.side')");
+  at = await stays(at, "wide -> narrow");
+  await p.scale(dpr, 1024, 768);
+  await p.until("!!document.querySelector('.side')");
+  at = await stays(at, "narrow -> wide");
+  // Chrome keeps the view in place when the window turns or resizes; Safari does not: the rows are laid out again
+  // before the page hears of it. Lay them out narrower first, then tell the page.
+  await p.eval("document.getElementById('app').style.maxWidth = '520px'; document.body.offsetHeight; window.dispatchEvent(new Event('resize'))");
+  await stays(at, "a turn (rows laid out again before the page hears of it)");
+  await p.eval("document.getElementById('app').style.maxWidth = ''; window.dispatchEvent(new Event('resize'))");
+
+  // A draft, its box and the focus stay across 768.
+  await p.eval("location.hash = '#pane=w2%3Ap2'");
+  await p.until("!!document.querySelector('#composer-text') && document.querySelector('section.conversation')?.dataset.pane === 'w2:p2'", 8000);
+  await p.type("#composer-text", "Half a thought.");
+  await p.eval("window.__box = document.getElementById('composer-text'); window.__box.focus()");
+  for (const [w, ht] of [[767, 1024], [1024, 768]]) {
+    await p.scale(dpr, w, ht);
+    await p.until(w < 768 ? "!document.querySelector('.side')" : "!!document.querySelector('.side')");
+    check(await p.eval("document.getElementById('composer-text') === window.__box && window.__box.value === 'Half a thought.' && document.activeElement === window.__box") === true,
+      `${w}: the draft, its box and the focus stay across 768`);
+  }
+  await p.type("#composer-text", "");
+  await p.eval("document.activeElement?.blur(); location.hash = '#pane=w2%3Ap1'");
+  await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w2:p1' && !!document.querySelector('section.conversation .msg')", 8000);
   if (shots) {
     await p.eval("window.scrollTo(0, document.documentElement.scrollHeight)");
     await p.shot("ipad-landscape");
@@ -1528,10 +1589,10 @@ async function twoColumns() {
     await p.until("!!document.querySelector('section.conversation .msg')", 8000);
   }
 
-  // Under 768 (Split View at a third, a phone): the phone's one column, as before.
-  for (const w of [767, 375]) {
-    await p.scale(dpr, w, 1024);
-    check(await p.until("!document.querySelector('.side') && !!document.querySelector('section.conversation')") === true, `narrow ${w}: one column, the conversation only`);
+  // Under 768 (Split View at a third, a phone) and a phone on its side (wide but low): the phone's one column, as before.
+  for (const [w, ht] of [[932, 430], [767, 1024], [375, 1024]]) {
+    await p.scale(dpr, w, ht);
+    check(await p.until("!document.querySelector('.side') && !!document.querySelector('section.conversation')") === true, `narrow ${w}x${ht}: one column, the conversation only`);
     const main = await p.eval(box("main"));
     check(main.w === Math.min(w, 760), `narrow ${w}: the phone's column (${main.w})`);
     check(await p.eval("document.querySelector('.back')?.textContent") === "‹ Agents", `narrow ${w}: Back to the agents`);
@@ -1541,6 +1602,13 @@ async function twoColumns() {
   check(await p.until("!!document.querySelector('.list') && !document.querySelector('section.conversation') && !document.querySelector('.side')") === true, "narrow: Back -> the list fills the page");
   await p.click("[data-pane='w2:p1']");
   check(await p.until("!!document.querySelector('section.conversation') && !document.querySelector('.list')") === true, "narrow: choosing an agent replaces the list");
+  // A link to an agent opens it beside the list.
+  await p.scale(dpr, 1024, 768);
+  await p.eval("location.hash = '#pane=w1%3Ap2'");
+  await p.reload();
+  check(await p.until("document.querySelector('section.conversation')?.dataset.pane === 'w1:p2' && !!document.querySelector('.side .list')", 8000) === true,
+    "wide: a link to an agent opens it beside the list");
+  check(await p.eval("document.querySelector(\".side [data-pane='w1:p2']\")?.getAttribute('aria-current')") === "page", "wide: the linked agent is marked in the list");
   await p.close();
   pages.splice(pages.indexOf(p), 1);
   check(p.errors.length === 0, `wide: no errors or CSP violations (${p.errors.join(" | ")})`);
