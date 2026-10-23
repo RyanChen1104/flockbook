@@ -25,7 +25,7 @@ public enum TailscaleSetup {
 
     /// The command as shown and copied (the CLI path quoted for a shell).
     public static func command(cli: String, _ args: [String]) -> String {
-        (["'" + cli.replacingOccurrences(of: "'", with: "'\\''") + "'"] + args).joined(separator: " ")
+        ([ShellQuote.quoted(cli)] + args).joined(separator: " ")
     }
 
     /// The page's origin: the only one whose socket the hub takes in this mode.

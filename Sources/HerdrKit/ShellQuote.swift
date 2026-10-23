@@ -9,7 +9,11 @@ public enum ShellQuote {
 
     /// What goes between the single quotes of `quoted(s)`.
     public static func escapedInside(_ s: String) -> String {
-        s.replacingOccurrences(of: "'", with: "'\\''")
+        var out = String.UnicodeScalarView()
+        for c in s.unicodeScalars {
+            if c == "'" { out.append(contentsOf: "'\\''".unicodeScalars) } else { out.append(c) }
+        }
+        return String(out)
     }
 
     /// `s` as it is when every scalar is plain (ASCII letters, digits and / . _ - + = : @ % ,), else `quoted(s)`.
