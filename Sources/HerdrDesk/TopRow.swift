@@ -372,7 +372,23 @@ struct TabCloseButton: View {
     }
 }
 
-/// New tab and Show terminal: plain system toolbar buttons next to the island. The system draws their shared glass
+/// The toolbar's +: what Settings > General chose (`PlusAction`): a new tab, or a split of the focused pane. Its
+/// tooltip and accessibility label say which.
+struct PlusButton<Content: View>: View {
+    let model: AppModel
+    @ViewBuilder var label: (PlusAction) -> Content
+    @AppStorage(PlusAction.key, store: AppDefaults.store) private var stored = PlusAction.newTab.rawValue
+
+    var body: some View {
+        let action = PlusAction(stored: stored)
+        Button { model.plus() } label: { label(action) }
+            .help(action.help)
+            .accessibilityLabel(action.accessibilityLabel)
+            .disabled(!model.writesEnabled)
+    }
+}
+
+/// The + (`PlusButton`) and Show terminal: plain system toolbar buttons next to the island. The system draws their shared glass
 /// capsule, pressed, focus, disabled and Increase Contrast looks.
 struct TopRowActions: ToolbarContent {
     /// Room the two buttons take beside the island (for the island's width cap).
@@ -380,9 +396,7 @@ struct TopRowActions: ToolbarContent {
     let model: AppModel
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .principal) {
-            Button { model.newTab() } label: { Label("New Tab", systemImage: "plus") }
-                .help("New tab (⌘T)")
-                .disabled(!model.writesEnabled)
+            PlusButton(model: model) { Label($0.accessibilityLabel, systemImage: "plus") }
             Toggle(isOn: Bindable(model).showTerminal) { Label("Show Terminal", systemImage: "apple.terminal") }
                 .help("Show terminal (⌃`)")
                 .disabled(model.screen != .tab)
@@ -438,10 +452,7 @@ struct FullScreenTopRow: View {
     private var buttons: some View {
         GlassGroup {
             HStack(spacing: 0) {
-                Button { model.newTab() } label: { Image(systemName: "plus").frame(width: 36, height: TopRow.height).contentShape(Rectangle()) }
-                    .help("New tab (⌘T)")
-                    .accessibilityLabel("New Tab")
-                    .disabled(!model.writesEnabled)
+                PlusButton(model: model) { _ in Image(systemName: "plus").frame(width: 36, height: TopRow.height).contentShape(Rectangle()) }
                 Toggle(isOn: Bindable(model).showTerminal) {
                     Image(systemName: "apple.terminal").frame(width: 36, height: TopRow.height).contentShape(Rectangle())
                 }

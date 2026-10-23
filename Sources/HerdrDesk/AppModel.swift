@@ -144,9 +144,18 @@ final class AppModel {
         }
         Task { try? await store.client.closeTab(t.id); await store.refresh() }
     }
+    /// The toolbar's +: what Settings > General chose (`PlusAction`), on the focused pane; no pane: a new tab.
+    func plus() {
+        let action = PlusAction(stored: AppDefaults.store.string(forKey: PlusAction.key))
+        let hasPane = tab.map { focusedPaneID(in: $0) != nil } ?? false
+        if let dir = action.resolved(hasPane: hasPane).split { splitFocused(dir) } else { newTab() }
+    }
+    /// Test hook: when set, replaces the call to herdr (tests must never split a real pane).
+    var splitHook: ((Pane, SplitDirection) -> Void)?
     func splitFocused(_ dir: SplitDirection) {
         guard writesEnabled, let t = tab, let fid = focusedPaneID(in: t), let p = t.panes.first(where: { $0.id == fid }) else { return }
         splitDirection = dir.rawValue
+        if let hook = splitHook { hook(p, dir); return }
         Task { try? await store.client.split(paneId: p.id, direction: dir); await store.refresh() }
     }
 
