@@ -160,6 +160,12 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     static func codex(screen: String) -> QueuedInput? {
         codexScreen(screen).map { QueuedInput(agent: "codex", items: $0.items, pullable: $0.inputEmpty) }
     }
+
+    // MARK: Grok Build
+
+    public static func grokScreen(_ screen: String) -> [String]? { nil }
+    public static func reads(kind: String) -> Bool { kind == "claude" || kind == "codex" }
+    public static func editHint(agent: String) -> String? { nil }
 }
 
 /// Claude Code's queue from its session log: `enqueue` adds (its `content`, or none during compaction), `remove`
