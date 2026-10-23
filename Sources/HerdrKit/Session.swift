@@ -25,7 +25,14 @@ public struct HerdrSession: Sendable, Hashable {
     /// herdr session `name` (nil: default) on `host`, through a relay socket in `RemoteHost.runtimeDir`. The socket name
     /// is a hash of the host and session, so two windows on the same pair share nothing but the name.
     public static func remote(_ host: RemoteHost, name: String?) -> HerdrSession {
-        HerdrSession(name: name, socketPath: RemoteHost.runtimeDir + "/api-\(relayKey(host, name)).sock", remote: host)
+        HerdrSession(name: name, socketPath: RemoteHost.runtimeDir + "/api-\(relayKey(host, name))-\(getpid()).sock", remote: host)
+    }
+
+    /// The name for state this Mac keeps per session (pulled texts). On this Mac: herdr's session name (nil: default),
+    /// as before remote support. On a host: the name and a hash of the host, so two machines never share it.
+    public var stateKey: String? {
+        guard let remote else { return name }
+        return (name ?? "default") + "@" + String(Self.relayKey(remote, nil).prefix(12))
     }
 
     /// FNV-1a of the host and session, 16 hex digits.

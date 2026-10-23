@@ -63,7 +63,8 @@ public struct RemoteHost: Sendable, Hashable {
     /// `--session <session>` (when named) and `args`. Exit 127 with `herdrMissingMarker` when there is none.
     public static func herdrCommand(session: String?, _ args: [String]) -> String {
         let candidates = ["\"$HOME/.local/bin/herdr\"", "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr", "\"$HOME/.cargo/bin/herdr\"",
-                          "/home/linuxbrew/.linuxbrew/bin/herdr", "\"$HOME/.nix-profile/bin/herdr\"", "/run/current-system/sw/bin/herdr"]
+                          "/home/linuxbrew/.linuxbrew/bin/herdr", "\"$HOME/.nix-profile/bin/herdr\"", "/run/current-system/sw/bin/herdr",
+                          "\"$HOME/.local/share/mise/shims/herdr\""]
         let argv = (session.map { ["--session", $0] } ?? []) + args
         return "h=$(command -v herdr 2>/dev/null) || h=; "
             + "for p in \(candidates.joined(separator: " ")); do [ -n \"$h\" ] && break; [ -x \"$p\" ] && h=$p; done; "
@@ -107,11 +108,23 @@ public struct RemoteHost: Sendable, Hashable {
          "-o", "PermitLocalCommand=no"]
     }
 
+    /// `command` as the one word sshd hands to the host user's login shell (`$SHELL -c`), which may be csh, tcsh, zsh
+    /// or fish: `exec /bin/sh -c '…'`, so the POSIX command line always runs in sh. The word is one line, has no "!",
+    /// and inside its quotes no backslash comes before a quote or a backslash (csh refuses a newline in quotes and
+    /// expands "!" even there; fish reads `\\` and `\'` as escapes). So newline, backslash, quote and "!" travel as
+    /// bytes 1 to 4, and `tr` turns them back before sh evals the command. Command lines here never hold bytes 1 to 4
+    /// (they would come back as those four), so a word is never wrapped twice.
+    public static func loginShellWord(_ command: String) -> String {
+        let coded = command.replacingOccurrences(of: "\n", with: "\u{1}").replacingOccurrences(of: "\\", with: "\u{2}")
+            .replacingOccurrences(of: "'", with: "\u{3}").replacingOccurrences(of: "!", with: "\u{4}")
+        return "exec /bin/sh -c " + quote("eval \"$(printf '%s' '\(coded)' | tr '\\001\\002\\003\\004' '\\012\\134\\047\\041')\"")
+    }
+
     /// The program and arguments that run `command` on the host.
     public func argv(_ command: String, controlDir: String = RemoteHost.runtimeDir) -> [String] {
         switch via {
-        case .ssh(let d): ["/usr/bin/ssh"] + Self.sshOptions(controlDir: controlDir) + ["--", d, command]
-        case .local: ["/bin/sh", "-c", command]
+        case .ssh(let d): ["/usr/bin/ssh"] + Self.sshOptions(controlDir: controlDir) + ["--", d, Self.loginShellWord(command)]
+        case .local: ["/bin/sh", "-c", Self.loginShellWord(command)]   // the same word, so checks run it too
         }
     }
 
@@ -155,13 +168,27 @@ public struct RemoteHost: Sendable, Hashable {
         let exited = DispatchSemaphore(value: 0)
         p.terminationHandler = { _ in exited.signal() }
         try p.run()
-        let w = inp.fileHandleForWriting
-        if let input, !input.isEmpty { try? w.write(contentsOf: input) }
-        try? w.close()
         let killed = Locked(false)
-        let killer = Task.detached { try? await Task.sleep(for: timeout); if p.isRunning { killed.set(true); p.terminate() } }
+        // The timer runs from the start: a command that does not read its stdin cannot hold `run` past `timeout`.
+        let killer = Task.detached {
+            try? await Task.sleep(for: timeout)
+            guard p.isRunning else { return }
+            killed.set(true); p.terminate()
+            try? await Task.sleep(for: .seconds(2))
+            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        }
+        let w = inp.fileHandleForWriting
+        DispatchQueue.global().async {
+            if let input, !input.isEmpty { try? w.write(contentsOf: input) }   // EPIPE once the command is gone
+            try? w.close()
+        }
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async { exited.wait(); group.wait(); c.resume() }
+            DispatchQueue.global().async {
+                exited.wait()
+                // After a kill, a child the command left behind may keep the output pipes open: do not wait for it.
+                if killed.get() { _ = group.wait(timeout: .now() + 1) } else { group.wait() }
+                c.resume()
+            }
         }
         killer.cancel()
         return Result(status: killed.get() ? -1 : p.terminationStatus, stdout: outData.get(),

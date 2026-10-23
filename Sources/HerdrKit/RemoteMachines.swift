@@ -181,7 +181,7 @@ public struct RemoteMachines {
         if r.ok { return (false, "The host answered, but not as herdr's API bridge. Update herdr on the host.") }
         if r.status == -1 { return (false, "No answer in 20 seconds. Check the destination and your network.") }
         if r.status == 127 || err.contains(RemoteHost.herdrMissingMarker) {
-            return (false, "herdr is not installed on the host, or not on its PATH, ~/.local/bin, Homebrew, ~/.cargo/bin or Nix.")
+            return (false, "herdr is not installed on the host, or not on its PATH, ~/.local/bin, Homebrew, ~/.cargo/bin, Nix or mise.")
         }
         if err.contains("Host key verification failed") || err.contains("HOST IDENTIFICATION HAS CHANGED") || err.contains("host key is known") {
             return (false, "The host key is unknown or changed. Run ssh \(destination) once in Terminal and check the key.")

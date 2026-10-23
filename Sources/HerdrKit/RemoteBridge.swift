@@ -110,7 +110,7 @@ public final class RemoteBridge: @unchecked Sendable {
         try lock.withLock {
             guard listenFD < 0 else { return }
             signal(SIGPIPE, SIG_IGN)
-            _ = try RemoteHost.ensureRuntimeDir()
+            Self.removeStaleSockets(in: try RemoteHost.ensureRuntimeDir())
             let fd = try Self.listen(at: socketPath)
             var st = stat()
             made = lstat(socketPath, &st) == 0 ? (st.st_dev, st.st_ino) : nil
@@ -138,12 +138,25 @@ public final class RemoteBridge: @unchecked Sendable {
 
     // MARK: - Listening
 
+    /// Removes relay sockets (`api-<key>-<pid>.sock`, `HerdrSession.remote`) whose app run has ended. Only sockets of
+    /// this user whose pid is gone; other files and ssh's control sockets stay.
+    static func removeStaleSockets(in dir: String) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+        for n in names where n.hasPrefix("api-") && n.hasSuffix(".sock") {
+            guard let pid = Int32(n.dropLast(5).split(separator: "-").last ?? ""), pid > 0, pid != getpid(),
+                  kill(pid, 0) != 0, errno == ESRCH else { continue }
+            let p = dir + "/" + n
+            var st = stat()
+            if lstat(p, &st) == 0, (st.st_mode & S_IFMT) == S_IFSOCK, st.st_uid == getuid() { unlink(p) }
+        }
+    }
+
     /// Binds and listens on `path` (mode 600, close-on-exec, non-blocking).
     static func listen(at path: String) throws -> Int32 {
         var st = stat()
         if lstat(path, &st) == 0 {
             guard (st.st_mode & S_IFMT) == S_IFSOCK else { throw HerdrError.socket("\(path) exists and is not a socket") }
-            unlink(path)   // another window's live relay for the same session serves the same host: replacing it is fine
+            unlink(path)   // this run's earlier relay for the same session (the name holds the pid): replacing it is fine
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw HerdrError.socket("socket() failed: \(errno)") }
