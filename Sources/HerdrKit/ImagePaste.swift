@@ -67,15 +67,20 @@ public enum ImagePaste {
         return lstat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFREG && st.st_uid == getuid()
     }
 
-    /// Agents that turn a pasted image path into `[Image #n]` (seen live: Claude Code, Codex; pi keeps the path).
-    public static func waitsForMarker(kind: String) -> Bool { kind == "claude" || kind == "codex" }
+    /// Agents that turn a pasted image path into `[Image #n]` (seen live: Claude Code, Codex, Grok Build; pi keeps
+    /// the path).
+    public static func waitsForMarker(kind: String) -> Bool { kind == "claude" || kind == "codex" || kind == "grok" }
 
-    /// `[Image #` markers in the agent's input: after its last prompt line (Claude `❯`, Codex `›`), or the whole
-    /// screen without one. Markers in the history above do not count.
+    /// `[Image #` markers in the agent's input: after its last prompt line (Claude `❯`, Codex `›`, Grok `│ ❯` in its
+    /// input box), or the whole screen without one. Markers in the history above do not count.
     public static func inputMarkers(_ screen: String, kind: String) -> Int {
         let glyph: Character = kind == "codex" ? "›" : "❯"
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
-        let start = lines.lastIndex { $0.drop { $0 == " " }.first == glyph } ?? lines.startIndex
+        let start = lines.lastIndex { l in
+            let t = l.drop { $0 == " " }
+            guard kind == "grok" else { return t.first == glyph }
+            return t.first == "│" && t.dropFirst().drop { $0 == " " }.first == glyph
+        } ?? lines.startIndex
         return lines[start...].joined(separator: "\n").components(separatedBy: "[Image #").count - 1
     }
 
