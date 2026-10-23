@@ -12,16 +12,19 @@ func checksShellQuote() {
         "x'\u{301}$(echo INJECTED)", "x'\u{301}; touch MARK", "'\u{301}`touch MARK`'\u{20DD}", "x'\u{20DD}$(touch MARK)",
         "it's", "plain/path.txt", "", "é'\u{301}", "$(touch MARK)", "`touch MARK`", "a b (c) & d;\"e\"",
     ]
-    /// What /bin/sh prints for `printf %s <quoted>`, run in `dir`.
+    /// What /bin/sh prints for `printf %s <quoted>`, run in `dir`. The script goes in on stdin: Process turns its
+    /// arguments into decomposed form (é -> e + U+0301), which would change the bytes under test.
     func shRead(_ quoted: String) -> Data? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "printf %s " + quoted]
         p.currentDirectoryURL = dir
-        let out = Pipe()
+        let input = Pipe(), out = Pipe()
+        p.standardInput = input
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         guard (try? p.run()) != nil else { return nil }
+        input.fileHandleForWriting.write(Data(("printf %s " + quoted + "\n").utf8))
+        try? input.fileHandleForWriting.close()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         return data
