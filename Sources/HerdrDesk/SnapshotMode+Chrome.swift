@@ -61,14 +61,14 @@ import SwiftUI
         var splits: [String] = []
         model.splitHook = { splits.append("\($1.rawValue) \($0.id)") }
         let wsID = model.workspace?.id ?? "?", focused = model.tab.flatMap { model.focusedPaneID(in: $0) }
-        for action in PlusAction.allCases {
-            AppDefaults.store.set(action.rawValue, forKey: PlusAction.key)
+        // Spelled out, not from PlusAction: the check must not take its answer from the code it checks.
+        for (stored, want) in [("newTab", "newTab \(wsID)"), ("splitRight", "right \(focused ?? "?")"), ("splitDown", "down \(focused ?? "?")")] {
+            AppDefaults.store.set(stored, forKey: PlusAction.key)
             calls = []; splits = []
             model.plus()
-            let ok = action.split.map { splits == ["\($0.rawValue) \(focused ?? "?")"] && calls.isEmpty } ?? (calls == ["newTab \(wsID)"] && splits.isEmpty)
-            step("+ set to \(action.rawValue): \(calls + splits) (focused \(focused ?? "none"))", ok && focused != nil)
+            step("+ set to \(stored): \(calls + splits) (focused \(focused ?? "none"))", calls + splits == [want] && focused != nil)
         }
-        AppDefaults.store.set(PlusAction.splitDown.rawValue, forKey: PlusAction.key)
+        AppDefaults.store.set("splitDown", forKey: PlusAction.key)
         calls = []; splits = []
         await click(row)
         step("+ set to split down: the sidebar's New tab row still opens a tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
