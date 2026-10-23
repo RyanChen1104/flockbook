@@ -9,7 +9,7 @@ import Foundation
     func on(_ text: String) throws -> (text: String, original: [String: Any]?) { try GrokStatusLineSetting.enabling(text, command: ours) }
     func off(_ text: String, _ original: [String: Any]?) throws -> String? { try GrokStatusLineSetting.disabling(text, command: ours, original: original) }
     func roundTrip(_ text: String) -> Bool {
-        guard let e = try? on(text), e.text != text, GrokStatusLineSetting.state(e.text, command: ours, wasOn: true) == .on,
+        guard let e = try? on(text), e.text != text, (try? GrokStatusLineSetting.state(e.text, command: ours, wasOn: true)) == .on,
               let back = try? off(e.text, e.original) else { return false }
         return back == text
     }
@@ -40,11 +40,11 @@ import Foundation
     check(untouched == nil, "grok status line: off without ours: no change")
 
     // States.
-    check(GrokStatusLineSetting.state(builtin, command: ours, wasOn: false) == .off && GrokStatusLineSetting.state(builtin, command: ours, wasOn: true) == .replaced,
+    check((try? GrokStatusLineSetting.state(builtin, command: ours, wasOn: false)) == .off && (try? GrokStatusLineSetting.state(builtin, command: ours, wasOn: true)) == .replaced,
           "grok status line: off, or replaced since")
     let movedCmd = ClaudeStatusLineSetting.command(wrapper: "/Volumes/X/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: "/h/Flockbook/statusline-grok")
     let moved = e.text.replacingOccurrences(of: ours.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""), with: movedCmd)
-    check(GrokStatusLineSetting.state(moved, command: ours, wasOn: true) == .moved, "grok status line: an older copy's path: moved")
+    check((try? GrokStatusLineSetting.state(moved, command: ours, wasOn: true)) == .moved, "grok status line: an older copy's path: moved")
     let fixed = try on(moved)
     check(fixed.original == nil && GrokStatusLineSetting.currentCommand(fixed.text) == ours && fixed.text.contains("padding = 1"), "grok status line: on fixes the path only")
 
@@ -91,4 +91,63 @@ import Foundation
           "grok status line: the wrapper draws a built-in original and saves it \(String(decoding: r.output, as: UTF8.self))")
     try wf.saveOriginal(["type": "none"])
     check(StatusLineWrapper.run(input: input, dir: wdir, timeout: 5).output.isEmpty, "grok status line: none: the wrapper prints nothing")
+
+    // Ours in a table Flockbook cannot read now (CRLF line ends, a subtable, the type changed): not "replaced" (Off
+    // would forget the kept table while ours is still in); the state and Off are refused and the kept table stays.
+    for (name, t) in [("crlf", e.text.replacingOccurrences(of: "\n", with: "\r\n")),
+                      ("subtable", e.text + "\n[ui.status_line.colors]\nfg = \"red\"\n"),
+                      ("type", e.text.replacingOccurrences(of: "type = \"command\"", with: "type = \"Command\""))] {
+        check((try? GrokStatusLineSetting.state(t, command: ours, wasOn: true)) == nil, "grok status line: ours unreadable: no state (\(name))")
+        var threw = false
+        do { _ = try off(t, e.original) } catch { threw = true }
+        check(threw, "grok status line: ours unreadable: off refused (\(name))")
+        let f2 = StatusLineFolder(url: dir.appendingPathComponent("unreadable-\(name)"))
+        try f2.saveOriginal(e.original, on: true)
+        try Data(t.utf8).write(to: file)
+        threw = false
+        do { try GrokStatusLineSetting.apply(on: false, file: file, command: ours, folder: f2) } catch { threw = true }
+        check(threw && f2.hasOriginal && (try? String(contentsOf: file, encoding: .utf8)) == t, "grok status line: ours unreadable: the file and the kept table stay (\(name))")
+    }
+
+    // More shapes refused: ui at the top level (an inline table cannot take our table after it; dotted keys), an array
+    // of tables, a table header inside a multi-line string.
+    for (name, t) in [("top-level inline", "ui = { theme = \"dark\" }\n"), ("top-level inline status line", "ui = { status_line = { type = \"builtin\" } }\n"),
+                      ("top-level dotted", "ui.theme = \"dark\"\n"), ("quoted top-level", "\"ui\" = { theme = \"dark\" }\n"),
+                      ("array of tables", "[[ui.status_line]]\ntype = \"builtin\"\n"), ("array of ui tables", "[[ui]]\ntheme = \"dark\"\n"),
+                      ("header in a multi-line string", "[agent]\nprompt = \"\"\"\n[ui.status_line]\nx = 1\"\"\"\n"),
+                      ("header in a literal multi-line string", "[agent]\nprompt = '''\n  [ui.status_line]\n'''\n[ui.status_line]\ntype = \"builtin\"\n")] {
+        var threw = false
+        do { _ = try on(t) } catch { threw = true }
+        check(threw, "grok status line: refused: \(name)")
+    }
+    // Other multi-line strings are text, not keys: on and off as usual.
+    check(roundTrip("prompt = '''\nui = { a = 1 }\n'''\n[ui]\ntheme = \"auto\"\n") && roundTrip("[agent]\nprompt = \"\"\"\nhello \\\"\"\"\n[x]\n\"\"\"\n"),
+          "grok status line: a multi-line string elsewhere is left alone")
+    // A byte order mark before the table's header: the same table, not a second one.
+    let bom = "\u{FEFF}[ui.status_line]\ntype = \"builtin\"\n"
+    let be = try? on(bom)
+    check(roundTrip(bom) && be?.text.components(separatedBy: "[ui.status_line]").count == 2 && be?.original?["type"] as? String == "builtin",
+          "grok status line: a byte order mark first: the same table \(String(describing: be?.text))")
+
+    // TOML strings escaped per Unicode scalar ("\"" or "\\" followed by a combining mark), with control characters
+    // as \uXXXX; read back the same.
+    func scalars(_ s: String?) -> [UInt32]? { s.map { $0.unicodeScalars.map(\.value) } }
+    for s in ["a\"\u{301}b", "a\\\u{301}b", "x\ny\u{1}\u{7F}\tz", "é \"q\" \\"] {
+        let q = GrokStatusLineSetting.quoted(s)
+        check(!q.unicodeScalars.dropFirst().dropLast().contains { $0.value < 0x20 || $0.value == 0x7F }
+              && scalars(GrokStatusLineSetting.string(Substring(q))?.0) == scalars(s)
+              && GrokStatusLineSetting.string(Substring(q))?.1.isEmpty == true, "grok status line: quoted and read back per scalar \(q.debugDescription)")
+    }
+    check(scalars(GrokStatusLineSetting.quoted("a\"\u{301}")) == scalars("\"a\\\"\u{301}\"") && GrokStatusLineSetting.quoted("\n\u{1F}") == "\"\\u000A\\u001F\"",
+          "grok status line: the escapes \(GrokStatusLineSetting.quoted("a\"\u{301}").debugDescription)")
+    let odd = ClaudeStatusLineSetting.command(wrapper: "/Apps/A\"\u{301}\\\u{301}\nB/Flockbook.app/Contents/MacOS/flockbook-statusline", dir: "/h/Flockbook/statusline-grok")
+    let oe = try? GrokStatusLineSetting.enabling(builtin, command: odd)
+    check(oe.map { scalars(GrokStatusLineSetting.currentCommand($0.text)) == scalars(odd) && (try? GrokStatusLineSetting.state($0.text, command: odd, wasOn: true)) == .on } == true
+          && (try? GrokStatusLineSetting.disabling(oe?.text ?? "", command: odd, original: oe?.original)) == builtin,
+          "grok status line: an odd app path: on and off \(String(describing: oe?.text))")
+
+    // The built-in line prints no control characters from Grok's JSON (the session name may come from the model).
+    let esc = Data(#"{"session_id":"g","session_name":"a\u001b[31mb\u0007","model":{"display_name":"M\u009bx\u007f"},"cwd":"/w/p\u001b]0;t"}"#.utf8)
+    let escLine = GrokBuiltinLine.render(esc, items: ["cwd", "model", "session-name"], now: Date())
+    check(escLine == "p]0;t │ Mx │ a[31mb", "grok status line: control characters dropped \(escLine.debugDescription)")
 }

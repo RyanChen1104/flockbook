@@ -61,6 +61,20 @@ import Foundation
         check(err != nil && sent == ["2"], "grok remote: another session in the pane: no next key \(sent)")
         fake.onInput = nil
     }
+    // The Mac's own answer (no gate): the exact question before each key too, not only its first words.
+    do {
+        fake.agents = agents("g1"); fake.screen = picker("Which color?", [("Green", "Fresh."), ("Blue", "Cool.")], at: 1)
+        var sent: [String] = []
+        fake.onInput = { _, p in sent += input(p) }
+        var err: Error?
+        do { try await client.answerQuestion(paneId: "w1:p1", request: q, answers: [QuestionAnswer(picks: [1]), QuestionAnswer(picks: [0])]) } catch { err = error }
+        check(err != nil && sent.isEmpty, "grok mac: another question with the same words on screen: no key \(sent)")
+        fake.screen = q1; sent = []; err = nil
+        fake.onInput = { _, p in sent += input(p); fake.screen = fake.screen == q1 ? q2 : idle }
+        do { try await client.answerQuestion(paneId: "w1:p1", request: q, answers: [QuestionAnswer(picks: [1]), QuestionAnswer(picks: [0])]) } catch { err = error }
+        check(err == nil && sent == ["2", "1"], "grok mac: the exact questions: one digit each \(sent) \(String(describing: err))")
+        fake.onInput = nil
+    }
 
     // The permission card: Deny is Down, then Enter once the focus is on "No, reject"; each key gated.
     func prompt(focus: Int) -> String {

@@ -15,7 +15,7 @@ import Foundation
     do {
         let backup = try GrokStatusLineSetting.apply(on: a[i + 1] == "on", file: file, command: command, folder: folder)
         let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-        print("grok-statusline: \(a[i + 1]) backup=\(backup?.path ?? "none") state=\(GrokStatusLineSetting.state(text, command: command, wasOn: folder.wasOn))")
+        print("grok-statusline: \(a[i + 1]) backup=\(backup?.path ?? "none") state=\(String(describing: try? GrokStatusLineSetting.state(text, command: command, wasOn: folder.wasOn)))")
         exit(0)
     } catch {
         print("grok-statusline: \(a[i + 1]) refused: \(error)"); exit(1)
