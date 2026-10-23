@@ -487,7 +487,8 @@ extension QuestionAdapter {
 
     /// Grok Build 1.0.67's picker shows question `k` of `q` exactly, nothing picked yet: in its "┃" block the
     /// question text, then rows "1 (○) label  description" for the options in order and no other, then its own
-    /// "z (○) Type your answer here", then "[k/n] …" with "Enter:select" ("Enter:submit" on the last question).
+    /// "z (○) Type your answer here", then "[k/n] …" with "Enter:select" ("Enter:submit" on the last question; a
+    /// single question shows no "[1/1]").
     /// Text is compared with all whitespace dropped (wrapping does not count); the scrollbar "█" at a line's end is
     /// not text. A picked row (●), a field being edited or the focus on the free-text row ("Enter:edit") refuses.
     static func grokExact(_ q: QuestionRequest, question k: Int, screen: String) -> Bool {
@@ -510,7 +511,9 @@ extension QuestionAdapter {
         guard body[firstRow + want.options.count] == "z (○) Type your answer here" else { return false }
         let foot = body[firstRow + want.options.count + 1]
         let last = k + 1 == q.questions.count
-        return foot.hasPrefix("[\(k + 1)/\(q.questions.count)] ") && foot.hasSuffix(last ? "Enter:submit" : "Enter:select")
+        // One question: Grok shows no "[1/1]" count (live, 1.0.67); its footer is the keys and "Enter:submit".
+        let counted = foot.hasPrefix("[\(k + 1)/\(q.questions.count)] ") || (q.questions.count == 1 && !foot.hasPrefix("["))
+        return counted && foot.hasSuffix(last ? "Enter:submit" : "Enter:select")
     }
 }
 
