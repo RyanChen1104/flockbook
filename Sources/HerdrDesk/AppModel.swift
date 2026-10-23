@@ -164,13 +164,14 @@ final class AppModel {
 
     /// Asks the kit whether the visible screen shows Claude's permission prompt.
     /// Runs only for blocked agents or a pending tool call; otherwise clears the flag.
-    /// Also keeps the prompt read from the screen (`screenPrompts`) for a blocked Claude.
+    /// Also keeps the prompt read from the screen (`screenPrompts`) for a blocked Claude or Grok.
     func checkPrompt(for pane: Pane) async {
         guard pane.agent?.status == .blocked || hasPending(pane) else { promptVisible.remove(pane.id); screenPrompts[pane.id] = nil; return }
         let screen = try? await store.client.visibleText(paneId: pane.id)
         if let screen, PermissionGate.screenShowsPrompt(screen) { promptVisible.insert(pane.id) } else { promptVisible.remove(pane.id) }
         let a = pane.agent
-        screenPrompts[pane.id] = a?.status == .blocked && a?.kind == "claude" ? screen.flatMap(ApprovalNotice.screenRequest) : nil
+        screenPrompts[pane.id] = a?.status == .blocked && (a?.kind == "claude" || a?.kind == "grok")
+            ? screen.flatMap { ApprovalNotice.screenRequest($0, agent: a?.kind ?? "") } : nil
     }
 
     /// Permission prompts read from the screen, by pane id: the card's request when the log has none (a Claude without a
@@ -259,7 +260,7 @@ final class AppModel {
                 noticeLog.info("buttons: pane \(pane.id, privacy: .public) prompt \(id, privacy: .public)")
                 // The request the id names, for the notification's text: the log's call, else the box on screen.
                 let logged = pendingRequest(pane)
-                return (pane.id, id, logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen))
+                return (pane.id, id, logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen, agent: s.agentKind))
             }
             noticeLog.info("no buttons yet: pane \(pane.id, privacy: .public) try \(attempt) log call \(self.pendingToolUseId(pane) ?? "none", privacy: .public)")
         }

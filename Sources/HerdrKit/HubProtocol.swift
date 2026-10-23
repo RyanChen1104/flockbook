@@ -48,7 +48,7 @@ public enum Hub {
     /// `approve` from any client is checked by the same rule. Nil: no approval open.
     public static func openApproval(_ s: ApprovalNotice.PaneState, logged: PermissionRequest?) -> HubApproval? {
         guard let id = ApprovalNotice.prompt(s, writes: true) else { return nil }
-        let r = logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen)
+        let r = logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen, agent: s.agentKind)
         guard let r else { return nil }
         return HubApproval(id: id, tool: r.toolName, title: r.title, command: r.command, state: .pending)
     }
@@ -113,7 +113,7 @@ public enum Hub {
         if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
             || QuestionAdapter.pickerRegion(agent: "codex", screen: screen) != nil
             || QuestionAdapter.pickerRegion(agent: "claude", screen: screen) != nil
-            || QuestionAdapter.pickerRegion(agent: "grok", screen: screen) != nil
+            || QuestionAdapter.pickerRegion(agent: "grok", screen: screen) != nil || ApprovalNotice.grokBox(screen) != nil
             || unreadablePrompt(screen: screen, blocked: false) { return true }
         let lines = screen.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(12)
         let keyLines = ["enter to confirm", "esc to cancel", "enter to submit", "enter to select", "enter continue"]

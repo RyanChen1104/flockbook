@@ -476,6 +476,15 @@ extension QuestionAdapter {
         return first..<(last + 1)
     }
 
+    /// A "┃" block's text lines: the bar, the scrollbar "█" at a line's end and blank lines dropped.
+    static func grokLines(_ block: ArraySlice<String>) -> [String] {
+        block.map { l in
+            var t = Substring(l.trimmingCharacters(in: .whitespaces).dropFirst())   // the "┃"
+            while let c = t.last, c == "█" || c.isWhitespace { t = t.dropLast() }
+            return t.trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }
+    }
+
     /// Grok Build 1.0.67's picker shows question `k` of `q` exactly, nothing picked yet: in its "┃" block the
     /// question text, then rows "1 (○) label  description" for the options in order and no other, then its own
     /// "z (○) Type your answer here", then "[k/n] …" with "Enter:select" ("Enter:submit" on the last question).
@@ -487,11 +496,7 @@ extension QuestionAdapter {
         guard !want.multiSelect else { return false }
         let lines = screen.components(separatedBy: "\n")
         guard let block = grokBlock(lines), pickerRegion(agent: "grok", screen: screen) != nil else { return false }
-        let body: [String] = lines[block].map { l in
-            var t = Substring(l.trimmingCharacters(in: .whitespaces).dropFirst())   // the "┃"
-            while let c = t.last, c == "█" || c.isWhitespace { t = t.dropLast() }
-            return t.trimmingCharacters(in: .whitespaces)
-        }.filter { !$0.isEmpty }
+        let body = grokLines(lines[block])
         let bare: (String) -> String = { String($0.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }) }
         let rowRe = /^(\d+|z) \(([○●])\) (.*)$/
         guard let firstRow = body.firstIndex(where: { $0.wholeMatch(of: rowRe) != nil }), firstRow > 0,
