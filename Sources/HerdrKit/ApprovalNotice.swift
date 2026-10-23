@@ -118,10 +118,18 @@ public enum ApprovalNotice {
 
     /// The approval card's request read from the screen, for a prompt the log does not have (no transcript, or the log
     /// lags). Its `toolUseId` is `screenPrompt`.
-    public static func screenRequest(_ screen: String) -> PermissionRequest? {
+    public static func screenRequest(_ screen: String, agent: String = "claude") -> PermissionRequest? {
         guard let box = screenBox(screen), let id = screenPrompt(screen) else { return nil }
         return PermissionRequest(title: box.header, command: box.command, toolName: box.tool, toolUseId: id, state: .pending)
     }
+
+    struct GrokBox: Sendable, Hashable {
+        var title: String
+        var command: String
+        var focus: Int
+    }
+    static func grokBox(_ screen: String) -> GrokBox? { nil }
+    static func grokKey(_ screen: String, allow: Bool) -> String? { nil }
 
     /// The request the in-app card shows and binds its buttons to: the log's call when it is the box on screen, else
     /// the box (a log that lags the screen still names the previous call). No box read: the log's call; its keys then
