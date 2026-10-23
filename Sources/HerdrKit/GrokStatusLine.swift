@@ -44,13 +44,19 @@ public enum GrokStatusLineSetting {
         return String(m.1).filter { !$0.isWhitespace }
     }
 
+    /// A table name for ui or under it, its keys quoted or not (["ui"] is [ui] in TOML).
+    static func isUI(_ name: String) -> Bool {
+        let bare = name.filter { $0 != "\"" && $0 != "'" }
+        return bare == "ui" || bare.hasPrefix("ui.")
+    }
+
     /// Finds the table, refusing a status line set in any other shape. Nil: none.
     static func table(_ ls: [String]) throws -> Table? {
         var current = "", found: Int?, open: String?
         for (i, l) in ls.enumerated() {
             if open != nil {
                 // Text of a multi-line string; a header for ui there could be taken for the table.
-                if let name = tableName(l), name == "ui" || name.hasPrefix("ui.") {
+                if let name = tableName(l), isUI(name) {
                     throw Failure.unexpected("config.toml has [\(name)] inside a multi-line string, which Flockbook does not change")
                 }
                 open = openString(l, open: open)
@@ -58,8 +64,11 @@ public enum GrokStatusLineSetting {
             }
             if let name = tableName(l) {
                 current = name
-                if l.trimmingCharacters(in: .whitespaces).trimmingPrefix("\u{FEFF}").hasPrefix("[["), name == "ui" || name.hasPrefix("ui.") {
+                if l.trimmingCharacters(in: .whitespaces).trimmingPrefix("\u{FEFF}").hasPrefix("[["), isUI(name) {
                     throw Failure.unexpected("config.toml has [[\(name)]], an array of tables, which Flockbook does not change")
+                }
+                if name.contains(where: { $0 == "\"" || $0 == "'" }), isUI(name) {
+                    throw Failure.unexpected("config.toml has [\(name)], a quoted name, which Flockbook does not change; write it without quotes")
                 }
                 if name == header {
                     guard found == nil else { throw Failure.unexpected("config.toml has two [ui.status_line] tables") }
@@ -294,12 +303,24 @@ public enum GrokStatusLineSetting {
 
     /// `wasOn`: the owner switched ours on and not off since. Throws when the table cannot be read: ours may still be
     /// in it, so it is not "replaced" (Off would forget the owner's kept table).
+    /// A table it cannot read without our wrapper's name anywhere in the file is the owner's own: off or replaced.
     public static func state(_ text: String, command: String, wasOn: Bool) throws -> State {
-        let t = try table(lines(text))
+        let t: Table?
+        do { t = try table(lines(text)) } catch {
+            guard mentionsWrapper(text) else { return wasOn ? .replaced : .off }
+            throw error
+        }
         try checkType(t, command: command)
         if isOurs(t, command: command) { return .on }
         if isMoved(t, command: command) { return .moved }
         return wasOn ? .replaced : .off
+    }
+
+    /// Our wrapper's name anywhere in `text`, compared as UTF-8 bytes (per scalar, not per character).
+    static func mentionsWrapper(_ text: String) -> Bool {
+        let b = Array(text.utf8), w = Array("flockbook-statusline".utf8)
+        guard b.count >= w.count else { return false }
+        return (0...(b.count - w.count)).contains { b[$0..<($0 + w.count)].elementsEqual(w) }
     }
 
     /// The `[ui.status_line]` table's own lines (nil: none, or the file cannot be read).
@@ -419,8 +440,10 @@ public enum GrokBuiltinLine {
             case "cost":
                 if let c = (dict("cost")?["total_cost_usd"] as? NSNumber)?.doubleValue, c >= 0.005 { parts.append(String(format: "$%.2f", c)) }
             case "turn-timer":
-                if let ms = (dict("turn")?["started_at_ms"] as? NSNumber)?.doubleValue {
-                    let s = Int(now.timeIntervalSince1970 - ms / 1000)
+                // A start time out of range (not finite, or more than ~30 years off) draws no timer.
+                if let ms = (dict("turn")?["started_at_ms"] as? NSNumber)?.doubleValue, case let d = now.timeIntervalSince1970 - ms / 1000,
+                   d.isFinite, abs(d) < 1e9 {
+                    let s = Int(d)
                     if s >= 3600 { parts.append(String(format: "%dh %02dm", s / 3600, s % 3600 / 60)) }
                     else if s >= 60 { parts.append(String(format: "%dm %02ds", s / 60, s % 60)) }
                     else if s >= 1 { parts.append("\(s)s") }
