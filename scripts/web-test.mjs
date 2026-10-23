@@ -808,6 +808,19 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("queue-codex");
   await p.shot("queue-codex", true);
+  // Grok Build: the same, the note says Ctrl+; in Grok's terminal.
+  await p.type("#composer-text", "grok queue");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.eval("location.hash = '#pane=w2%3Ap3'");
+  check(await p.until("document.querySelectorAll('.msg.user.queued').length === 1") === true, "queue: Grok's queued message is shown");
+  check(await p.eval("!document.querySelector('#pull-queued') && document.querySelector('.queue-foot').textContent.includes(\"Ctrl+; in Grok's terminal\")") === true,
+    "queue: Grok: no Pull back, the note says Ctrl+; in its terminal");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queue-grok");
+  await p.type("#composer-text", "grok gone");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
   await p.type("#composer-text", "");

@@ -209,6 +209,18 @@ import ImageIO
                                       "  GPT-5 · Context 96% left", "  ? for shortcuts"].joined(separator: "\n")
                 setStatus("w2:p1", .working)
             }
+            // "grok queue": the empty pane w2:p3 gets a working Grok Build with a queued message on its screen; "grok
+            // gone" empties it again.
+            if text == "grok queue" || text == "grok gone" {
+                let on = text == "grok queue"
+                for wi in ws.indices { for ti in ws[wi].tabs.indices { for pi in ws[wi].tabs[ti].panes.indices where ws[wi].tabs[ti].panes[pi].id == "w2:p3" {
+                    ws[wi].tabs[ti].panes[pi].agent = on ? agent(.working, "s7", "Grok notes", kind: "grok") : nil
+                } } }
+                b.screens["w2:p3"] = on ? ["  ❯ Sort the notes", "", "    #1 Then tag them by topic.", "", "    ⠼ Thinking… 3.2s      5.6s ⇣1.46k [stop]", "",
+                                           "  ╭──────────────╮", "  │ ❯            │", "  ╰── Grok 4.7 ─╯", "",
+                                           "  Enter:send now  │  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+;:queue  │  Ctrl+.:shortcuts"].joined(separator: "\n") : nil
+                b.workspaces = ws
+            }
             // "keep three": texts the hub kept for this phone and never got a pulledAck for (sent again after hello).
             if text == "keep three" {
                 for (pane, t) in [("w2:p2", "Kept one."), ("w1:p2", "Kept for the other agent."), ("w2:p2", "Kept two.")] {
