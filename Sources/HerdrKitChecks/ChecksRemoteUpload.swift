@@ -71,6 +71,35 @@ import Foundation
         check(why3.contains("control characters"), "remote upload: control characters in the host folder refused (\(why3))")
     }
 
+    // Attached or dropped files of any kind go to the same host folder; the composer types the host path. Folders are
+    // refused with a hint. Names are made safe and unique; the extension stays.
+    do {
+        let doc = local.appendingPathComponent("my notes (v2).pdf")
+        let docBytes = Data((0..<2000).map { UInt8($0 % 251) })
+        try docBytes.write(to: doc)
+        let p = try await up.uploadFile(doc)
+        check(p.hasPrefix(hostDir + "/file-") && p.hasSuffix("-my_notes__v2_.pdf"), "remote upload: attached file under the host folder (\(p))")
+        check(fm.contents(atPath: p) == docBytes && mode(p) == 0o600, "remote upload: attached file same bytes, mode 600")
+        let p2 = try await up.uploadFile(doc)
+        check(p2 != p && fm.contents(atPath: p) == docBytes, "remote upload: the same file twice gets two names")
+        let n = RemoteUpload.uploadName(for: ".a b;$(x)'é\n.tar.gz")
+        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        check(n.hasPrefix("file-") && n.hasSuffix(".tar.gz") && n.unicodeScalars.allSatisfy(safe.contains) && !n.contains("-."),
+              "remote upload: upload name is safe (\(n))")
+        check(RemoteUpload.uploadName(for: String(repeating: "x", count: 500) + ".png").utf8.count <= 120, "remote upload: long names are cut")
+        var why = ""
+        do { _ = try await up.uploadFile(local) } catch { why = "\(error)" }
+        check(why == RemoteUpload.folderNote(host: host), "remote upload: a folder is refused with a hint (\(why))")
+        check(RemoteUpload.folderNote(host: host).contains(host.label), "remote upload: the folder hint names the host")
+        var why2 = ""
+        do { _ = try await up.uploadFile(local.appendingPathComponent("missing.txt")) } catch { why2 = "\(error)" }
+        check(why2.hasPrefix("The file could not be copied to \(host.label)"), "remote upload: missing file reads as a sentence (\(why2))")
+        // Old attached files are removed with old images.
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86_400)], ofItemAtPath: p)
+        _ = try await up.uploadFile(doc)
+        check(!fm.fileExists(atPath: p) && fm.fileExists(atPath: p2), "remote upload: attached files older than a day are removed")
+    }
+
     // Folder expressions: "~/" is the host's $HOME, anything else is quoted as is.
     check(RemoteUpload.pathWord("~/.cache/a b") == "\"$HOME\"/'.cache/a b'", "remote upload: ~/ is the host home")
     check(RemoteUpload.pathWord("/x/it's") == "'/x/it'\\''s'", "remote upload: absolute path quoted")

@@ -167,13 +167,16 @@ struct ComposerView: View {
     var placeholder: String? = nil
     /// Changes when the owner asks for the field (an unfocused pane's composer was clicked): take keyboard focus.
     var focusRequest = 0
+    /// The agent's host when it is not this Mac: attached and dropped files are copied there first (`RemoteUpload`).
+    var remote: RemoteHost? = nil
     @State private var text: String
     @State private var images: [URL]
     var pasteboard: NSPasteboard = .general
     init(agentName: String, readOnly: Bool = false, branch: String? = nil, draft: ComposerDraft = ComposerDraft(),
          onSend: @escaping (String) -> Void, onDraft: @escaping (ComposerDraft) -> Void = { _ in }, probe: PlaceholderProbe? = nil, pasteboard: NSPasteboard = .general,
-         deliver: ((String) async -> Bool)? = nil, placeholder: String? = nil, focusRequest: Int = 0) {
+         deliver: ((String) async -> Bool)? = nil, placeholder: String? = nil, focusRequest: Int = 0, remote: RemoteHost? = nil) {
         self.pasteboard = pasteboard; self.deliver = deliver; self.placeholder = placeholder; self.focusRequest = focusRequest
+        self.remote = remote
         self.agentName = agentName; self.readOnly = readOnly; self.branch = branch
         self.onSend = onSend; self.onDraft = onDraft; self.probe = probe
         _text = State(initialValue: draft.text); _images = State(initialValue: draft.images)
@@ -185,6 +188,8 @@ struct ComposerView: View {
     @State private var handle = ComposerHandle()
     @State private var dropping = false
     @State private var sendError: String?
+    /// Attached files being copied to the host.
+    @State private var uploading = 0
     /// Text the failed send gave back; the note goes once the owner edits it.
     @State private var returnedText = ""
 
@@ -208,6 +213,10 @@ struct ComposerView: View {
                                  onSubmit: { send() }, canSubmit: !readOnly && !underSettings, handle: handle)
                     .frame(height: height)
             }
+            if uploading > 0, let remote {
+                Label("Copying to \(remote.label)…", systemImage: "arrow.up.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let sendError {
                 Label(sendError, systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.red)
@@ -215,7 +224,7 @@ struct ComposerView: View {
             }
             HStack(spacing: 10) {
                 Button { attach() } label: { Image(systemName: "plus").foregroundStyle(.secondary) }
-                    .buttonStyle(HoverIconStyle()).help("Attach file (inserts its path)").disabled(readOnly)
+                    .buttonStyle(HoverIconStyle()).help(remote.map { "Attach file (copies it to \($0.label) and inserts its path there)" } ?? "Attach file (inserts its path)").disabled(readOnly)
                 if let branch {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.triangle.branch").font(.subheadline)
@@ -242,7 +251,7 @@ struct ComposerView: View {
         .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
         .dropDestination(for: URL.self) { urls, _ in
             guard !readOnly else { return false }
-            handle.insert(urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+            insertFiles(urls)
             return true
         } isTargeted: { dropping = $0 }
         .onChange(of: text) {
@@ -264,7 +273,29 @@ struct ComposerView: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         guard panel.runModal() == .OK else { return }
-        handle.insert(panel.urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+        insertFiles(panel.urls)
+    }
+    /// Types the paths of attached or dropped files. For an agent on a host each file is copied there first and its
+    /// host path is typed; a folder is not copied (the note says so).
+    private func insertFiles(_ urls: [URL]) {
+        guard let remote else {
+            handle.insert(urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+            return
+        }
+        sendError = nil
+        uploading += 1
+        Task {
+            defer { uploading -= 1 }
+            var paths: [String] = []
+            for u in urls {
+                do { paths.append(try await RemoteUpload(host: remote).uploadFile(u)) } catch {
+                    withAnimation(.easeOut(duration: 0.2)) { sendError = "\(error)" }
+                }
+            }
+            if !paths.isEmpty {
+                handle.insert(paths.map { ComposerHandle.quoted(URL(fileURLWithPath: $0)) }.joined(separator: " ") + " ")
+            }
+        }
     }
     private var canSend: Bool { !readOnly && !(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) }
     /// Message = text, then the absolute image paths (agents read an image path as an attachment).
