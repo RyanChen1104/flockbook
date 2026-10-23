@@ -11,7 +11,8 @@ import Foundation
 ///
 /// Mirrors live in `directory` (mode 700), one file per watched log (mode 600). A mirror is deleted when its log is no
 /// longer watched (`remove`, or when it is freed); files older than a day, and the oldest ones over `maxTotal`, are
-/// deleted when the next mirror is made.
+/// deleted when the next mirror is made, but not the ones another app run has open (each live mirror holds a shared
+/// `flock`).
 public actor RemoteLogMirror {
     /// The local mirror file.
     public nonisolated let url: URL
@@ -28,6 +29,8 @@ public actor RemoteLogMirror {
     /// The folder for mirror files. Checks point it at a temp folder.
     nonisolated(unsafe) public static var directory: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("HerdrDesk/remote-logs", isDirectory: true)
+    /// Bytes before the mirrored end compared with the host's on each sync (a replaced file resets the mirror).
+    static let seam: UInt64 = 64
     /// Fetched before the first view's tail, so `loadEarlier` can align it to a line start without a round trip.
     static let slack: UInt64 = 64 * 1024
     /// Largest read in one host command.
@@ -50,6 +53,7 @@ public actor RemoteLogMirror {
         let fd = open(url.path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw HerdrError.socket("cannot make \(url.path): \(String(cString: strerror(errno)))") }
         fchmod(fd, 0o600)
+        flock(fd, LOCK_SH)   // another app run's sweep leaves it alone
         self.url = url; self.path = path; self.host = host; self.fd = fd
         self.files = RemoteFiles(host: host)
         Self.live.update { _ = $0.insert(name) }
@@ -104,13 +108,16 @@ public actor RemoteLogMirror {
 
     private func doSync(tail: UInt64) async -> Change {
         let size: UInt64
-        switch await hostSize() {
-        case .some(.some(let s)): size = s
+        // the last bytes already mirrored, read again on the host: a file replaced by one that is not smaller differs
+        let seam: Range<UInt64>? = filled && end > 0 ? (end - min(Self.seam, end))..<end : nil
+        var hostSeam: Data?
+        switch await hostSize(seam: seam) {
+        case .some(.some(let s)): size = s.size; hostSeam = s.seam
         case .some(.none): return .gone
         case .none: return .unreachable
         }
         var reset = false
-        if filled && size < end {
+        if filled && (size < end || (seam != nil && hostSeam != mirrored(seam!))) {
             ftruncate(fd, 0); low = 0; end = 0; filled = false; reset = true
         }
         if !filled {
@@ -136,14 +143,27 @@ public actor RemoteLogMirror {
         return true
     }
 
-    /// The host file's size: nil when the host did not answer, `.some(nil)` when it answered that the file is not there.
-    private func hostSize() async -> UInt64?? {
+    /// The host file's size, and its bytes in `seam` (hex from `od`, so one round trip): nil when the host did not
+    /// answer, `.some(nil)` when it answered that the file is not there.
+    private func hostSize(seam: Range<UInt64>?) async -> (size: UInt64, seam: Data?)?? {
         let q = RemoteHost.quote(path)
         // exit 3: no such file (ssh's own failures are 255, a timeout -1)
-        guard let r = try? await host.run("[ -f \(q) ] || exit 3; wc -c < \(q)", timeout: files.timeout) else { return nil }
+        var cmd = "[ -f \(q) ] || exit 3; wc -c < \(q)"
+        if let seam { cmd += " && tail -c +\(seam.lowerBound + 1) \(q) | head -c \(seam.count) | od -An -v -tx1" }
+        guard let r = try? await host.run(cmd, timeout: files.timeout) else { return nil }
         if r.status == 3 { return .some(nil) }
-        guard r.ok, let n = UInt64(String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        return .some(n)
+        let lines = String(decoding: r.stdout, as: UTF8.self).split(separator: "\n", maxSplits: 1)
+        guard r.ok, let first = lines.first, let n = UInt64(first.trimmingCharacters(in: .whitespaces)) else { return nil }
+        guard seam != nil else { return .some((n, nil)) }
+        let hex = lines.count > 1 ? lines[1].split(whereSeparator: { $0 == " " || $0 == "\n" }) : []
+        return .some((n, Data(hex.compactMap { UInt8($0, radix: 16) })))
+    }
+
+    /// The mirror's own bytes in `r` (already fetched).
+    private func mirrored(_ r: Range<UInt64>) -> Data {
+        var d = Data(count: r.count)
+        let n = d.withUnsafeMutableBytes { pread(fd, $0.baseAddress, r.count, off_t(r.lowerBound)) }
+        return n == r.count ? d : Data()
     }
 
     /// Fetches `[from, to)` into the mirror at the same offsets; returns where the contiguous fetched bytes end.
@@ -198,14 +218,22 @@ public actor RemoteLogMirror {
             let size = UInt64(max(0, v.totalFileAllocatedSize ?? v.fileSize ?? 0))
             let date = v.contentModificationDate ?? .distantPast
             if live.contains(u.lastPathComponent) { total += size; continue }
-            if now.timeIntervalSince(date) > maxAge { try? fm.removeItem(at: u); continue }
+            if now.timeIntervalSince(date) > maxAge, removeUnlocked(u) { continue }
             total += size
             old.append((u, date, size))
         }
         for f in old.sorted(by: { $0.date < $1.date }) where total > maxTotal {
-            try? fm.removeItem(at: f.url)
-            total -= min(total, f.size)
+            if removeUnlocked(f.url) { total -= min(total, f.size) }
         }
+    }
+
+    /// Deletes a mirror file unless another app run has it open (it holds a shared lock). True: deleted.
+    static func removeUnlocked(_ u: URL) -> Bool {
+        let f = open(u.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard f >= 0 else { return false }
+        defer { close(f) }
+        guard flock(f, LOCK_EX | LOCK_NB) == 0 else { return false }
+        return unlink(u.path) == 0
     }
 
     // MARK: - Finding the log on the host
