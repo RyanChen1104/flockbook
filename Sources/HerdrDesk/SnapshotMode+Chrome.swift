@@ -72,12 +72,12 @@ import SwiftUI
         calls = []; splits = []
         await click(row)
         step("+ set to split down: the sidebar's New tab row still opens a tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
-        let keptTab = model.tabID
-        model.tabID = "no-such-tab"
+        let empty = AppModel(store: .previewEmptyWorkspace)
+        empty.newTabHook = { calls.append("newTab \($0.id)") }
+        empty.splitHook = { splits.append("\($1.rawValue) \($0.id)") }
         calls = []; splits = []
-        model.plus()
-        step("+ set to split down, no pane to split: a new tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
-        model.tabID = keptTab
+        empty.plus()
+        step("+ set to split down, no pane to split: a new tab (\(calls + splits))", calls == ["newTab w-empty"] && splits.isEmpty)
         AppDefaults.store.removeObject(forKey: PlusAction.key)
         model.splitHook = nil
         AppDefaults.store.set(false, forKey: AppSettings.allowInputKey)

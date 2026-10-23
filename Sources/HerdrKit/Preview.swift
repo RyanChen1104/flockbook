@@ -8,6 +8,13 @@ extension HerdrStore {
         return s
     }
 
+    /// One workspace with no tab: nothing to split (checks of the toolbar's + set to a split).
+    public static var previewEmptyWorkspace: HerdrStore {
+        let s = HerdrStore(session: .default())
+        s.setPreview(workspaces: [Workspace(id: "w-empty", label: "empty", tabs: [])], connected: true)
+        return s
+    }
+
     /// The mock tree with a session id on every agent (`s-<agent name>`): for checks of which logs count as on screen.
     public static var previewWithSessions: HerdrStore {
         let s = HerdrStore(session: .default())
