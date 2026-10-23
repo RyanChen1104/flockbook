@@ -14,7 +14,7 @@ import Foundation
     let calls = chipCalls(items)
     check(calls.map(\.toolName) == ["Grep", "Glob", "Bash", "Read", "Edit", "Bash"], "grok: tools under Claude Code's names \(calls.map(\.toolName))")
     check(calls.map(\.summary) == [".", "/tmp/demo", "ls", "/tmp/demo/a.txt", "/tmp/demo/a.txt", "make"], "grok: call summaries \(calls.map(\.summary))")
-    check(calls.map(\.output) == ["found 1 matches", "- /tmp/demo/\n  - a.txt", "a.txt\n", "hello", "no match", ""]
+    check(calls.map(\.output) == ["found 1 matches", "- /tmp/demo/\n  - a.txt", "a.txt\n", "hello", "no match", nil]
           && calls.map(\.isError) == [false, false, false, false, true, false], "grok: results and a failed call")
     check(!calls[0].input.contains("variant"), "grok: the update's rawInput tag is not shown")
 
@@ -41,7 +41,7 @@ import Foundation
     let fm = FileManager.default
     try? fm.createDirectory(atPath: "\(root)/slug-0a1b2c/\(sid)", withIntermediateDirectories: true)
     try? fm.createDirectory(atPath: "\(root)/%2Fw%2Fa/other", withIntermediateDirectories: true)
-    fm.createFile(atPath: "\(root)/slug-0a1b2c/\(sid)/updates.jsonl", contents: Data((gl.prefix(6).joined(separator: "\n") + "\n").utf8))
+    fm.createFile(atPath: "\(root)/slug-0a1b2c/\(sid)/updates.jsonl", contents: Data((gl.prefix(7).joined(separator: "\n") + "\n").utf8))
     fm.createFile(atPath: "\(root)/slug-0a1b2c/\(sid)/chat_history.jsonl", contents: Data())
     check(SessionLog.locate(agent: "grok", sessionId: sid, dir: root)?.path == "\(root)/slug-0a1b2c/\(sid)/updates.jsonl"
           && SessionLog.locate(agent: "grok", sessionId: "../\(sid)", dir: root) == nil
@@ -49,7 +49,7 @@ import Foundation
     var it = SessionLog(sessionId: sid, agent: "grok").snapshots(projectsDir: root, pollInterval: .milliseconds(30)).makeAsyncIterator()
     var seen: [String] = []
     for _ in 0..<6 { if let s = await it.next(), !s.items.isEmpty { seen = describe(s.items); break } }
-    check(seen == ["user:List the files in /tmp/demo.", "asst:Looking.", "chips:Searched the code"], "grok: tailed from the session folder \(seen)")
+    check(seen == ["user:List the files in /tmp/demo.", "asst:Looking.", "perm:."], "grok: tailed from the session folder \(seen)")
     try? fm.removeItem(atPath: root)
 
     // A pane herdr reports without a session (no integration installed): the open events.jsonl, or active_sessions.json.
