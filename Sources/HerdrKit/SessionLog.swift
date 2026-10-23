@@ -6,11 +6,15 @@ public final class SessionLog: Sendable {
     /// `Agent.kind`: "claude", "codex", "pi", …
     public let agent: String
     public var isCodex: Bool { agent == "codex" }
+    /// The host the agent runs on; nil: this Mac. A remote log is read through a local `RemoteLogMirror`.
+    public let remote: RemoteHost?
     /// `sessionId` is herdr's `agent_session.value`: an id, or (kind "path", e.g. pi) the log file path itself.
-    public init(sessionId: String, agent: String = "claude") { self.sessionId = sessionId; self.agent = agent }
+    public init(sessionId: String, agent: String = "claude", remote: RemoteHost? = nil) {
+        self.sessionId = sessionId; self.agent = agent; self.remote = remote
+    }
     public convenience init(sessionId: String, codex: Bool) { self.init(sessionId: sessionId, agent: codex ? "codex" : "claude") }
 
-    /// The log file the tailer reads; nil until `snapshots` found it.
+    /// The log file the tailer reads; nil until `snapshots` found it. For a remote log: the local mirror file.
     public var url: URL? { state.lock.withLock { state.url } }
 
     /// Where an agent keeps its logs (the search root for an id).
@@ -36,6 +40,7 @@ public final class SessionLog: Sendable {
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         var url: URL?
+        var mirror: RemoteLogMirror?  // remote logs: `url` is its file
         var start: UInt64 = 0        // file offset of the first loaded line
         var consumed: UInt64 = 0     // file offset after the last whole line the tailer parsed
         var loaded = false
@@ -51,12 +56,14 @@ public final class SessionLog: Sendable {
     /// Returns true while older content remains. Returns false before the first load or when nothing is left.
     @discardableResult
     public func loadEarlier(bytes: Int = 2_000_000) async -> Bool {
-        let (url, start): (URL?, UInt64) = state.lock.withLock { (state.loaded ? state.url : nil, state.start) }
+        let (url, start, mirror): (URL?, UInt64, RemoteLogMirror?) = state.lock.withLock { (state.loaded ? state.url : nil, state.start, state.mirror) }
         guard let url, start > 0, let fh = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? fh.close() }
         var span = UInt64(max(bytes, 1))
         while true {
             let from = start > span ? start - span : 0
+            // a mirrored log: fetch the range from the host first (true: older content is still there)
+            if let mirror, !(await mirror.ensure(from: from > 0 ? from - 1 : 0, to: start)) { return true }
             // one byte before `from` tells whether `from` is already a line start
             try? fh.seek(toOffset: from > 0 ? from - 1 : 0)
             guard var data = try? fh.read(upToCount: Int(start - from) + (from > 0 ? 1 : 0)) else { return false }
@@ -235,6 +242,8 @@ public final class SessionLog: Sendable {
         /// The file was renamed or deleted since the last call.
         /// While the file is not located: 1 s at first, 5 s after `slow()` (a missing log is looked up rarely).
         func slow() { if !armed { schedule(max(5, heartbeat)) } }
+        /// Back to the 1 s timer after `slow()`, for a file that is found but never armed (a remote log's mirror).
+        func fast() { if !armed { schedule(min(1, heartbeat)) } }
         func takeLost() -> Bool { lock.withLock { defer { lost = false }; return lost } }
         func poke() { cont.yield() }
         func stop() { disarm(); timer.cancel(); cont.finish() }
@@ -247,10 +256,11 @@ public final class SessionLog: Sendable {
     public func snapshots(projectsDir: String? = nil,
                           pollInterval: Duration = .seconds(10),
                           initialTailBytes: UInt64? = nil) -> AsyncStream<Snapshot> {
-        let id = sessionId, agent = self.agent, state = self.state
+        let id = sessionId, agent = self.agent, state = self.state, remote = self.remote
         let first = initialTailBytes ?? Self.shortTail
         let total = initialTailBytes ?? Self.fullTail
         let dir = projectsDir ?? Self.defaultDir(agent: agent)
+        let mirrorTail = max(first, total) + RemoteLogMirror.slack
         return AsyncStream { cont in
             let watch = Watch(heartbeat: pollInterval)
             state.lock.withLock { state.wake = { [weak watch] in watch?.poke() } }
@@ -263,6 +273,13 @@ public final class SessionLog: Sendable {
                 var skipPartial = false
                 var backfill = false
                 var url: URL?
+                var mirror: RemoteLogMirror?
+                var gone = 0   // syncs in a row where the host said the file is not there
+                var mirrorFilled = false   // the mirror holds the tail: until then its file is not read
+                func dropMirror() {
+                    mirror?.remove(); mirror = nil; url = nil; mirrorFilled = false
+                    state.lock.withLock { state.mirror = nil; state.url = nil }
+                }
                 func reset() {
                     offset = 0; leftover = Data(); leftoverPos = 0; parser = ConversationParser(); started = false
                     skipPartial = false; backfill = false
@@ -279,16 +296,38 @@ public final class SessionLog: Sendable {
                 var wakes = watch.stream.makeAsyncIterator()
                 while !Task.isCancelled {
                     if watch.takeLost() { watch.disarm(); url = nil; reset() }
-                    if url == nil { url = SessionLog.locate(agent: agent, sessionId: id, dir: dir) }
+                    if let host = remote {
+                        // No file events over ssh: the timer wakes this loop (1 s, or `pollInterval` if shorter) and the
+                        // mirror fetches what the host file grew by. The watch is never armed on the mirror.
+                        if mirror == nil, let p = await RemoteLogMirror.locate(agent: agent, sessionId: id, host: host, dir: projectsDir),
+                           let m = try? RemoteLogMirror(host: host, path: p) {
+                            mirror = m; url = m.url; gone = 0
+                            state.lock.withLock { state.mirror = m }
+                        }
+                        if let m = mirror {
+                            switch await m.sync(tail: mirrorTail) {
+                            case .reset: reset(); gone = 0
+                            case .gone:   // deleted or moved on the host: look it up again
+                                gone += 1
+                                if gone >= 5 { dropMirror(); reset() }
+                            case .unreachable: break   // keep what the mirror has (ssh down, sleep): the view stays
+                            default: gone = 0
+                            }
+                            mirrorFilled = await m.isFilled
+                        }
+                    } else if url == nil { url = SessionLog.locate(agent: agent, sessionId: id, dir: dir) }
                     if let url { state.lock.withLock { state.url = url } }
-                    if let url, !watch.armed { watch.arm(path: url.path) }
+                    if let url, remote == nil, !watch.armed { watch.arm(path: url.path) }
                     if url == nil {
                         report(.missing)
                         misses += 1
                         if misses == 10 { watch.slow() }
-                    } else { misses = 0 }
+                    } else {
+                        if misses >= 10, remote != nil { watch.fast() }
+                        misses = 0
+                    }
                     if let url, (try? FileHandle(forReadingFrom: url)) == nil { report(.failed("cannot read \(url.lastPathComponent)")) }
-                    if let url, let fh = try? FileHandle(forReadingFrom: url) {
+                    if let url, remote == nil || mirrorFilled, let fh = try? FileHandle(forReadingFrom: url) {
                         defer { try? fh.close() }
                         let size = (try? fh.seekToEnd()) ?? 0
                         if size < offset { reset() }   // truncated
@@ -348,6 +387,7 @@ public final class SessionLog: Sendable {
                     }
                     if await wakes.next() == nil { break }
                 }
+                if mirror != nil { dropMirror() }
                 cont.finish()
             }
             cont.onTermination = { _ in task.cancel(); watch.stop() }

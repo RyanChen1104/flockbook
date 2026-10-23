@@ -86,7 +86,7 @@ public enum LogImage {
     public static func header(_ d: Data) -> (format: Format, width: Int, height: Int)?
 }
 public final class SessionLog: Sendable {
-    public init(sessionId: String, agent: String = "claude")   // agent = Agent.kind; sessionId = herdr agent_session.value
+    public init(sessionId: String, agent: String = "claude", remote: RemoteHost? = nil)   // agent = Agent.kind; sessionId = herdr agent_session.value
     // An absolute .jsonl path (herdr kind "path", e.g. pi) is used as is, for any agent.
     // Ids: Claude ~/.claude/projects/*/<id>.jsonl; Codex ~/.codex/sessions/**/rollout-*-<id>.jsonl.
     public static func locate(agent: String, sessionId: String, dir: String) -> URL?
@@ -98,6 +98,15 @@ public final class SessionLog: Sendable {
 }
 ```
 If no log is found, `items()` yields `[]` once and keeps polling for the file.
+
+A remote log (`remote` set; `HerdrStore` passes `session.remote`) is looked up on the host by the same rules (in the host
+user's home) and read through `RemoteLogMirror`: a sparse local file in `~/Library/Caches/HerdrDesk/remote-logs`
+(folder 700, file 600) that holds every fetched byte at the host's offset. The tail comes first, growth is fetched by
+polling the host's size about once a second, and `loadEarlier` fetches its range from the host before reading. A host
+file that shrinks resets the mirror. `url` is the mirror, so `LogImage.read`, LogPictures and the phone work unchanged.
+The mirror file is deleted when the log is no longer watched; files older than a day go when the next one is made.
+`SessionResolver` is off for a remote session (`ps`/`lsof` here cannot see the host): panes show herdr's
+`agent_session` as named, and teammate logs are not held back.
 
 `loadEarlier` reads up to `bytes` before the current start, cut to whole lines. The older items appear at the front of the next `items()` emission (within one poll, 0.5 s). The whole loaded range is parsed again together, so a tool result in a later segment still matches its call. Item ids do not change (Codex ids come from the line's byte offset), so the UI can keep scroll position. It returns `false` before the first load and when the file start is reached. `HerdrStore.loadEarlier(paneId:) async -> Bool` (or `loadEarlier(for: sessionId)`) wraps it for the store's own log; false for an unknown pane or a pane without an agent session. Call it from the "Show earlier" button after the loaded items are all shown.
 

@@ -17,6 +17,10 @@ public struct LeadSwap: Sendable, Hashable {
 ///    Exactly one unclaimed match, or none. It never guesses between two.
 ///
 /// The result is cached per pane and kept while the agent pid stays the same.
+///
+/// For a session on a `RemoteHost` it is off: `ps` and `lsof` here cannot see the host's processes, and the relay
+/// socket path matches no pane. Panes show herdr's `agent_session` as it is: `resolve` finds nothing, and `leads`
+/// judges every named Claude session a lead's log (teammate logs are not held back remotely).
 public actor SessionResolver {
     public struct Proc: Sendable, Hashable {
         public var pid: Int32
@@ -45,12 +49,14 @@ public actor SessionResolver {
     /// Unresolved panes are tried again after this; resolved ones are re-checked (pid still the same) after `recheck`.
     private let retry: TimeInterval
     private let recheck: TimeInterval
+    /// The session runs on another machine: the resolver is off (see above).
+    private let remote: Bool
 
     public init(socketPath: String, codexDir: String = SessionLog.defaultDir(agent: "codex"),
                 projectsDir: String = SessionLog.defaultDir(agent: "claude"),
-                retry: TimeInterval = 5, recheck: TimeInterval = 30, verdictCap: Int = 8 << 20) {
+                retry: TimeInterval = 5, recheck: TimeInterval = 30, verdictCap: Int = 8 << 20, remote: RemoteHost? = nil) {
         self.socketPath = socketPath; self.codexDir = codexDir; self.projectsDir = projectsDir; self.verdictCap = verdictCap
-        self.retry = retry; self.recheck = recheck
+        self.retry = retry; self.recheck = recheck; self.remote = remote != nil
     }
 
     // MARK: - Teammates
@@ -82,6 +88,7 @@ public actor SessionResolver {
     /// lead. A teammate's log, an undecided one or one not found is never shown: the pane gets its last lead (judged
     /// again, and unless another pane shows that log), else no log.
     public func leads(_ asks: [LeadAsk], claimed: Set<String>) -> LeadPass {
+        if remote { return LeadPass(leads: Set(asks.map(\.sessionId))) }
         let ids = Set(asks.map(\.paneId))
         lastLead = lastLead.filter { ids.contains($0.key) }
         var pass = LeadPass()
@@ -196,6 +203,7 @@ public actor SessionResolver {
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.
     public func resolve(_ needs: [Need], claimed: Set<String>) -> [String: String] {
+        if remote { return [:] }
         let ids = Set(needs.map(\.paneId))
         cache = cache.filter { ids.contains($0.key) }
         let now = Date()
