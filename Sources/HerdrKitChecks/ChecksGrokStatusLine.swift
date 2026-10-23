@@ -150,4 +150,26 @@ import Foundation
     let esc = Data(#"{"session_id":"g","session_name":"a\u001b[31mb\u0007","model":{"display_name":"M\u009bx\u007f"},"cwd":"/w/p\u001b]0;t"}"#.utf8)
     let escLine = GrokBuiltinLine.render(esc, items: ["cwd", "model", "session-name"], now: Date())
     check(escLine == "p]0;t │ Mx │ a[31mb", "grok status line: control characters dropped \(escLine.debugDescription)")
+
+    // A quoted header for ui (["ui"] is [ui] in TOML): refused, as our table after it could make the file invalid.
+    for (name, t) in [("quoted ui", "[\"ui\"]\nstatus_line = { type = \"builtin\" }\n"), ("literal-quoted ui", "['ui']\nstatus_line.type = \"builtin\"\n"),
+                      ("quoted ui only", "[ \"ui\" ]\ntheme = \"auto\"\n"),
+                      ("quoted header in a multi-line string", "[agent]\nprompt = \"\"\"\n[\"ui\".status_line]\n\"\"\"\n")] {
+        var threw = false
+        do { _ = try on(t) } catch { threw = true }
+        check(threw, "grok status line: refused: \(name)")
+    }
+
+    // A table Flockbook cannot read without ours in the file: the owner's own, so off or replaced as before.
+    for (name, t) in [("crlf", "[ui.status_line]\r\ntype = \"builtin\"\r\n"), ("subtable", "[ui.status_line]\ntype = \"builtin\"\n[ui.status_line.colors]\nfg = \"red\"\n")] {
+        check((try? GrokStatusLineSetting.state(t, command: ours, wasOn: true)) == .replaced && (try? GrokStatusLineSetting.state(t, command: ours, wasOn: false)) == .off,
+              "grok status line: theirs unreadable, ours not in: replaced or off (\(name))")
+    }
+
+    // The turn timer with a start time out of range: no crash, no timer.
+    for ms in ["1e300", "-1e300", "1.7976931348623157e308"] {
+        let odd = Data(#"{"session_id":"g","model":{"display_name":"Grok 4.7"},"turn":{"started_at_ms":\#(ms)}}"#.utf8)
+        let l = GrokBuiltinLine.render(odd, items: ["model", "turn-timer"], now: Date(timeIntervalSince1970: 66))
+        check(l == "Grok 4.7", "grok status line: a start time out of range: no timer (\(ms)) \(l)")
+    }
 }
