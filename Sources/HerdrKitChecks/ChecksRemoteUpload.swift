@@ -94,6 +94,20 @@ import Foundation
         var why2 = ""
         do { _ = try await up.uploadFile(local.appendingPathComponent("missing.txt")) } catch { why2 = "\(error)" }
         check(why2.hasPrefix("The file could not be copied to \(host.label)"), "remote upload: missing file reads as a sentence (\(why2))")
+        // A link is followed for the size check too, and only regular files are copied.
+        let big = local.appendingPathComponent("big.bin"), bigLink = local.appendingPathComponent("big-link.bin")
+        try Data(count: 3000).write(to: big)
+        try fm.createSymbolicLink(at: bigLink, withDestinationURL: big)
+        var why3 = ""
+        do { _ = try await up.uploadFile(bigLink, maxBytes: 2000) } catch { why3 = "\(error)" }
+        check(why3.contains("over"), "remote upload: a link to a file over the cap is refused (\(why3))")
+        let docLink = local.appendingPathComponent("doc-link.pdf")
+        try fm.createSymbolicLink(at: docLink, withDestinationURL: doc)
+        let lp = try await up.uploadFile(docLink, maxBytes: 2000)
+        check(fm.contents(atPath: lp) == docBytes, "remote upload: a link to a small file copies the file")
+        var why4 = ""
+        do { _ = try await up.uploadFile(URL(fileURLWithPath: "/dev/null")) } catch { why4 = "\(error)" }
+        check(why4.contains("not a regular file"), "remote upload: a device is refused (\(why4))")
         // Old attached files are removed with old images.
         try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86_400)], ofItemAtPath: p)
         _ = try await up.uploadFile(doc)

@@ -297,11 +297,12 @@ struct ComposerView: View {
             }
         }
     }
-    private var canSend: Bool { !readOnly && !(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) }
+    /// Not while attached files are still being copied to the host: their paths are not in the text yet.
+    private var canSend: Bool { !readOnly && uploading == 0 && !(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) }
     /// Message = text, then the absolute image paths (agents read an image path as an attachment).
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !readOnly, !underSettings, !(t.isEmpty && images.isEmpty) else { return }   // the draft stays
+        guard !readOnly, !underSettings, uploading == 0, !(t.isEmpty && images.isEmpty) else { return }   // the draft stays
         let paths = images.map { ComposerHandle.quoted($0) }.joined(separator: " ")
         let message = [t, paths].filter { !$0.isEmpty }.joined(separator: " ")
         let sent = (text: text, images: images)

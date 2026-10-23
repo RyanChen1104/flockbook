@@ -83,14 +83,22 @@ public struct RemoteUpload: Sendable {
 
     /// An attached or dropped file (any kind) copied to the host folder; returns its host path. A folder is refused
     /// with `folderNote`. The name is `uploadName`: unique, safe to type, extension kept.
-    public func uploadFile(_ local: URL) async throws -> String {
-        let fm = FileManager.default, own = local.lastPathComponent
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: local.path, isDirectory: &isDir) else { throw fail("\(own) is not on this Mac", what: "file") }
-        if isDir.boolValue { throw Failure(description: Self.folderNote(host: host)) }
-        let size = (try? fm.attributesOfItem(atPath: local.path)[.size] as? NSNumber)?.intValue ?? 0
-        guard size <= Self.maxFileBytes else { throw fail("\(own) is over \(Self.maxFileBytes >> 20) MB", what: "file") }
-        guard let data = fm.contents(atPath: local.path) else { throw fail("\(own) on this Mac could not be read", what: "file") }
+    public func uploadFile(_ local: URL, maxBytes: Int = RemoteUpload.maxFileBytes) async throws -> String {
+        let own = local.lastPathComponent
+        func over() -> Failure { fail("\(own) is over \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file))", what: "file") }
+        // stat and the read follow a link, so the size is the file's, not the link's
+        var st = stat()
+        guard stat(local.path, &st) == 0 else { throw fail("\(own) is not on this Mac", what: "file") }
+        if (st.st_mode & S_IFMT) == S_IFDIR { throw Failure(description: Self.folderNote(host: host)) }
+        guard (st.st_mode & S_IFMT) == S_IFREG else { throw fail("\(own) is not a regular file", what: "file") }
+        guard st.st_size <= off_t(maxBytes) else { throw over() }
+        // at most one byte over the cap: the file may have grown since
+        guard let fh = try? FileHandle(forReadingFrom: local) else { throw fail("\(own) on this Mac could not be read", what: "file") }
+        defer { try? fh.close() }
+        let data: Data
+        do { data = try fh.read(upToCount: maxBytes + 1) ?? Data() } catch { throw fail("\(own) on this Mac could not be read", what: "file") }
+        guard data.count <= maxBytes else { throw over() }
+        let size = data.count
         let dir = try await prepare(what: "file")
         let path = dir + "/" + Self.uploadName(for: own)
         // about 2 s a megabyte on a slow link, on top of the usual time
