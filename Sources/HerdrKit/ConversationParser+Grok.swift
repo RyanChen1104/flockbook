@@ -4,6 +4,7 @@ import Foundation
 /// `{timestamp, method: "session/update" | "_x.ai/session/update", params: {sessionId, update: {sessionUpdate, …}, _meta: {eventId, agentTimestampMs}}}`.
 /// Text arrives as `*_chunk` updates; adjacent chunks of one kind are one message. Thinking is hidden. A `tool_call`
 /// opens a call, `tool_call_update` with a final status gives its result, and `turn_completed` closes what is still open.
+/// `ask_user_question` is a question card (`QuestionAdapter.grok`), answered by its final update.
 extension ConversationParser {
     struct GrokState {
         /// The text item the next chunk of the same kind continues: its kind, index in `done`, and raw text so far.
@@ -41,6 +42,13 @@ extension ConversationParser {
             guard let id = u["toolCallId"] as? String else { return }
             let tool = (u["_meta"] as? [String: Any])?["x.ai/tool"] as? [String: Any]
             let input = u["rawInput"] as? [String: Any] ?? [:]
+            if tool?["name"] as? String == "ask_user_question" || tool?["kind"] as? String == "ask_user",
+               let q = QuestionAdapter.grok(callId: id, input: input) {   // a question card, not a tool chip
+                flush()
+                questionAt[id] = done.count
+                done.append(ConversationItem(id: "q-\(id)", kind: .question(q), timestamp: lineTS))
+                return
+            }
             let name = Self.grokTool(tool?["name"] as? String ?? u["title"] as? String ?? "tool", kind: tool?["kind"] as? String, input: input)
             let summary = Self.grokSummary(name: name, input: input)
             if run.isEmpty { runKey = bid }
@@ -51,8 +59,17 @@ extension ConversationParser {
             callById[id] = ToolCall(id: id, toolName: name, summary: summary, input: Self.cut(Self.prettyJSON(input)))
         case "tool_call_update":
             grok.open = nil
-            guard let id = u["toolCallId"] as? String, let status = u["status"] as? String,
-                  status == "completed" || status == "failed" else { return }
+            guard let id = u["toolCallId"] as? String else { return }
+            let status = u["status"] as? String
+            if let at = questionAt[id], case .question(var q) = done[at].kind {
+                guard status == "completed" || status == "failed" else { return }
+                let text = (u["content"] as? [[String: Any]] ?? []).compactMap { ($0["content"] as? [String: Any])?["text"] as? String }.joined(separator: "\n")
+                q.state = QuestionAdapter.grokState(q, failed: status == "failed", output: u["rawOutput"], text: text)
+                done[at].kind = .question(q)
+                questionAt[id] = nil
+                return
+            }
+            guard let status, status == "completed" || status == "failed" else { return }
             var out = (u["content"] as? [[String: Any]] ?? []).compactMap { ($0["content"] as? [String: Any])?["text"] as? String }.joined(separator: "\n")
             if out.isEmpty, let raw = u["rawOutput"] as? [String: Any], let s = raw["output_for_prompt"] as? String { out = s }
             callById[id]?.output = Self.cut(out)
@@ -63,6 +80,11 @@ extension ConversationParser {
             grok.open = nil
             for id in openOrder { openToolUses[id] = nil }
             openOrder = []
+            // A question still open when the turn ends was never answered.
+            for (id, at) in questionAt {
+                if case .question(var q) = done[at].kind { q.state = .declined; done[at].kind = .question(q) }
+                questionAt[id] = nil
+            }
             if u["stop_reason"] as? String == "cancelled" {
                 flush()
                 done.append(ConversationItem(id: bid, kind: .status("Interrupted"), timestamp: lineTS))
