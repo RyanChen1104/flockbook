@@ -2,6 +2,7 @@
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
 import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, StatusLine, StyledRun, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
+import { monogram } from "./monogram.ts";
 
 const TOKEN_KEY = "flockbook.token", SIDE_KEY = "flockbook.side";
 const app = document.getElementById("app") as HTMLElement;
@@ -516,13 +517,6 @@ function dot(s: Status): HTMLElement {
   const el = h("span", { class: `dot ${s}`, role: "img", "aria-label": statusText[s] });
   el.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${glyphs[s]}</svg>`;   // fixed markup, no data
   return el;
-}
-/** "[ME] Meadow · Migration" -> "MM", "OpenAtlas" -> "OA" (the app's Monogram). */
-function monogram(raw: string): string {
-  let s = raw.replace(/^\[[^\]]*\]\s*/, "") || raw;
-  let words = s.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (words.length === 1) words = words[0].split(/(?=\p{Lu})/u);
-  return (words.length >= 2 ? words[0][0] + words[1][0] : s.slice(0, 2)).toUpperCase();
 }
 const canInput = (): boolean => state.level === "input";
 function toast(text: string): void {
