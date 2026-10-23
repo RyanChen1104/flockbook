@@ -12,21 +12,39 @@ public enum PlusAction: String, CaseIterable, Identifiable, Sendable {
 
     /// The stored choice; nothing stored or an unknown value: New tab.
     public init(stored: String?) {
-        self = .newTab
+        self = stored.flatMap(PlusAction.init(rawValue:)) ?? .newTab
     }
 
     /// The picker's name of the choice.
-    public var label: String { "New tab" }
+    public var label: String {
+        switch self {
+        case .newTab: "New tab"
+        case .splitRight: "Split right"
+        case .splitDown: "Split down"
+        }
+    }
 
     /// The + button's tooltip.
-    public var help: String { "New tab (⌘T)" }
+    public var help: String { self == .newTab ? "New tab (⌘T)" : label }
 
     /// The + button's accessibility label.
-    public var accessibilityLabel: String { "New Tab" }
+    public var accessibilityLabel: String {
+        switch self {
+        case .newTab: "New Tab"
+        case .splitRight: "Split Right"
+        case .splitDown: "Split Down"
+        }
+    }
 
     /// The direction of a split; nil for New tab.
-    public var split: SplitDirection? { nil }
+    public var split: SplitDirection? {
+        switch self {
+        case .newTab: nil
+        case .splitRight: .right
+        case .splitDown: .down
+        }
+    }
 
     /// What a click does: a split needs a pane to split; with none, a new tab.
-    public func resolved(hasPane: Bool) -> PlusAction { .newTab }
+    public func resolved(hasPane: Bool) -> PlusAction { split == nil || hasPane ? self : .newTab }
 }
