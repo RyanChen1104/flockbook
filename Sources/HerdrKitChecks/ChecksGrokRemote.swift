@@ -76,6 +76,33 @@ import Foundation
         fake.onInput = nil
     }
 
+    // One question: Grok shows no "[1/1]" count in its footer (Grok Build 1.0.67, live), only the keys and
+    // "Enter:submit"; several questions keep the count. Synthetic text in the live screen's shape.
+    let one = QuestionRequest(toolUseId: "call-q-1", agent: "grok", questions: [
+        .init(header: "", text: "Tea or coffee?", options: [.init(label: "Tea", detail: "Pick tea."), .init(label: "Coffee", detail: "Pick coffee.")]),
+    ])
+    func single(foot: String) -> String {
+        let pad = String(repeating: " ", count: 60)
+        return ["  ┃", "  ┃  Tea or coffee?", "  ┃", "  ┃",
+                "  ┃  1 (○) Tea     Pick tea.\(pad)█", "  ┃  2 (○) Coffee  Pick coffee.\(pad)█", "  ┃  z (○) Type your answer here", "  ┃",
+                "  ┃  \(foot)", "  ┃", "  Tab:next answer  │  Esc:scrollback  │  Shift+x:dismiss"].joined(separator: "\n")
+    }
+    let s1 = single(foot: "↑/↓ navigate · y copy\(String(repeating: " ", count: 60))Enter:submit")
+    check(QuestionAdapter.grokExact(one, question: 0, screen: s1), "grok one question: no count in the footer: the exact question")
+    check(QuestionAdapter.grokExact(one, question: 0, screen: single(foot: "[1/1] ↑/↓ navigate · y copy  Enter:submit")), "grok one question: with a count too")
+    check(!QuestionAdapter.grokExact(one, question: 0, screen: single(foot: "↑/↓ navigate · y copy  Enter:select")), "grok one question: Enter:select refused")
+    check(!QuestionAdapter.grokExact(q, question: 0, screen: picker("Which color?", [("Red", "Warm."), ("Blue", "Cool.")], at: 1)
+            .replacingOccurrences(of: "[1/2] ", with: "")), "grok two questions: no count refused")
+    for (name, gate) in [("phone", KeyGate(agent: agent, allowed: { true })), ("mac", nil)] as [(String, KeyGate?)] {
+        fake.agents = agents("g1"); fake.screen = s1
+        var sent: [String] = []
+        fake.onInput = { _, p in sent += input(p); fake.screen = idle }
+        var err: Error?
+        do { try await client.answerQuestion(paneId: "w1:p1", request: one, answers: [QuestionAnswer(picks: [1])], gate: gate) } catch { err = error }
+        check(err == nil && sent == ["2"], "grok one question (\(name)): the digit sent \(sent) \(String(describing: err))")
+        fake.onInput = nil
+    }
+
     // The permission card: Deny is Down, then Enter once the focus is on "No, reject"; each key gated.
     func prompt(focus: Int) -> String {
         let rows = ["Yes, and don't ask again for anything (always-approve mode)", "Yes, proceed", "No, reject (type to add feedback)", "Never allow: echo"]
