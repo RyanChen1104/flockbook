@@ -141,8 +141,10 @@ public struct RemoteHost: Sendable, Hashable {
     }
 
     /// A process that runs `command` on the host; the caller sets its pipes and runs it. `HERDR_*` variables are left out
-    /// (they would point a local herdr at the pane the app runs in).
+    /// (they would point a local herdr at the pane the app runs in). A command with a NUL is refused: an argument
+    /// cannot hold one, and a ksh93 /bin/sh would cut the command there.
     public func process(_ command: String) throws -> Process {
+        guard !command.utf8.contains(0) else { throw HerdrError.protocolError("The command for \(label) has a NUL byte.") }
         let dir = try Self.ensureRuntimeDir()
         let a = argv(command, controlDir: dir)
         let p = Process()

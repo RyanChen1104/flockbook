@@ -85,6 +85,15 @@ import Foundation
             check(got.ok && got.stdout == want.stdout && got.stderr.isEmpty,
                   "remote host: \(sh[0]) as the login shell does what sh -c script does (\(got.status) \(got.stderr.prefix(200)))")
         }
+        // The host's /bin/sh may be dash (Debian, Ubuntu), ksh or bash: the same word with each as the inner sh.
+        let inner = "exec /bin/sh -c "
+        check(word.hasPrefix(inner), "remote host: the word starts with \(inner)")
+        for sh in ["/bin/dash", "/bin/ksh", "/bin/bash"] {
+            guard FileManager.default.isExecutableFile(atPath: sh) else { print("skip: \(sh) as the inner sh (not installed)"); continue }
+            let got = try direct(["/bin/sh", "-c", "exec \(sh) -c " + word.dropFirst(inner.count)])
+            check(got.ok && got.stdout == want.stdout && got.stderr.isEmpty,
+                  "remote host: \(sh) as the inner sh does what sh -c script does (\(got.status) \(got.stderr.prefix(200)))")
+        }
         // fish (often not installed here): inside '…' it reads \\ and \' as escapes, so the word must have neither.
         // Read byte by byte (not by Character: a combining mark would hide a quote).
         let bs = Array(word.utf8), q = UInt8(ascii: "'"), bsl = UInt8(ascii: "\\")
@@ -116,6 +125,16 @@ import Foundation
         check(r.ok && r.stderr.isEmpty && split(r.stdout) == bytes, "remote host: quoted words come back byte for byte through run (\(r.stderr.prefix(200)))")
         // The quote is escaped even when a combining mark follows it (one Character, two scalars).
         check(Array(RemoteHost.quote("a'\u{301}b").utf8) == Array("'a'\\''\u{301}b'".utf8), "remote host: a quote before a combining mark is escaped")
+    }
+
+    // A command with a NUL is refused: argv cannot hold one, and ksh93 as /bin/sh cuts the command there.
+    do {
+        var why = ""
+        do { _ = try RemoteHost(via: .local).process("printf '%s' 'a\u{0}b'") } catch { why = "\(error)" }
+        check(why.contains("NUL"), "remote host: a command with a NUL is refused (\(why))")
+        var why2 = ""
+        do { _ = try await RemoteHost(via: .local).run("echo '\u{0}'") } catch { why2 = "\(error)" }
+        check(why2.contains("NUL"), "remote host: run refuses a NUL too (\(why2))")
     }
 
     // herdrCommand: no herdr on the host → exit 127 with the marker.
