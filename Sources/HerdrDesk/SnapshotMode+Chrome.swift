@@ -56,6 +56,30 @@ import SwiftUI
                  AppModel.createdTabID(before: ["a", "b"], after: ["a", "c", "b"]) == "c" && AppModel.createdTabID(before: ["a"], after: ["a"]) == nil)
             model.tabID = prev
         } else { step("preview has 2+ tabs", false) }
+        // The toolbar's + follows Settings > General (PlusAction): a split of the focused pane, or a tab when there is no
+        // pane. The sidebar's New tab row always opens a tab.
+        var splits: [String] = []
+        model.splitHook = { splits.append("\($1.rawValue) \($0.id)") }
+        let wsID = model.workspace?.id ?? "?", focused = model.tab.flatMap { model.focusedPaneID(in: $0) }
+        for action in PlusAction.allCases {
+            AppDefaults.store.set(action.rawValue, forKey: PlusAction.key)
+            calls = []; splits = []
+            model.plus()
+            let ok = action.split.map { splits == ["\($0.rawValue) \(focused ?? "?")"] && calls.isEmpty } ?? (calls == ["newTab \(wsID)"] && splits.isEmpty)
+            step("+ set to \(action.rawValue): \(calls + splits) (focused \(focused ?? "none"))", ok && focused != nil)
+        }
+        AppDefaults.store.set(PlusAction.splitDown.rawValue, forKey: PlusAction.key)
+        calls = []; splits = []
+        await click(row)
+        step("+ set to split down: the sidebar's New tab row still opens a tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
+        let keptTab = model.tabID
+        model.tabID = "no-such-tab"
+        calls = []; splits = []
+        model.plus()
+        step("+ set to split down, no pane to split: a new tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
+        model.tabID = keptTab
+        AppDefaults.store.removeObject(forKey: PlusAction.key)
+        model.splitHook = nil
         AppDefaults.store.set(false, forKey: AppSettings.allowInputKey)
         try? await Task.sleep(for: .milliseconds(400))
         calls = []
