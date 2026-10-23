@@ -126,10 +126,8 @@ struct ComposerTextView: NSViewRepresentable {
         tv.insertText(s, replacementRange: tv.selectedRange())
     }
     func focus() { if let tv = textView { tv.window?.makeFirstResponder(tv) } }
-    static func quoted(_ url: URL) -> String {
-        let p = url.path
-        return p.contains(where: { " ()'\"&;".contains($0) }) ? "'" + p.replacingOccurrences(of: "'", with: "'\\''") + "'" : p
-    }
+    /// A file's path for the message: as is when plain, else single-quoted (`ShellQuote`, per scalar).
+    static func quoted(_ url: URL) -> String { ShellQuote.quotedIfNeeded(url.path) }
 }
 
 /// Plain icon button with a hover background.

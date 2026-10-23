@@ -19,7 +19,7 @@ public enum ImagePaste {
         // Never paste a path with control characters (it could end the paste early).
         guard !directory.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7f...0x9f).contains($0.value) }) else { return [.text(message)] }
         let dir = NSRegularExpression.escapedPattern(for: directory)
-        let quotedDir = NSRegularExpression.escapedPattern(for: directory.replacingOccurrences(of: "'", with: "'\\''"))
+        let quotedDir = NSRegularExpression.escapedPattern(for: ShellQuote.escapedInside(directory))
         let name = "/(\(ownName))"
         guard let re = try? NSRegularExpression(pattern: "'\(quotedDir)\(name)'|(?<![^\\s])\(dir)\(name)(?![^\\s])") else { return [.text(message)] }
         let ns = message as NSString

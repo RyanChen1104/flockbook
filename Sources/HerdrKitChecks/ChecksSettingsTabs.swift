@@ -13,8 +13,8 @@ func checksSettingsTabs() async throws {
     check(placed.count == Set(placed).count, "settings tabs: no control is in two tabs (\(placed.map(\.rawValue)))")
     check(Set(placed) == Set(SettingsControl.allCases), "settings tabs: every control is in a tab (missing \(Set(SettingsControl.allCases).subtracting(placed).map(\.rawValue)))")
     check(SettingsTab.allCases.allSatisfy { !$0.controls.isEmpty }, "settings tabs: no empty tab")
-    check(SettingsTab.general.controls == [.machines, .window, .textSize, .readingWidth, .terminalColors],
-          "settings tabs: General holds the machine shown, the window look, reading and the terminal's colours")
+    check(SettingsTab.general.controls == [.machines, .window, .textSize, .readingWidth, .terminalColors, .plusButton],
+          "settings tabs: General holds the machine shown, the window look, reading, the terminal's colours and what + does")
     check(SettingsTab.agents.controls == [.allowInput, .statusLine, .claudeQuestions], "settings tabs: Agents holds input, the Claude status line and the question hook")
     check(SettingsTab.remote.controls == [.remoteAccess, .connectWith, .tailscaleSteps, .address, .devices, .pictures, .phoneNotifications, .agentCommand],
           "settings tabs: Remote holds pairing, pictures and notifications")
@@ -26,6 +26,20 @@ func checksSettingsTabs() async throws {
     check(SettingsTab(stored: nil) == .general, "settings tabs: nothing stored opens General")
     check(SettingsTab(stored: "") == .general && SettingsTab(stored: "Remote") == .general && SettingsTab(stored: "privacy") == .general,
           "settings tabs: an unknown stored value opens General")
+
+    // The toolbar's +: New tab unless the owner chose a split; a split with no pane to split opens a tab.
+    check(PlusAction.key == "plusAction" && PlusAction.allCases == [.newTab, .splitRight, .splitDown], "plus button: New tab, Split right, Split down; stored under plusAction")
+    check(PlusAction(stored: nil) == .newTab && PlusAction(stored: "") == .newTab && PlusAction(stored: "splitLeft") == .newTab,
+          "plus button: nothing stored or an unknown value: New tab")
+    check(PlusAction(stored: "splitRight") == .splitRight && PlusAction(stored: "splitDown") == .splitDown && PlusAction(stored: "newTab") == .newTab,
+          "plus button: a stored choice comes back")
+    check(PlusAction.allCases.map(\.label) == ["New tab", "Split right", "Split down"], "plus button: the picker's names")
+    check(PlusAction.allCases.map(\.split) == [nil, .right, .down], "plus button: each split's direction")
+    check(PlusAction.allCases.map { $0.resolved(hasPane: true) } == [.newTab, .splitRight, .splitDown], "plus button: with a pane, each does what it says")
+    check(PlusAction.allCases.map { $0.resolved(hasPane: false) } == [.newTab, .newTab, .newTab], "plus button: no pane to split: a new tab")
+    check(PlusAction.allCases.map(\.help) == ["New tab (⌘T)", "Split right", "Split down"]
+          && PlusAction.allCases.map(\.accessibilityLabel) == ["New Tab", "Split Right", "Split Down"],
+          "plus button: the tooltip and the accessibility label follow the choice")
 
     // Each page opens with its icon, its title and one line on what it is for.
     check(SettingsTab.allCases.allSatisfy { !$0.summary.isEmpty && !$0.summary.contains("\n") && $0.summary.count <= 60 && $0.summary.hasSuffix(".") },

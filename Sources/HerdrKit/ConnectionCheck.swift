@@ -90,11 +90,7 @@ public enum ConnectionCheck {
     public static func usualFolders(home: String) -> [String] { [home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", home + "/.cargo/bin"] }
 
     /// `path` for a shell command line: as is when it has only safe characters, else in single quotes.
-    public static func shellQuoted(_ path: String) -> String {
-        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+=:@%,")
-        if !path.isEmpty, path.unicodeScalars.allSatisfy(safe.contains) { return path }
-        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
+    public static func shellQuoted(_ path: String) -> String { ShellQuote.quotedIfNeeded(path) }
 
     /// Why a terminal cannot start when `findHerdr` finds nothing.
     public static let notFound = "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin."

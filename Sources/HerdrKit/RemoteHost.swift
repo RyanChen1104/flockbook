@@ -50,18 +50,9 @@ public struct RemoteHost: Sendable, Hashable {
 
     // MARK: - Command lines
 
-    /// `s` in single quotes for /bin/sh (always quoted: safe for any bytes but NUL). Works on Unicode scalars, not
-    /// Characters: Swift's string search matches whole Characters, so a quote with a combining mark after it (one
-    /// Character, e.g. "'\u{301}") would not be found and would end the quoting.
-    public static func quote(_ s: String) -> String {
-        var out = String.UnicodeScalarView()
-        out.append("'")
-        for u in s.unicodeScalars {
-            if u == "'" { out.append(contentsOf: "'\\''".unicodeScalars) } else { out.append(u) }
-        }
-        out.append("'")
-        return String(out)
-    }
+    /// `s` in single quotes for /bin/sh (always quoted: safe for any bytes but NUL). `ShellQuote.quoted`: per Unicode
+    /// scalar, so a quote with a combining mark after it is escaped too.
+    public static func quote(_ s: String) -> String { ShellQuote.quoted(s) }
 
     /// A command line that runs `argv` as is: every word quoted.
     public static func commandLine(_ argv: [String]) -> String { argv.map(quote).joined(separator: " ") }

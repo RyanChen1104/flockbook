@@ -63,7 +63,7 @@ public enum ClaudeQuestionHook {
 
     /// `s` in single quotes for /bin/sh.
     public static func shellQuoted(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        ShellQuote.quoted(s)
     }
 
     /// The hook's records folder: read, and cleaned of old files. The hook writes; the app only reads and removes

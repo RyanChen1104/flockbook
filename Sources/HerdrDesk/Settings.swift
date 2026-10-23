@@ -18,6 +18,7 @@ struct SettingsView: View {
     @AppStorage(ReadingWidth.key, store: AppDefaults.store) private var readingWidth = ReadingWidth.medium.rawValue
     @AppStorage(ReadingSize.key, store: AppDefaults.store) private var readingSize = ReadingSize.m.rawValue
     @AppStorage(TerminalColors.key, store: AppDefaults.store) private var terminalColors = TerminalColors.flockbook.rawValue
+    @AppStorage(PlusAction.key, store: AppDefaults.store) private var plusAction = PlusAction.newTab.rawValue
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
@@ -120,6 +121,15 @@ struct SettingsView: View {
             }
             .settingsControl(.terminalColors)
             .onChange(of: value, initial: true) { _, v in SettingsProbe.terminalColors = v }
+        }
+        SettingsGroup("Toolbar", note: "A split splits the focused pane. ⌘T, the menu's New Tab and the sidebar's New tab always open a tab.") {
+            SettingsRow("+ button") {
+                Picker("+ button", selection: $plusAction) {
+                    ForEach(PlusAction.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            .settingsControl(.plusButton)
         }
     }
 
