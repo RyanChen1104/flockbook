@@ -206,27 +206,50 @@ public actor HerdrClient {
     }
 
     /// One-way stream without reconnect. `TerminalSession(mode: .observe)` is the same with reconnect and size.
-
-    nonisolated public func observe(terminalId: String) -> AsyncThrowingStream<TerminalFrame, Error> {
+    /// A remote session runs the host's herdr (`remoteCommand`, checks pass a fake); no herdr there ends it with an error.
+    nonisolated public func observe(terminalId: String, remoteCommand: TerminalSession.RemoteCommand? = nil) -> AsyncThrowingStream<TerminalFrame, Error> {
         let prefix = session.cliPrefix
         let isNamed = session.name != nil
+        let name = session.name, host = session.remote
         return AsyncThrowingStream { cont in
-            let proc = Process()
-            guard let herdr = ConnectionCheck.findHerdr() else { cont.finish(throwing: HerdrError.socket(ConnectionCheck.notFound)); return }
-            proc.executableURL = URL(fileURLWithPath: herdr)
-            proc.arguments = prefix + ["terminal", "session", "observe", terminalId]
-            var env = ProcessInfo.processInfo.environment
-            if isNamed { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
-            env["PATH"] = TerminalSession.childPath(environment: env, home: NSHomeDirectory())
-            proc.environment = env
+            if let why = TerminalSession.idProblem(terminalId) { cont.finish(throwing: HerdrError.protocolError(why)); return }
+            let words = TerminalSession.arguments(terminalId: terminalId, mode: .observe, cols: nil, rows: nil)
+            let proc: Process
+            let errText = Locked("")
+            if let host {
+                let command = remoteCommand.map { $0(name, words) } ?? RemoteHost.herdrCommand(session: name, words)
+                do { proc = try host.process(command) } catch {
+                    cont.finish(throwing: error); return
+                }
+                // stdin stays open (never the app's own stdin): ssh would send EOF, or read what is not its own
+                proc.standardInput = Pipe()
+                let err = Pipe()
+                proc.standardError = err
+                err.fileHandleForReading.readabilityHandler = { h in
+                    let d = h.availableData
+                    if d.isEmpty { h.readabilityHandler = nil; return }
+                    errText.update { if $0.utf8.count < 8192 { $0 += String(decoding: d, as: UTF8.self) } }
+                }
+            } else {
+                proc = Process()
+                guard let herdr = ConnectionCheck.findHerdr() else { cont.finish(throwing: HerdrError.socket(ConnectionCheck.notFound)); return }
+                proc.executableURL = URL(fileURLWithPath: herdr)
+                proc.arguments = prefix + words
+                var env = ProcessInfo.processInfo.environment
+                if isNamed { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
+                env["PATH"] = TerminalSession.childPath(environment: env, home: NSHomeDirectory())
+                proc.environment = env
+                proc.standardError = FileHandle.nullDevice
+            }
             let out = Pipe()
             proc.standardOutput = out
-            proc.standardError = FileHandle.nullDevice
+            let framed = Locked(false)
             let reader = LineAccumulator { line in
                 guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
                 switch o["type"] as? String {
                 case "terminal.frame":
                     let b64 = o["bytes"] as? String ?? ""
+                    framed.set(true)
                     cont.yield(TerminalFrame(
                         seq: o["seq"] as? Int ?? 0, full: o["full"] as? Bool ?? false,
                         width: o["width"] as? Int ?? 0, height: o["height"] as? Int ?? 0,
@@ -238,10 +261,22 @@ public actor HerdrClient {
             }
             out.fileHandleForReading.readabilityHandler = { h in
                 let d = h.availableData
-                if d.isEmpty { h.readabilityHandler = nil; cont.finish(); return }
+                // a host run that ends before any frame finishes in the termination handler, with the reason
+                if d.isEmpty { h.readabilityHandler = nil; if host == nil || framed.get() { cont.finish() }; return }
                 reader.feed(d)
             }
-            proc.terminationHandler = { _ in cont.finish() }
+            proc.terminationHandler = { p in
+                // a host run that ended before any frame: say why (stderr gets a moment to arrive)
+                guard let host, !framed.get() else { cont.finish(); return }
+                let status = p.terminationStatus
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                    // frames still in the pipe at exit: the stdout end finishes the stream
+                    if framed.get() { cont.finish(); return }
+                    if let problem = TerminalSession.remoteProblem(status: status, stderr: errText.get(), host: host.label) {
+                        cont.finish(throwing: HerdrError.socket(problem.reason))
+                    } else { cont.finish() }
+                }
+            }
             cont.onTermination = { _ in
                 out.fileHandleForReading.readabilityHandler = nil
                 if proc.isRunning { proc.terminate() }

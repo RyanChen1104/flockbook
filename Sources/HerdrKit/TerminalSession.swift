@@ -17,8 +17,12 @@ public enum TerminalEvent: Sendable {
 /// One long-lived `herdr terminal session control|observe <terminal_id>` process. Input, resize and frames share its
 /// pipes, so a key press is one small pipe write (no socket per key). Control mode owns the terminal's input and size
 /// (herdr allows one controller; `takeover` steals it). Observe mode is read-only.
+/// For a session on a host (`HerdrSession.remote`) the process is the host's herdr through `RemoteHost.process`: the same
+/// JSON lines on stdio, so frames and input do not change.
 public final class TerminalSession: @unchecked Sendable {
     public enum Mode: Sendable, Equatable { case observe, control(takeover: Bool) }
+    /// The host command line for herdr session `session` (nil: default) and herdr's words `args`. Checks replace it.
+    public typealias RemoteCommand = @Sendable (_ session: String?, _ args: [String]) -> String
 
     public let terminalId: String
     public let mode: Mode
@@ -31,6 +35,9 @@ public final class TerminalSession: @unchecked Sendable {
     private let cliPrefix: [String]
     private let find: @Sendable () -> String?
     private let stripHerdrEnv: Bool
+    private let sessionName: String?
+    private let host: RemoteHost?
+    private let remoteCommand: RemoteCommand
     private let lock = NSLock()
     private var proc: Process?
     private var stdin: FileHandle?
@@ -43,14 +50,19 @@ public final class TerminalSession: @unchecked Sendable {
     private var bracketed = true      // herdr frames do not carry DEC private modes (see README); assume yes until a frame says ?2004l
 
     /// `launcher` replaces `<herdr> --session <name>` (tests use a fake script). `find` gives herdr's full path.
+    /// A remote session (`session.remote`) uses neither: it runs `remoteCommand` on the host (checks pass a fake herdr).
     public init(terminalId: String, session: HerdrSession, mode: Mode = .control(takeover: false),
-                cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil, find: @escaping @Sendable () -> String? = { ConnectionCheck.findHerdr() }) {
+                cols: Int? = nil, rows: Int? = nil, launcher: [String]? = nil, find: @escaping @Sendable () -> String? = { ConnectionCheck.findHerdr() },
+                remoteCommand: RemoteCommand? = nil) {
         self.terminalId = terminalId
         self.mode = mode
         self.launcher = launcher
         self.cliPrefix = session.cliPrefix
         self.find = find
         self.stripHerdrEnv = session.name != nil
+        self.sessionName = session.name
+        self.host = session.remote
+        self.remoteCommand = remoteCommand ?? { s, a in TerminalSession.remoteCommand(session: s, a) }
         self.wantCols = cols.flatMap { $0 > 0 ? $0 : nil }
         self.wantRows = rows.flatMap { $0 > 0 ? $0 : nil }
         (events, cont) = AsyncStream.makeStream(of: TerminalEvent.self, bufferingPolicy: .unbounded)
@@ -70,6 +82,49 @@ public final class TerminalSession: @unchecked Sendable {
     static func launcher(session: HerdrSession, environment: [String: String], home: String) -> [String]? {
         ConnectionCheck.findHerdr(environment: environment, home: home).map { [$0] + session.cliPrefix }
     }
+    /// herdr's words after the program (and `--session`): mode, terminal id, `--takeover`, size.
+    static func arguments(terminalId: String, mode: Mode, cols: Int?, rows: Int?) -> [String] {
+        var args = ["terminal", "session", mode == .observe ? "observe" : "control", terminalId]
+        if case .control(let takeover) = mode, takeover { args.append("--takeover") }
+        if let cols { args += ["--cols", String(cols)] }
+        if let rows { args += ["--rows", String(rows)] }
+        return args
+    }
+
+    /// The host command line: `RemoteHost.herdrCommand` finds herdr there and quotes every word.
+    public static func remoteCommand(session: String?, _ args: [String]) -> String { RemoteHost.herdrCommand(session: session, args) }
+
+    /// Why `id` is not a terminal id to pass on; nil: fine. herdr's ids are short words such as `term_a` or `w1:p2`;
+    /// a leading "-" (an option), white space and shell characters are refused, even though every word is quoted.
+    public static func idProblem(_ id: String) -> String? {
+        let ok = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:.-")
+        if id.isEmpty || id.utf8.count > 128 || id.hasPrefix("-") || !id.unicodeScalars.allSatisfy(ok.contains) {
+            return "not a herdr terminal id: \(id.debugDescription.prefix(40))"
+        }
+        return nil
+    }
+
+    /// A failed host run before any frame, in plain words: nil when it is not an ssh or missing-herdr problem.
+    /// `final`: retrying will not help (no herdr, login refused, host key unknown or changed); otherwise the host may come back.
+    /// ssh exits 255 for its own failures. (Small on purpose; the API relay has the full classifier.)
+    static func remoteProblem(status: Int32, stderr: String, host: String) -> (reason: String, final: Bool)? {
+        if status == 127 && stderr.contains(RemoteHost.herdrMissingMarker) { return ("herdr is not installed on \(host).", true) }
+        guard status == 255 else { return nil }
+        let e = stderr.lowercased()
+        if e.contains("host key verification failed") || e.contains("remote host identification has changed") || e.contains("host key is known") {
+            return ("The host key of \(host) is unknown or has changed. Run `ssh \(host)` once in Terminal to check it.", true)
+        }
+        if e.contains("permission denied") || e.contains("too many authentication failures") {
+            return ("ssh could not log in to \(host). Add your key with `ssh-add`, or run `ssh \(host)` once in Terminal.", true)
+        }
+        if e.contains("could not resolve hostname") { return ("Can't find the host \(host).", false) }
+        for s in ["connection refused", "timed out", "no route to host", "network is unreachable", "connection closed", "connection reset"] where e.contains(s) {
+            return ("Can't reach \(host) (\(s)).", false)
+        }
+        let last = stderr.split(whereSeparator: \.isNewline).last.map(String.init) ?? "exit 255"
+        return ("ssh to \(host) failed: \(last)", false)
+    }
+
     /// `PATH` for the herdr process: the app's, then the usual install folders it lacks.
     static func childPath(environment: [String: String], home: String) -> String {
         let have = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
@@ -198,29 +253,38 @@ public final class TerminalSession: @unchecked Sendable {
 
     private func runOnce(onFrame: @escaping @Sendable () -> Void) async -> Outcome {
         let (cols, rows) = lock.withLock { () -> (Int?, Int?) in (wantCols, wantRows) }
-        guard let argvPrefix = launcher ?? find().map({ [$0] + cliPrefix }) else {
-            if lock.withLock({ showed }) { cont.yield(.notice(ConnectionCheck.notFound)); return .retry }
-            cont.yield(.failed(reason: ConnectionCheck.notFound))
-            return .final
+        if let why = Self.idProblem(terminalId) { cont.yield(.failed(reason: why)); return .final }
+        let words = Self.arguments(terminalId: terminalId, mode: mode, cols: cols, rows: rows)
+        let p: Process
+        if let host {
+            // the host's herdr; ssh (or sh for checks) and the env come from RemoteHost
+            do { p = try host.process(self.remoteCommand(sessionName, words)) } catch {
+                cont.yield(.failed(reason: "cannot start the terminal on \(host.label): \(error)"))
+                return .final
+            }
+        } else {
+            guard let argvPrefix = launcher ?? find().map({ [$0] + cliPrefix }) else {
+                if lock.withLock({ showed }) { cont.yield(.notice(ConnectionCheck.notFound)); return .retry }
+                cont.yield(.failed(reason: ConnectionCheck.notFound))
+                return .final
+            }
+            p = Process()
+            p.executableURL = URL(fileURLWithPath: argvPrefix[0])
+            p.arguments = Array(argvPrefix.dropFirst()) + words
+            var env = ProcessInfo.processInfo.environment
+            if stripHerdrEnv { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
+            env["PATH"] = Self.childPath(environment: env, home: NSHomeDirectory())
+            p.environment = env
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: argvPrefix[0])
-        var args = Array(argvPrefix.dropFirst())
-        args += ["terminal", "session", mode == .observe ? "observe" : "control", terminalId]
-        if case .control(let takeover) = mode, takeover { args.append("--takeover") }
-        if let cols { args += ["--cols", String(cols)] }
-        if let rows { args += ["--rows", String(rows)] }
-        p.arguments = args
-        var env = ProcessInfo.processInfo.environment
-        if stripHerdrEnv { for k in env.keys where k.hasPrefix("HERDR_") { env[k] = nil } }
-        env["PATH"] = Self.childPath(environment: env, home: NSHomeDirectory())
-        p.environment = env
+        let onHost = host
         let out = Pipe(), err = Pipe(), inp = Pipe()
         p.standardOutput = out; p.standardError = err; p.standardInput = inp
 
         let finalReason = Locked<String?>(nil)
         // Exit 127 before any frame: the program is not there (`env: herdr: …`) or cannot run. Final, with its last words.
         let framed = Locked(false), lastErr = Locked<String?>(nil), status = Locked<Int32>(0)
+        // a host run keeps all of stderr (bounded): ssh's reason is not always its last line
+        let allErr = Locked("")
         let outReader = LineAccumulator { [self] line in
             guard let o = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
             switch o["type"] as? String {
@@ -247,7 +311,11 @@ public final class TerminalSession: @unchecked Sendable {
             }
         }
         let errReader = LineAccumulator { [cont] line in
-            if let s = String(data: line, encoding: .utf8), !s.isEmpty { lastErr.set(s); cont.yield(.notice(s)) }
+            if let s = String(data: line, encoding: .utf8), !s.isEmpty {
+                lastErr.set(s)
+                if onHost != nil { allErr.update { if $0.utf8.count < 8192 { $0 += s + "\n" } } }
+                cont.yield(.notice(s))
+            }
         }
         // three things must finish: stdout EOF, stderr EOF (herdr's last words are all read) and process exit
         return await withCheckedContinuation { (k: CheckedContinuation<Outcome, Never>) in
@@ -255,6 +323,17 @@ public final class TerminalSession: @unchecked Sendable {
             let done: @Sendable () -> Void = { [self] in
                 guard pending.update({ $0 -= 1; return $0 }) == 0 else { return }
                 lock.withLock { proc = nil; stdin = nil }
+                // a host run that ended before any frame: ssh or the host side in plain words (a missing herdr after a
+                // frame is a moment, as on this Mac)
+                if let onHost, finalReason.get() == nil, !framed.get(),
+                   let problem = Self.remoteProblem(status: status.get(), stderr: allErr.get(), host: onHost.label) {
+                    if problem.final && !lock.withLock({ showed }) {
+                        finalReason.set(problem.reason)
+                        cont.yield(.failed(reason: problem.reason))
+                    } else {
+                        cont.yield(.notice(problem.reason))
+                    }
+                }
                 if finalReason.get() == nil, status.get() == 127, !framed.get(), !lock.withLock({ showed }) {
                     let why = lastErr.get() ?? "herdr could not start (exit 127)."
                     finalReason.set(why)
