@@ -96,7 +96,8 @@ public final class TerminalSession: @unchecked Sendable {
 
     /// Why `id` is not a terminal id to pass on; nil: fine. herdr's ids are short words such as `term_a` or `w1:p2`;
     /// a leading "-" (an option), white space and shell characters are refused, even though every word is quoted.
-    public static func idProblem(_ id: String) -> String? {
+    public static func idProblem(_ id: String, host: RemoteHost?) -> String? {
+        guard host != nil else { return nil }   // on this Mac the id is one argv word: no shell reads it
         let ok = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:.-")
         if id.isEmpty || id.utf8.count > 128 || id.hasPrefix("-") || !id.unicodeScalars.allSatisfy(ok.contains) {
             return "not a herdr terminal id: \(id.debugDescription.prefix(40))"
@@ -253,7 +254,7 @@ public final class TerminalSession: @unchecked Sendable {
 
     private func runOnce(onFrame: @escaping @Sendable () -> Void) async -> Outcome {
         let (cols, rows) = lock.withLock { () -> (Int?, Int?) in (wantCols, wantRows) }
-        if let why = Self.idProblem(terminalId) { cont.yield(.failed(reason: why)); return .final }
+        if let why = Self.idProblem(terminalId, host: host) { cont.yield(.failed(reason: why)); return .final }
         let words = Self.arguments(terminalId: terminalId, mode: mode, cols: cols, rows: rows)
         let p: Process
         if let host {

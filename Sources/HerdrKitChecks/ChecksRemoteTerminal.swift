@@ -21,9 +21,14 @@ import Foundation
           == RemoteHost.herdrCommand(session: "a b", ["terminal", "session", "observe", "term_a"]), "remote term: default command is herdrCommand")
 
     // Terminal ids: herdr's own (`term_a`, `w1:p2`); nothing ssh, sh or herdr could read as an option or a second word.
-    for good in ["term_a", "w1:p2", "term-3.x"] { check(TerminalSession.idProblem(good) == nil, "remote term: id \(good) accepted") }
+    let box = RemoteHost(via: .local)
+    for good in ["term_a", "w1:p2", "term-3.x"] { check(TerminalSession.idProblem(good, host: box) == nil, "remote term: id \(good) accepted") }
     for bad in ["", "-x", "--takeover", "a b", "a;b", "a$(b)", "a'b", "a\nb", String(repeating: "a", count: 300)] {
-        check(TerminalSession.idProblem(bad) != nil, "remote term: id \(bad.debugDescription.prefix(20)) refused")
+        check(TerminalSession.idProblem(bad, host: box) != nil, "remote term: id \(bad.debugDescription.prefix(20)) refused")
+    }
+    // On this Mac the id is one argv word (no shell): ids are passed as before remote support.
+    for any in ["term+1", "w/1", "a b", "x".padding(toLength: 300, withPad: "x", startingAt: 0)] {
+        check(TerminalSession.idProblem(any, host: nil) == nil, "remote term: local id \(any.prefix(20)) not restricted")
     }
 
     // ssh and the host side, in plain words. Auth and host keys are final; a host that does not answer is retried.

@@ -212,7 +212,7 @@ public actor HerdrClient {
         let isNamed = session.name != nil
         let name = session.name, host = session.remote
         return AsyncThrowingStream { cont in
-            if let why = TerminalSession.idProblem(terminalId) { cont.finish(throwing: HerdrError.protocolError(why)); return }
+            if let why = TerminalSession.idProblem(terminalId, host: host) { cont.finish(throwing: HerdrError.protocolError(why)); return }
             let words = TerminalSession.arguments(terminalId: terminalId, mode: .observe, cols: nil, rows: nil)
             let proc: Process
             let errText = Locked("")
