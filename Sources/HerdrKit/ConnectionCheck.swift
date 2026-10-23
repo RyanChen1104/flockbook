@@ -11,6 +11,8 @@ public enum ConnectionProblem: Sendable, Hashable {
     case noPermission(path: String)
     /// Any other connect error.
     case failed(path: String, reason: String)
+    /// herdr session `session` (nil: default) on `host` cannot be reached (`ConnectionCheck.diagnose(remote:)`).
+    case remote(RemoteProblem, host: RemoteHost, session: String?)
 }
 
 /// Read-only checks for the first run: the session's socket and the `herdr` program. Sends nothing to herdr.
@@ -29,6 +31,26 @@ public enum ConnectionCheck {
         case EACCES, EPERM: return .noPermission(path: path)
         default: return .failed(path: path, reason: String(cString: strerror(e)))
         }
+    }
+
+    /// `diagnose` for a session on another host. Runs `herdr remote-api-bridge --check` there once (`probe` replaces
+    /// that command in checks), then looks at the relay's last failed connection (`bridge`), then at the relay socket.
+    /// Sends nothing to herdr's API. Nil: all fine (the request failed for another reason).
+    public static func diagnose(remote session: HerdrSession, bridge: RemoteBridge?, probe: String? = nil,
+                                timeout: Duration = .seconds(20)) async -> ConnectionProblem? {
+        guard let host = session.remote else { return diagnose(session: session) }
+        func problem(_ p: RemoteProblem) -> ConnectionProblem { .remote(p, host: host, session: session.name) }
+        let command = probe ?? RemoteHost.herdrCommand(session: session.name, ["remote-api-bridge", "--check"])
+        let r: RemoteHost.Result
+        do { r = try await host.run(command, timeout: timeout) } catch { return problem(.other("\(error)")) }
+        guard r.ok else { return problem(.classify(status: r.status, stderr: r.stderr)) }
+        guard String(decoding: r.stdout, as: UTF8.self).contains(RemoteProblem.bridgeMarker) else { return problem(.bridgeUnsupported) }
+        // The probe reached herdr; the bridge itself says whether herdr's server runs. Only a recent failure counts.
+        if let f = bridge?.lastFailure, Date().timeIntervalSince(f.at) < 60 { return problem(f.problem) }
+        let path = session.socketPath
+        let e = await Task.detached { connectError(path) }.value
+        if e != 0 { return problem(.other("the relay socket does not answer: \(String(cString: strerror(e)))")) }
+        return nil
     }
 
     /// Connects to `path` once and closes again (no request). 0: a server listens; else the connect errno.
@@ -77,6 +99,13 @@ public enum ConnectionCheck {
     /// Why a terminal cannot start when `findHerdr` finds nothing.
     public static let notFound = "herdr not found on PATH or in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin."
 
+    /// `programWarning` for `session`. A session on another host needs no herdr program on this Mac (its terminals run
+    /// herdr on the host): nil.
+    public static func programWarning(session: HerdrSession, environment: [String: String] = ProcessInfo.processInfo.environment,
+                                      home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
+        session.remote == nil ? programWarning(environment: environment, home: home, usual: usual) : nil
+    }
+
     /// Connected but no `herdr` program where the app looks: the agents show, but terminals cannot start. Nil: found.
     public static func programWarning(environment: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory(), usual: [String]? = nil) -> String? {
         findHerdr(environment: environment, home: home, usual: usual) == nil ? "herdr program not found: terminals can't start" : nil
@@ -93,6 +122,16 @@ extension ConnectionProblem {
         case .notRunning: "herdr is not running"
         case .noPermission: "No access to herdr's socket"
         case .failed: "Cannot connect to herdr"
+        case .remote(let p, let host, _):
+            switch p {
+            case .auth: "SSH login to \(host.label) failed"
+            case .hostKey: "Check the host key of \(host.label)"
+            case .unreachable: "Cannot reach \(host.label)"
+            case .herdrMissing: "herdr is not installed on \(host.label)"
+            case .notRunning: "herdr is not running on \(host.label)"
+            case .bridgeUnsupported: "herdr on \(host.label) is too old"
+            case .other: "Cannot connect to herdr on \(host.label)"
+            }
         }
     }
 
@@ -102,6 +141,16 @@ extension ConnectionProblem {
         case .notRunning: "herdr Is Not Running"
         case .noPermission: "Cannot Open herdr's Socket"
         case .failed: "Cannot Connect to herdr"
+        case .remote(let p, _, _):
+            switch p {
+            case .auth: "SSH Login Failed"
+            case .hostKey: "Check the Host Key"
+            case .unreachable: "Cannot Reach the Host"
+            case .herdrMissing: "herdr Is Not Installed on the Host"
+            case .notRunning: "herdr Is Not Running on the Host"
+            case .bridgeUnsupported: "Update herdr on the Host"
+            case .other: "Cannot Connect to herdr on the Host"
+            }
         }
     }
 
@@ -116,15 +165,49 @@ extension ConnectionProblem {
             "macOS does not let Flockbook open \((path as NSString).abbreviatingWithTildeInPath). Quit herdr, start it again as your own user, then try again."
         case .failed(let path, let reason):
             "Connecting to \((path as NSString).abbreviatingWithTildeInPath) failed: \(reason). Quit herdr, start it again, then try again."
+        case .remote(let p, let host, _):
+            switch p {
+            case .auth:
+                "ssh could not log in to \(host.label) with a key. Flockbook never asks for a password. Load your key with ssh-add, then check that this command logs in from Terminal. Flockbook connects by itself after that."
+            case .hostKey:
+                "The host key of \(host.label) is unknown or has changed. Run this command once in Terminal, check the key, and accept it only if it is right. Flockbook never accepts a host key by itself."
+            case .unreachable(let why):
+                "Flockbook cannot reach \(host.label): \(why). Check the host name, the network and that the host is on. Flockbook tries again by itself."
+            case .herdrMissing:
+                "There is no herdr program on \(host.label). Install herdr on that host (on its PATH or in ~/.local/bin), start it there, then come back."
+            case .notRunning:
+                "herdr is installed on \(host.label) but does not run for this session. Start it with this command in Terminal, or start herdr on the host. Flockbook connects by itself when herdr starts."
+            case .bridgeUnsupported:
+                "herdr on \(host.label) has no remote API bridge. Update herdr on that host, start it again, then come back."
+            case .other(let why):
+                "Connecting to herdr on \(host.label) failed: \(why). Check that “ssh \(host.label)” works in Terminal and that herdr runs on the host."
+            }
         }
     }
 
     /// The command to copy into a terminal, if the next step is one.
     public var command: String? {
-        if case .notRunning(let c) = self { return c }
-        return nil
+        switch self {
+        case .notRunning(let c): return c
+        case .remote(let p, let host, let session):
+            // Only an ssh host has a command: `.local` (checks) has no destination.
+            guard case .ssh(let d) = host.via else { return nil }
+            let dest = ConnectionCheck.shellQuoted(d)
+            switch p {
+            case .auth, .hostKey: return "ssh " + dest
+            case .notRunning:
+                return (["herdr", "--remote", dest] + (session.map { ["--session", ConnectionCheck.shellQuoted($0)] } ?? [])).joined(separator: " ")
+            default: return nil
+            }
+        default: return nil
+        }
     }
 
     /// A page to open, if the next step is one.
-    public var link: URL? { self == .herdrMissing ? Self.herdrSite : nil }
+    public var link: URL? {
+        switch self {
+        case .herdrMissing, .remote(.herdrMissing, _, _): Self.herdrSite
+        default: nil
+        }
+    }
 }

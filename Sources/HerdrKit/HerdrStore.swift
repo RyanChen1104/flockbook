@@ -74,7 +74,8 @@ public final class HerdrStore {
     public init(session: HerdrSession) {
         self.session = session
         self.client = HerdrClient(session: session)
-        self.resolver = SessionResolver(socketPath: session.socketPath)
+        self.bridge = RemoteBridge(session: session)
+        self.resolver = SessionResolver(socketPath: session.socketPath, remote: session.remote)
     }
 
     // MARK: - Session fallback
@@ -175,12 +176,25 @@ public final class HerdrStore {
         syncLogs()
     }
 
+    // MARK: - Remote host
+
+    /// The local relay socket for a session on another host (nil: herdr on this Mac). Runs from `start` to `stop`.
+    @ObservationIgnored private let bridge: RemoteBridge?
+    /// A remote diagnosis runs a command on the host: one at a time.
+    @ObservationIgnored private var diagnosing = false
+
     public func start() {
         guard loop == nil else { return }
+        if let bridge, !isPreview {
+            do { try bridge.start() } catch {
+                if let host = session.remote { problem = .remote(.other("cannot open the relay socket: \(error)"), host: host, session: session.name) }
+            }
+        }
         loop = Task { [weak self] in await self?.run() }
     }
 
     public func stop() {
+        bridge?.stop()
         loop?.cancel(); loop = nil
         refreshTask?.cancel()
         for t in logTasks.values { t.cancel() }
@@ -195,7 +209,8 @@ public final class HerdrStore {
         connected = true
         if !snapshotted, !isPreview {
             Task { [weak self] in
-                let w = await Task.detached { ConnectionCheck.programWarning() }.value
+                let session = self?.session ?? .default()
+                let w = await Task.detached { ConnectionCheck.programWarning(session: session) }.value
                 self?.programWarning = w
             }
         }
@@ -213,7 +228,15 @@ public final class HerdrStore {
         } catch {
             connected = false
             let session = session
-            let found = await Task.detached { ConnectionCheck.diagnose(session: session) }.value
+            let found: ConnectionProblem?
+            if session.remote != nil {
+                guard !diagnosing else { return }
+                diagnosing = true
+                found = await ConnectionCheck.diagnose(remote: session, bridge: bridge)
+                diagnosing = false
+            } else {
+                found = await Task.detached { ConnectionCheck.diagnose(session: session) }.value
+            }
             if found != problem, !connected { problem = found }
         }
     }
@@ -277,10 +300,13 @@ public final class HerdrStore {
     // MARK: - Live loop
 
     /// Reconnect: first retry after 100 ms, then doubling up to 1 s. A local Unix socket connect costs microseconds,
-    /// so a short cap keeps the gap after a herdr restart under about a second.
+    /// so a short cap keeps the gap after a herdr restart under about a second. A remote host caps at 5 s: each try
+    /// starts an ssh.
     private func run() async {
         var delay: UInt64 = 100_000_000
         while !Task.isCancelled {
+            // The relay socket could not open in `start` (e.g. the runtime folder): try again before each connect.
+            if let bridge, !isPreview, !bridge.isRunning { try? bridge.start() }
             await refresh()
             let poll = Task { [weak self] in
                 while !Task.isCancelled {
@@ -297,7 +323,7 @@ public final class HerdrStore {
             } catch {}
             connected = false
             try? await Task.sleep(nanoseconds: delay)
-            delay = min(delay * 2, 1_000_000_000)
+            delay = min(delay * 2, session.remote == nil ? 1_000_000_000 : 5_000_000_000)
         }
     }
 
@@ -354,7 +380,7 @@ public final class HerdrStore {
     private func track(_ sessionId: String) {
         guard logTasks[sessionId] == nil else { return }
         let kind = workspaces.lazy.flatMap(\.tabs).flatMap(\.panes).compactMap(\.agent).first { $0.sessionId == sessionId }?.kind
-        let log = SessionLog(sessionId: sessionId, agent: kind ?? "claude")
+        let log = SessionLog(sessionId: sessionId, agent: kind ?? "claude", remote: session.remote)
         log.setFull(visibleOverride?.contains(sessionId) ?? true)   // touch() trims it when it is not the visible one
         logs[sessionId] = log
         logTasks[sessionId] = Task { [weak self] in
