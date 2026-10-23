@@ -56,6 +56,30 @@ import SwiftUI
                  AppModel.createdTabID(before: ["a", "b"], after: ["a", "c", "b"]) == "c" && AppModel.createdTabID(before: ["a"], after: ["a"]) == nil)
             model.tabID = prev
         } else { step("preview has 2+ tabs", false) }
+        // The toolbar's + follows Settings > General (PlusAction): a split of the focused pane, or a tab when there is no
+        // pane. The sidebar's New tab row always opens a tab.
+        var splits: [String] = []
+        model.splitHook = { splits.append("\($1.rawValue) \($0.id)") }
+        let wsID = model.workspace?.id ?? "?", focused = model.tab.flatMap { model.focusedPaneID(in: $0) }
+        // Spelled out, not from PlusAction: the check must not take its answer from the code it checks.
+        for (stored, want) in [("newTab", "newTab \(wsID)"), ("splitRight", "right \(focused ?? "?")"), ("splitDown", "down \(focused ?? "?")")] {
+            AppDefaults.store.set(stored, forKey: PlusAction.key)
+            calls = []; splits = []
+            model.plus()
+            step("+ set to \(stored): \(calls + splits) (focused \(focused ?? "none"))", calls + splits == [want] && focused != nil)
+        }
+        AppDefaults.store.set("splitDown", forKey: PlusAction.key)
+        calls = []; splits = []
+        await click(row)
+        step("+ set to split down: the sidebar's New tab row still opens a tab (\(calls + splits))", calls == ["newTab \(wsID)"] && splits.isEmpty)
+        let empty = AppModel(store: .previewEmptyWorkspace)
+        empty.newTabHook = { calls.append("newTab \($0.id)") }
+        empty.splitHook = { splits.append("\($1.rawValue) \($0.id)") }
+        calls = []; splits = []
+        empty.plus()
+        step("+ set to split down, no pane to split: a new tab (\(calls + splits))", calls == ["newTab w-empty"] && splits.isEmpty)
+        AppDefaults.store.removeObject(forKey: PlusAction.key)
+        model.splitHook = nil
         AppDefaults.store.set(false, forKey: AppSettings.allowInputKey)
         try? await Task.sleep(for: .milliseconds(400))
         calls = []
