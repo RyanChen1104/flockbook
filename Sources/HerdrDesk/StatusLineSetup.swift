@@ -3,8 +3,11 @@ import Foundation
 import Observation
 
 /// Settings > Agents > "Show Claude Code status line" (`ClaudeStatusLineSetting`). Claude Code's settings file changes
-/// only when the owner switches it on or off. The wrapper ships inside the app (Contents/MacOS/flockbook-statusline)
-/// and saves its records in the app's own Application Support folder.
+/// only when the owner switches it on or off. On this Mac the wrapper ships inside the app
+/// (Contents/MacOS/flockbook-statusline) and saves its records in the app's own Application Support folder. For a
+/// remote herdr Claude Code runs on the host: a POSIX sh wrapper goes into the host's ~/.config/flockbook, ours into
+/// the host's ~/.claude/settings.json, and the saved lines are read from there while a pane shows one
+/// (`RemoteStatusLine`).
 @MainActor @Observable final class StatusLineSetup {
     /// `moved`: the settings run an older copy's wrapper (the app moved since); On fixes the path.
     enum State: Equatable { case off, on, replaced, moved, problem(String) }
@@ -12,14 +15,32 @@ import Observation
     let settingsFile: URL
     let wrapperURL: URL
     let folder: StatusLineFolder
+    /// nil: this Mac.
+    let remote: RemoteHost?
     private(set) var state: State = .off
     private(set) var lastBackup: URL?
+    /// The host's paths, once its home folder is known (remote only).
+    private(set) var remotePaths: RemoteHookPaths?
+    /// The host's own command and its statusLine command now, from the last read (remote only).
+    private var remoteOwn: String?
+    private var remoteCurrent: String?
+    /// A remote read or write is running.
+    private(set) var busy = false
 
     /// Snapshots: a fixed state; nothing is read or written.
     private let previewState: State?
+    private let site: RemoteHookSite?
+    /// The host's saved lines per session, read at most every 2 s while a pane asks (remote only).
+    private let lines: RemotePoll<String, StatusLineRecord>?
 
-    init(settingsFile: URL, wrapperURL: URL, dir: URL, preview: State? = nil) {
+    init(settingsFile: URL, wrapperURL: URL, dir: URL, remote: RemoteHost? = nil, preview: State? = nil) {
         self.settingsFile = settingsFile; self.wrapperURL = wrapperURL; folder = .init(url: dir); previewState = preview
+        self.remote = remote
+        let site = remote.map { RemoteHookSite(host: $0) }
+        self.site = site
+        lines = site.map { site in
+            RemotePoll<String, StatusLineRecord>(every: 2) { session in await site.statusLine()?.record(session: session) }
+        }
         if let preview { state = preview }
     }
 
@@ -37,25 +58,54 @@ import Observation
             ?? URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
         return StatusLineSetup(settingsFile: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json"),
                                wrapperURL: exe.appendingPathComponent("flockbook-statusline"),
-                               dir: support.appendingPathComponent("Flockbook/statusline", isDirectory: true))
+                               dir: support.appendingPathComponent("Flockbook/statusline", isDirectory: true),
+                               remote: ClaudeHookSetup.launchRemote)
     }()
 
-    var command: String { ClaudeStatusLineSetting.command(wrapper: wrapperURL.path, dir: folder.url.path) }
+    /// Which machine's Claude Code this acts on, for Settings.
+    var machine: String { remote.map { "the host \($0.label)" } ?? "this Mac" }
 
-    /// Reads the settings file (read-only).
+    var command: String {
+        if remote != nil {
+            guard let p = remotePaths else { return ClaudeStatusLineSetting.command(wrapper: "~/.config/flockbook/statusline/flockbook-statusline", dir: "~/.config/flockbook/statusline/lines") }
+            return ClaudeStatusLineSetting.command(wrapper: p.statusWrapper, dir: p.statusDir)
+        }
+        return ClaudeStatusLineSetting.command(wrapper: wrapperURL.path, dir: folder.url.path)
+    }
+
+    /// The home folder shown as "~" in the sheet: the host's for a remote herdr.
+    var home: String { remote == nil ? FileManager.default.homeDirectoryForCurrentUser.path : remotePaths?.home ?? "~" }
+    /// The settings file and the wrapper, as Settings shows them ("~" for the home folder, and the machine).
+    var settingsLabel: String { remote == nil ? ClaudeHookSetup.tilde(settingsFile.path) : "~/.claude/settings.json on \(remote!.label)" }
+    var wrapperLabel: String {
+        guard let remote else { return ClaudeHookSetup.tilde(wrapperURL.path) }
+        return "~/.config/flockbook/statusline/flockbook-statusline on \(remote.label)"
+    }
+
+    /// Reads the settings file (read-only). Remote: in the background; the state follows when the host answers.
     func refresh() {
         guard previewState == nil else { return }
+        checked = Date()
+        if let site {
+            guard !busy else { return }
+            busy = true
+            Task {
+                defer { busy = false }
+                guard let sl = await site.statusLine() else { state = .problem("\(site.host.label) did not answer"); return }
+                remotePaths = sl.paths
+                do {
+                    set(try await sl.state())
+                    remoteOwn = await sl.ownCommand()
+                    remoteCurrent = await sl.currentCommand()
+                } catch { state = .problem("\(error)") }
+                if checked.timeIntervalSince(cleaned) > 24 * 3600 { cleaned = checked; await sl.clean() }
+            }
+            return
+        }
         do {
             let s = try ClaudeSettingsHook.read(settingsFile)
-            let now: State = switch ClaudeStatusLineSetting.state(s, command: command, wasOn: folder.wasOn) {
-            case .on: .on
-            case .moved: .moved
-            case .off: .off
-            case .replaced: .replaced
-            }
-            if now != state { state = now }
+            set(ClaudeStatusLineSetting.state(s, command: command, wasOn: folder.wasOn))
         } catch { state = .problem("\(error)") }
-        checked = Date()
         if checked.timeIntervalSince(cleaned) > 24 * 3600 {
             // Old records go once a day, the first time at start.
             cleaned = checked
@@ -64,18 +114,30 @@ import Observation
         }
     }
 
+    private func set(_ s: ClaudeStatusLineSetting.State) {
+        let now: State = switch s {
+        case .on: .on
+        case .moved: .moved
+        case .off: .off
+        case .replaced: .replaced
+        }
+        if now != state { state = now }
+    }
+
     @ObservationIgnored private var cleaned = Date.distantPast
 
     @ObservationIgnored private var checked = Date.distantPast
     /// `refresh` at most every few seconds: the panes ask on each read, and `/statusline` may change the file any time.
+    /// A host's file is read every 30 s (each read is a round trip).
     func refreshIfStale() {
-        if Date().timeIntervalSince(checked) > 5 { refresh() }
+        if Date().timeIntervalSince(checked) > (remote == nil ? 5 : 30) { refresh() }
     }
 
     /// The owner switched it on (or on again after `/statusline` replaced ours): their statusLine is kept and ours
     /// goes in its place (the file backed up first). Moved: only the path changes.
     func turnOn() {
         guard previewState == nil else { return }
+        if site != nil { remoteApply(on: true); return }
         guard FileManager.default.isExecutableFile(atPath: wrapperURL.path) else {
             state = .problem("flockbook-statusline is missing next to the app"); return
         }
@@ -88,6 +150,7 @@ import Observation
     /// The owner switched it off: their own statusLine goes back.
     func turnOff() {
         guard previewState == nil else { return }
+        if site != nil { remoteApply(on: false); return }
         do {
             if state == .replaced { folder.forgetOriginal(); folder.clean() }   // theirs is in already; only our note goes
             else { lastBackup = try ClaudeStatusLineSetting.apply(on: false, file: settingsFile, command: command, folder: folder) ?? lastBackup }
@@ -95,24 +158,47 @@ import Observation
         } catch { state = .problem("\(error)") }
     }
 
+    /// On or off on the host. The backup stays on the host, next to its settings file.
+    private func remoteApply(on: Bool) {
+        guard let site, !busy else { return }
+        busy = true
+        let replaced = state == .replaced
+        Task {
+            defer { busy = false; lines?.reset() }
+            guard let sl = await site.statusLine() else { state = .problem("\(site.host.label) did not answer"); return }
+            remotePaths = sl.paths
+            do {
+                if !on && replaced { await sl.forget() } else { try await sl.apply(on: on) }
+                set(try await sl.state())
+                remoteOwn = await sl.ownCommand()
+                remoteCurrent = await sl.currentCommand()
+                checked = Date()
+            } catch { state = .problem("\(error)") }
+        }
+    }
+
     /// What the owner's statusLine is now, for the sheet.
     var originalSummary: String? {
         guard previewState == nil else { return "sh ~/.claude/statusline.sh" }
+        if remote != nil { return state == .on || state == .moved ? remoteOwn : remoteCurrent }
         return state == .on || state == .moved ? folder.originalCommand() : currentCommand
     }
 
     /// The statusLine command in the settings file now.
     var currentCommand: String? {
         guard previewState == nil else { return state == .moved ? "'/Volumes/Flockbook/Flockbook.app/Contents/MacOS/flockbook-statusline' --dir '…'" : nil }
+        if remote != nil { return remoteCurrent }
         return (try? ClaudeSettingsHook.read(settingsFile)).flatMap { ($0["statusLine"] as? [String: Any])?["command"] as? String }
     }
 
-    /// A session's saved line, while ours is on.
+    /// A session's saved line, while ours is on. Remote: the last line read from the host (a read starts when it is
+    /// over 2 s old), so only panes that ask cause reads.
     func record(session: String) -> StatusLineRecord? {
         if let r = StatusLineProbe.injected[session] { return r }   // offscreen shots only (empty in the app)
         guard previewState == nil else { return nil }
         refreshIfStale()
         guard state == .on || state == .moved else { return nil }
+        if let lines { return lines.value(session) }
         return folder.record(session: session)
     }
 }

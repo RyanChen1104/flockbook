@@ -20,6 +20,7 @@ struct StatusLineRow: View {
             .settingsControl(.statusLine)
         }
         .sheet(isPresented: $sheet) { StatusLineSheet(setup: setup) }
+        .disabled(setup.busy)
         .onAppear { setup.refresh() }
     }
 
@@ -37,11 +38,11 @@ struct StatusLineRow: View {
 
     private var note: String {
         switch setup.state {
-        case .off: "Off. Shows the line Claude Code draws under its prompt under each Claude composer, and on the phone."
-        case .on: "On. Claude Code runs your own status line through Flockbook, and shows it as before."
+        case .off: "Off for Claude Code on \(setup.machine). Shows the line Claude Code draws under its prompt under each Claude composer, and on the phone."
+        case .on: "On for Claude Code on \(setup.machine). Claude Code runs your own status line through Flockbook, and shows it as before."
         case .replaced: "Claude Code's status line was changed since (for example with /statusline). Switch this on again to show the new one."
         case .moved: "Needs fixing: Flockbook moved since this was switched on, and Claude Code still runs the old copy's command."
-        case .problem(let m): "Could not read Claude Code's settings: \(m)."
+        case .problem(let m): "Could not read Claude Code's settings on \(setup.machine): \(m)."
         }
     }
 }
@@ -56,7 +57,6 @@ struct StatusLineSheet: View {
         // Replaced (or the file unreadable): Stop is the way out; nothing of ours may be in the file.
         let stop = setup.state == .replaced || { if case .problem = setup.state { true } else { false } }()
         let on = setup.state == .on || moved
-        let tilde = ClaudeHookSheet.tilde
         VStack(alignment: .leading, spacing: 12) {
             Text(moved ? "Fix the Status Line Command" : on ? "Stop Showing the Status Line" : "Show Claude Code's Status Line").font(.title3.weight(.semibold))
             Text(moved ? "Flockbook was moved since the status line was switched on. Claude Code still runs the command at the old place, which may be gone. Fix puts this copy's path in its place; your own status line and everything else stay."
@@ -81,7 +81,7 @@ struct StatusLineSheet: View {
             }
             .font(.callout).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-            Text("Changed in " + tilde(setup.settingsFile.path) + ":").font(.callout.weight(.medium))
+            Text("Changed in " + setup.settingsLabel + ":").font(.callout.weight(.medium))
             ScrollView([.horizontal, .vertical]) {
                 Text(preview(on: on)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     .padding(10).frame(maxWidth: .infinity, alignment: .leading)
@@ -89,7 +89,7 @@ struct StatusLineSheet: View {
             .frame(height: moved ? 150 : 190)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-            Text("Command: \(tilde(setup.wrapperURL.path))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("Command: \(setup.wrapperLabel)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -119,7 +119,7 @@ struct StatusLineSheet: View {
         func json(_ v: Any?) -> String {
             guard let v else { return "(none)" }
             let d = (try? JSONSerialization.data(withJSONObject: ["statusLine": v], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
-            return String(decoding: d, as: UTF8.self).replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+            return String(decoding: d, as: UTF8.self).replacingOccurrences(of: setup.home, with: "~")
         }
         if setup.state == .moved {
             return "Now:\n\(json(setup.currentCommand.map { ["type": "command", "command": $0] }))\n\nAfter:\n\(json(ours))"

@@ -15,6 +15,7 @@ struct ClaudeHookRow: View {
             .settingsControl(.claudeQuestions)
         }
         .sheet(isPresented: $sheet) { ClaudeHookSheet(setup: setup) }
+        .disabled(setup.busy)
         .onAppear { setup.refresh() }
     }
 
@@ -30,9 +31,9 @@ struct ClaudeHookRow: View {
 
     private var note: String {
         switch setup.state {
-        case .off: "Off. Claude Code questions are answered on the Mac. Codex questions work from the phone already."
-        case .on: "On. Claude sessions started from now on save each question for Flockbook."
-        case .problem(let m): "Could not read Claude Code's settings: \(m)."
+        case .off: "Off for Claude Code on \(setup.machine). Claude Code questions are answered on the Mac. Codex questions work from the phone already."
+        case .on: "On for Claude Code on \(setup.machine). Claude sessions started from now on save each question for Flockbook."
+        case .problem(let m): "Could not read Claude Code's settings on \(setup.machine): \(m)."
         }
     }
 }
@@ -56,7 +57,7 @@ struct ClaudeHookSheet: View {
                 Label("Claude sessions started after this use it. Restart a running session to include it.", systemImage: "arrow.clockwise")
             }
             .font(.callout).foregroundStyle(.secondary)
-            Text(on ? "Removed from \(Self.tilde(setup.settingsFile.path)):" : "Added to \(Self.tilde(setup.settingsFile.path)):").font(.callout.weight(.medium))
+            Text(on ? "Removed from \(setup.settingsLabel):" : "Added to \(setup.settingsLabel):").font(.callout.weight(.medium))
             ScrollView([.horizontal, .vertical]) {
                 Text(setup.preview).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     .padding(10).frame(maxWidth: .infinity, alignment: .leading)
@@ -64,7 +65,7 @@ struct ClaudeHookSheet: View {
             .frame(height: 170)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-            Text("Script: \(Self.tilde(setup.scriptURL.path))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("Script: \(setup.scriptLabel)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)

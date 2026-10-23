@@ -512,8 +512,11 @@ public struct StatusLineFolder: Sendable {
     public func forgetOriginal() { try? FileManager.default.removeItem(at: originalFile) }
 
     /// The owner's own command, when their statusLine is a command.
-    public func originalCommand() -> String? {
-        guard let o = original(), (o["type"] as? String ?? "command") == "command", let c = o["command"] as? String,
+    public func originalCommand() -> String? { Self.ownCommand(original()) }
+
+    /// The command of an owner's statusLine `line`, when it is a command and not a Flockbook wrapper.
+    static func ownCommand(_ line: [String: Any]?) -> String? {
+        guard let o = line, (o["type"] as? String ?? "command") == "command", let c = o["command"] as? String,
               !c.trimmingCharacters(in: .whitespaces).isEmpty, !ClaudeStatusLineSetting.runsWrapper(c) else { return nil }
         return c
     }
