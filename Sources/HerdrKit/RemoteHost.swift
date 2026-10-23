@@ -50,8 +50,18 @@ public struct RemoteHost: Sendable, Hashable {
 
     // MARK: - Command lines
 
-    /// `s` in single quotes for /bin/sh (always quoted: safe for any bytes but NUL).
-    public static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    /// `s` in single quotes for /bin/sh (always quoted: safe for any bytes but NUL). Works on Unicode scalars, not
+    /// Characters: Swift's string search matches whole Characters, so a quote with a combining mark after it (one
+    /// Character, e.g. "'\u{301}") would not be found and would end the quoting.
+    public static func quote(_ s: String) -> String {
+        var out = String.UnicodeScalarView()
+        out.append("'")
+        for u in s.unicodeScalars {
+            if u == "'" { out.append(contentsOf: "'\\''".unicodeScalars) } else { out.append(u) }
+        }
+        out.append("'")
+        return String(out)
+    }
 
     /// A command line that runs `argv` as is: every word quoted.
     public static func commandLine(_ argv: [String]) -> String { argv.map(quote).joined(separator: " ") }
@@ -108,16 +118,27 @@ public struct RemoteHost: Sendable, Hashable {
          "-o", "PermitLocalCommand=no"]
     }
 
-    /// `command` as the one word sshd hands to the host user's login shell (`$SHELL -c`), which may be csh, tcsh, zsh
-    /// or fish: `exec /bin/sh -c '…'`, so the POSIX command line always runs in sh. The word is one line, has no "!",
-    /// and inside its quotes no backslash comes before a quote or a backslash (csh refuses a newline in quotes and
-    /// expands "!" even there; fish reads `\\` and `\'` as escapes). So newline, backslash, quote and "!" travel as
-    /// bytes 1 to 4, and `tr` turns them back before sh evals the command. Command lines here never hold bytes 1 to 4
-    /// (they would come back as those four), so a word is never wrapped twice.
+    /// `command` as the one word sshd hands to the host user's login shell (`$SHELL -c`), which may be sh, bash, zsh,
+    /// dash, ksh, csh, tcsh or fish: `exec /bin/sh -c 'eval "$(printf '…')"'`, so the command always runs in sh, byte
+    /// for byte. Each byte of the command that is not a letter, digit or one of ` _./:=@,+` is written as a printf
+    /// octal escape (`\NNN`; "-" too, so the format never starts like an option). So the word is one line of
+    /// printable ASCII with no "!" (csh refuses a newline in quotes and expands "!" even there), and inside its quotes
+    /// a backslash is only ever followed by a digit (fish reads `\\` and `\'` as escapes there). Works on UTF-8 bytes,
+    /// so no Character or code point can hide a byte.
     public static func loginShellWord(_ command: String) -> String {
-        let coded = command.replacingOccurrences(of: "\n", with: "\u{1}").replacingOccurrences(of: "\\", with: "\u{2}")
-            .replacingOccurrences(of: "'", with: "\u{3}").replacingOccurrences(of: "!", with: "\u{4}")
-        return "exec /bin/sh -c " + quote("eval \"$(printf '%s' '\(coded)' | tr '\\001\\002\\003\\004' '\\012\\134\\047\\041')\"")
+        var fmt = String.UnicodeScalarView()
+        for b in command.utf8 {
+            switch b {
+            case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "0")...UInt8(ascii: "9"),
+                 UInt8(ascii: " "), UInt8(ascii: "_"), UInt8(ascii: "."), UInt8(ascii: "/"),
+                 UInt8(ascii: ":"), UInt8(ascii: "="), UInt8(ascii: "@"), UInt8(ascii: ","), UInt8(ascii: "+"):
+                fmt.append(UnicodeScalar(b))
+            default:
+                let o = String(b, radix: 8)
+                fmt.append(contentsOf: ("\\" + String(repeating: "0", count: 3 - o.count) + o).unicodeScalars)
+            }
+        }
+        return "exec /bin/sh -c " + quote("eval \"$(printf '" + String(fmt) + "')\"")
     }
 
     /// The program and arguments that run `command` on the host.

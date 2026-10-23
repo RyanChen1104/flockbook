@@ -28,8 +28,39 @@ import Foundation
         check(!opts.contains("StrictHostKeyChecking=no") && !opts.contains("accept-new"), "remote host: host keys are never accepted blindly")
     }
 
-    // sshd hands the command line to the host user's login shell ($SHELL -c). Whatever that shell is (csh, tcsh, zsh,
-    // fish), the POSIX script must run in /bin/sh as is: multi-line, quotes, backslashes, "!", $(…), loops.
+    // Words that broke quoting that matched characters, not bytes: a quote, backslash or "!" with a combining mark
+    // after it is one Character; control bytes (1 to 4 were once a private code); "%" (a printf format); non-ASCII.
+    // The two probes would run a command if a quote came undone.
+    let oddWords = ["it's", "a'\u{301}b", "x'\u{301}$(echo INJECTED >&2)'\u{301}", "x\u{3};echo PWNED >&2;\u{3}", "!\u{338}", "\\\u{301}",
+                    "100%", "%s%n", "é 中文 🐑", "new\nline", "back\\slash", "!bang", "`id`", "$HOME"]
+        + (1...31).map { String(UnicodeScalar(UInt8($0))) }
+    // A program started as sshd starts the login shell: no shell of ours in between. posix_spawn, not Process:
+    // Process passes arguments in decomposed form ("é" c3 a9 arrives as 65 cc 81), which would change the words.
+    func direct(_ argv: [String]) throws -> RemoteHost.Result {
+        var out: [Int32] = [0, 0], err: [Int32] = [0, 0]
+        guard pipe(&out) == 0, pipe(&err) == 0 else { throw HerdrError.socket("pipe failed") }
+        var fa: posix_spawn_file_actions_t? = nil
+        posix_spawn_file_actions_init(&fa)
+        posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&fa, out[1], 1)
+        posix_spawn_file_actions_adddup2(&fa, err[1], 2)
+        for fd in out + err { posix_spawn_file_actions_addclose(&fa, fd) }
+        let cargs: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
+        defer { cargs.forEach { free($0) } }
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, argv[0], &fa, nil, cargs, environ)
+        posix_spawn_file_actions_destroy(&fa)
+        close(out[1]); close(err[1])
+        let oh = FileHandle(fileDescriptor: out[0], closeOnDealloc: true), eh = FileHandle(fileDescriptor: err[0], closeOnDealloc: true)
+        guard rc == 0 else { throw HerdrError.socket("posix_spawn \(argv[0]) failed: \(rc)") }
+        let o = oh.readDataToEndOfFile(), e = eh.readDataToEndOfFile()   // small outputs: stderr fits its pipe
+        var st: Int32 = 0
+        waitpid(pid, &st, 0)
+        return RemoteHost.Result(status: (st & 0x7f) == 0 ? (st >> 8) & 0xff : -1, stdout: o, stderr: String(decoding: e, as: UTF8.self))
+    }
+
+    // sshd hands the command line to the host user's login shell ($SHELL -c). Whatever that shell is (sh, bash, zsh,
+    // dash, ksh, csh, tcsh, fish), the script must do exactly what `/bin/sh -c script` does, byte for byte.
     do {
         let script = """
             x='it'\\''s'; printf '%s|' "$x" "$(echo sub)" 'back\\slash' "a\\\\c" '!bang' "trail\\\\"
@@ -37,48 +68,54 @@ import Foundation
               printf '%s;' "$i"
             done
             printf 'two\nlines\\n' | wc -l | tr -d ' '
+            printf '\\0%s' \(oddWords.map(RemoteHost.quote).joined(separator: " "))
             """
         let word = try RemoteHost.ssh("user@host").argv(script, controlDir: "/tmp/fb").last ?? ""
         check(!word.contains("\n"), "remote host: the login shell gets one line (csh refuses a newline in quotes)")
-        check(!word.contains("!"), "remote host: no \"!\" for csh's history to expand")
-        let want = try await RemoteHost(via: .local).run(script)
-        check(want.ok, "remote host: the sample script runs in sh (\(want.stderr))")
-        for sh in [["/bin/sh", "-c"], ["/bin/csh", "-f", "-c"], ["/bin/tcsh", "-f", "-c"], ["/bin/zsh", "-f", "-c"], ["/bin/bash", "--norc", "-c"]]
+        check(!word.utf8.contains(UInt8(ascii: "!")), "remote host: no \"!\" for csh's history to expand")
+        check(!word.utf8.contains { $0 < 0x20 || $0 >= 0x7f }, "remote host: the login shell's word is printable ASCII")
+        let want = try direct(["/bin/sh", "-c", script])   // the script itself, not wrapped
+        check(want.ok && want.stderr.isEmpty, "remote host: the sample script runs in sh (\(want.stderr))")
+        let words = want.stdout.split(separator: 0, omittingEmptySubsequences: false).map { Data($0) }   // NUL before each odd word
+        check(words.suffix(oddWords.count) == oddWords.map { Data($0.utf8) }, "remote host: odd words come back byte for byte from sh")
+        for sh in [["/bin/sh", "-c"], ["/bin/bash", "--norc", "-c"], ["/bin/zsh", "-f", "-c"], ["/bin/dash", "-c"], ["/bin/ksh", "-c"],
+                   ["/bin/csh", "-f", "-c"], ["/bin/tcsh", "-f", "-c"]]
         where FileManager.default.isExecutableFile(atPath: sh[0]) {
-            // started directly, as sshd would: through `run` it would be wrapped a second time
-            let p = Process(), out = Pipe(), err = Pipe()
-            p.executableURL = URL(fileURLWithPath: sh[0]); p.arguments = Array(sh.dropFirst()) + [word]
-            p.standardOutput = out; p.standardError = err; p.standardInput = FileHandle.nullDevice
-            try p.run()
-            let gotOut = out.fileHandleForReading.readDataToEndOfFile(), gotErr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            p.waitUntilExit()
-            let got = RemoteHost.Result(status: p.terminationStatus, stdout: gotOut, stderr: gotErr)
-            check(got.ok && got.stdout == want.stdout, "remote host: \(sh[0]) as the login shell runs the script as sh does (\(String(decoding: got.stdout, as: UTF8.self)) \(got.stderr))")
+            let got = try direct(sh + [word])
+            check(got.ok && got.stdout == want.stdout && got.stderr.isEmpty,
+                  "remote host: \(sh[0]) as the login shell does what sh -c script does (\(got.status) \(got.stderr.prefix(200)))")
         }
         // fish (often not installed here): inside '…' it reads \\ and \' as escapes, so the word must have neither.
-        let cs = Array(word)
+        // Read byte by byte (not by Character: a combining mark would hide a quote).
+        let bs = Array(word.utf8), q = UInt8(ascii: "'"), bsl = UInt8(ascii: "\\")
         var i = 0, inQuote = false, fishSafe = true
-        while i < cs.count {
-            let c = cs[i], next: Character? = i + 1 < cs.count ? cs[i + 1] : nil
+        while i < bs.count {
+            let c = bs[i], next: UInt8? = i + 1 < bs.count ? bs[i + 1] : nil
             if inQuote {
-                if c == "'" { inQuote = false } else if c == "\\" && (next == "\\" || next == "'") { fishSafe = false }
-            } else if c == "\\" {
-                i += 1   // sh and fish both take the next character as is
-            } else if c == "'" {
+                if c == q { inQuote = false } else if c == bsl && (next == bsl || next == q) { fishSafe = false }
+            } else if c == bsl {
+                i += 1   // sh and fish both take the next byte as is
+            } else if c == q {
                 inQuote = true
             }
             i += 1
         }
-        check(fishSafe && !inQuote, "remote host: fish reads the quoted word as sh does (\(word))")
+        check(fishSafe && !inQuote, "remote host: fish reads the quoted word as sh does")
     }
 
     // Quoting: any word survives /bin/sh unchanged.
     do {
-        let words = ["plain", "two words", "it's", "$HOME", "`id`", "a\"b", "back\\slash", "new\nline", "*", ""]
-        let h = RemoteHost(via: .local)
-        let r = try await h.run("printf '%s\\0' " + words.map(RemoteHost.quote).joined(separator: " "))
-        let got = r.stdout.split(separator: 0, omittingEmptySubsequences: false).dropLast().map { String(decoding: $0, as: UTF8.self) }
-        check(r.ok && got == words, "remote host: quoted words come back as is (\(got))")
+        let words = ["plain", "two words", "it's", "$HOME", "`id`", "a\"b", "back\\slash", "new\nline", "*", ""] + oddWords
+        let bytes = words.map { Data($0.utf8) }
+        let cmd = "printf '%s\\0' " + words.map(RemoteHost.quote).joined(separator: " ")
+        func split(_ d: Data) -> [Data] { d.split(separator: 0, omittingEmptySubsequences: false).dropLast().map { Data($0) } }
+        let d = try direct(["/bin/sh", "-c", cmd])
+        check(d.ok && d.stderr.isEmpty && split(d.stdout) == bytes, "remote host: quoted words come back byte for byte from sh (\(d.stderr.prefix(200)))")
+        // through run: the word Process passes is plain ASCII, so non-ASCII words keep their bytes (not decomposed)
+        let r = try await RemoteHost(via: .local).run(cmd)
+        check(r.ok && r.stderr.isEmpty && split(r.stdout) == bytes, "remote host: quoted words come back byte for byte through run (\(r.stderr.prefix(200)))")
+        // The quote is escaped even when a combining mark follows it (one Character, two scalars).
+        check(Array(RemoteHost.quote("a'\u{301}b").utf8) == Array("'a'\\''\u{301}b'".utf8), "remote host: a quote before a combining mark is escaped")
     }
 
     // herdrCommand: no herdr on the host → exit 127 with the marker.

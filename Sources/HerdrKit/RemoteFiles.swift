@@ -44,9 +44,13 @@ public struct RemoteFiles: Sendable {
 
     /// The first regular file under `dir` (any depth) whose name ends with `suffix`. `suffix` is matched literally.
     public func find(under dir: String, nameSuffix suffix: String) async -> String? {
-        let glob = "*" + suffix.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "*", with: "\\*")
-            .replacingOccurrences(of: "?", with: "\\?").replacingOccurrences(of: "[", with: "\\[")
-        let cmd = "[ -d \(q(dir)) ] && find \(q(dir)) -type f -name \(q(glob)) 2>/dev/null | head -n 1"
+        // by Unicode scalar: a Character search misses a "*" with a combining mark after it
+        var glob = String.UnicodeScalarView("*".unicodeScalars)
+        for u in suffix.unicodeScalars {
+            if "\\*?[".unicodeScalars.contains(u) { glob.append("\\") }
+            glob.append(u)
+        }
+        let cmd = "[ -d \(q(dir)) ] && find \(q(dir)) -type f -name \(q(String(glob))) 2>/dev/null | head -n 1"
         guard let r = try? await host.run(cmd, timeout: timeout), r.ok else { return nil }
         let p = String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .newlines)
         return p.isEmpty ? nil : p
