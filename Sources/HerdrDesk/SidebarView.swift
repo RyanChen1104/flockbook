@@ -42,6 +42,14 @@ struct SidebarView: View {
             if let hub = model.remote, hub.running {
                 RemoteFooter(hub: hub)
             }
+            // Another machine's herdr (Settings > General > Machine, or --remote): its name stays in sight.
+            if let machine = RemoteMachines.title(for: model.store.session, defaults: AppDefaults.store) {
+                Label(machine, systemImage: "server.rack")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18).padding(.vertical, 6)
+                    .help("Shows herdr on \(machine)")
+            }
             // Connection state only when something is wrong (as Mail): nothing while connected.
             if !model.store.connected || model.store.programWarning != nil {
                 HStack(spacing: 6) {

@@ -58,7 +58,12 @@ struct HerdrDeskApp: App {
         } else if args.contains("--preview") || args.contains("--snapshot") {
             store = .preview
         } else {
-            store = HerdrStore(session: .fromLaunch(arguments: args, environment: ProcessInfo.processInfo.environment))
+            // Launch flags (--session, --remote) win; otherwise the machine chosen in Settings > General (read once: a new
+            // choice there relaunches the app, as the store, the phone server and notifications all hang on this session).
+            store = HerdrStore(session: RemoteMachines.launchSession(arguments: args, environment: ProcessInfo.processInfo.environment,
+                                                                     defaults: AppDefaults.store))
+            // The Claude hook and status line act on the machine Claude Code runs on: the host, for a remote session.
+            ClaudeHookSetup.launchRemote = store.session.remote
             // Headless checks on the default session never read this store (the scene shows no RootView): no polling of
             // the owner's session. Live checks pass a named session and use it.
             if !headless || store.session.name != nil { store.start() }

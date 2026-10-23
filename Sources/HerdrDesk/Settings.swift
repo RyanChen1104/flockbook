@@ -28,6 +28,8 @@ struct SettingsView: View {
     var scrolls = false
     /// Snapshots only: the Tailscale checks open as after a click on Details.
     var stepDetails = false
+    /// The session the window shows (Machine asks for a relaunch when the choice differs); nil in snapshots.
+    var shown: HerdrSession? = nil
     /// Widest the rows get, and their distance from the tab list.
     static let column: CGFloat = 760
     static let margin: CGFloat = 40
@@ -76,6 +78,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var general: some View {
+        RemoteMachinesSection(shown: shown)
         SettingsGroup("Appearance", note: reduce ? "Opaque while Reduce Transparency is on in System Settings." : "Glass lets the desktop show through, blurred.") {
             SettingsRow("Window") {
                 Picker("Window", selection: reduce ? .constant(WindowGlass.off.rawValue) : $glass) {
@@ -278,6 +281,7 @@ struct SettingsSplit: View {
     var reduceTransparency: Bool? = nil
     var list = true
     var back: (() -> Void)? = nil
+    var shown: HerdrSession? = nil
     static let listWidth: CGFloat = 196
 
     private var tab: SettingsTab { fixed ?? SettingsTab(stored: stored) }
@@ -292,7 +296,7 @@ struct SettingsSplit: View {
                     .onDisappear { SettingsProbe.pageList = .zero }
                 Divider()
             }
-            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, statusLine: statusLine, scrolls: scrolls)
+            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, statusLine: statusLine, scrolls: scrolls, shown: shown)
                 .frame(maxWidth: scrolls ? .infinity : nil, maxHeight: scrolls ? .infinity : nil, alignment: .top)
                 .probe { SettingsProbe.content = $0 }
                 .id(tab)
@@ -347,7 +351,8 @@ struct SettingsPage: View {
 
     var body: some View {
         let own = model.sidebarVisibility == .detailOnly
-        SettingsSplit(remote: model.remote, statusLine: .live, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
+        SettingsSplit(remote: model.remote, statusLine: .live, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil,
+                      shown: model.store.session)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { Button("Back") { model.closeSettings() }.keyboardShortcut(.cancelAction).hidden() }
             .probe { SettingsProbe.page = $0 }

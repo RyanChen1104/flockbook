@@ -81,7 +81,7 @@ func checksLaunchGuard() async throws {
     check(unreadable.problems.contains { $0.contains("bad.swift") }, "launch guard: an unreadable file is a problem (\(unreadable.problems))")
     let prefixes: Set<String> = ["--test", "--snapshot"]   // hasPrefix tests, not flags
     // Arguments the app passes to other tools (herdr, tailscale, git, log), not its own.
-    let otherTools: Set<String> = ["--abbrev-ref", "--bg", "--cols", "--json", "--last", "--predicate", "--rows", "--style", "--takeover"]
+    let otherTools: Set<String> = ["--abbrev-ref", "--bg", "--check", "--cols", "--json", "--last", "--predicate", "--rows", "--style", "--takeover"]
     let unknown = used.subtracting(prefixes).subtracting(otherTools).subtracting(LaunchGuard.known).sorted()
     check(used.count > 40, "launch guard: scanned the app's flags (\(used.count) flags)")
     check(unknown.isEmpty, "launch guard: every flag the app uses is known (unknown: \(unknown))")

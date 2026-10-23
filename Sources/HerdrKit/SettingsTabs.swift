@@ -1,7 +1,7 @@
 import Foundation
 
-/// The Settings page's tabs, in sidebar order, like System Settings: what the app looks like (General), what Flockbook
-/// may do to the agents (Agents), the phone (Remote), and updates. Each control of the page lives in exactly one tab.
+/// The Settings page's tabs, in sidebar order, like System Settings: which herdr the app shows and what it looks like
+/// (General), what Flockbook may do to the agents (Agents), the phone (Remote), and updates. Each control of the page lives in exactly one tab.
 public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
     case general, agents, remote, updates
 
@@ -32,7 +32,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
     /// The controls the tab shows, top to bottom. Some show only in a state (Connect with: Remote access on).
     public var controls: [SettingsControl] {
         switch self {
-        case .general: [.window, .textSize, .readingWidth, .terminalColors]
+        case .general: [.machines, .window, .textSize, .readingWidth, .terminalColors]
         case .agents: [.allowInput, .statusLine, .claudeQuestions]
         case .remote: [.remoteAccess, .connectWith, .tailscaleSteps, .address, .devices, .pictures, .phoneNotifications, .agentCommand]
         case .updates: [.autoUpdate, .version]
@@ -52,7 +52,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
 
 /// One control (row) of the Settings page.
 public enum SettingsControl: String, CaseIterable, Sendable {
-    case window, textSize, readingWidth, terminalColors
+    case machines, window, textSize, readingWidth, terminalColors
     case allowInput, statusLine, claudeQuestions
     case remoteAccess, connectWith, tailscaleSteps, address, devices, pictures, phoneNotifications, agentCommand
     case autoUpdate, version
@@ -62,7 +62,7 @@ extension SettingsTab {
     /// One line under the page's title: what the tab is for.
     public var summary: String {
         switch self {
-        case .general: "How the window, the reading text and the terminal look."
+        case .general: "Which machine to show, and how the window and text look."
         case .agents: "What Flockbook may do in your agents' terminals."
         case .remote: "Use your agents from your phone."
         case .updates: "Keep Flockbook up to date."
