@@ -270,7 +270,10 @@ public actor SessionResolver {
     }
 
     /// The one agent log among open files, or nil when there is none or more than one.
-    public static func logPath(openFiles: [String], kind: String) -> String? {
+    public static func grokHome(_ procLine: String) -> String { "" }
+    public static func grokSession(active: Data, pids: [Int32]) -> String? { nil }
+
+    public static func logPath(openFiles: [String], kind: String, grokHome: String? = nil) -> String? {
         let home = NSHomeDirectory()
         let hits = Set(openFiles.filter { p in
             guard p.hasSuffix(".jsonl"), !p.contains("/../") else { return false }

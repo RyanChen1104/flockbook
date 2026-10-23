@@ -14,7 +14,7 @@ public final class SessionLog: Sendable {
     public var url: URL? { state.lock.withLock { state.url } }
 
     /// Where an agent keeps its logs (the search root for an id).
-    public static func defaultDir(agent: String) -> String {
+    public static func defaultDir(agent: String, env: [String: String] = ProcessInfo.processInfo.environment) -> String {
         NSHomeDirectory() + (agent == "codex" ? "/.codex/sessions" : agent == "cursor" ? "/.cursor/projects" : "/.claude/projects")
     }
 
