@@ -3,8 +3,8 @@ import Foundation
 /// Allow / Deny buttons on the "needs you" system notification for a permission prompt.
 ///
 /// Buttons only for a permission prompt on screen (`PermissionGate`): input is on and the agent is blocked. The id is the
-/// log's pending tool call, or the prompt box on screen when there is none (a Claude without a transcript). Only Claude Code:
-/// `ApprovalKeys` are verified for it alone. A question picker never gets buttons (the tab opens). An action re-reads
+/// log's pending tool call, or the prompt box on screen when there is none (a Claude without a transcript). Claude Code and
+/// Grok Build only: their keys are verified (`ApprovalKeys`, `grokKey`). A question picker never gets buttons (the tab opens). An action re-reads
 /// the pane first and answers only the prompt the notification was posted for; otherwise the tab opens.
 public enum ApprovalNotice {
     public static let category = "approval"
@@ -36,6 +36,14 @@ public enum ApprovalNotice {
     /// tool call too, but only when it is that box (same tool, same command): a log that lags the screen still names
     /// the previous call, and its id must never answer the next prompt. The screen id covers a Claude without a transcript.
     static func promptIDs(_ s: PaneState, writes: Bool) -> [String] {
+        if s.agentKind == "grok" {
+            // Grok's log never names a prompt; its open call is the prompt when it runs the box's command.
+            guard writes, s.blocked, let box = grokBox(s.screen) else { return [] }
+            let onScreen = grokID(box)
+            guard let logged = s.pendingToolUseId, !logged.isEmpty, !box.command.isEmpty,
+                  sameCall(tool: s.pendingTool, command: s.pendingCommand, "Bash", box.command) else { return [onScreen] }
+            return [logged, onScreen]
+        }
         guard writes, s.blocked, s.agentKind == "claude",
               QuestionAdapter.claudeScreen(s.screen) == nil,
               let box = screenBox(s.screen), let onScreen = screenPrompt(s.screen) else { return [] }
@@ -110,7 +118,10 @@ public enum ApprovalNotice {
     /// options), so another tool, command or option list is another prompt. Stable across launches. Nil: no prompt.
     public static func screenPrompt(_ screen: String) -> String? {
         guard let box = screenBox(screen) else { return nil }
-        let text = "tool:\(box.tool)\n" + box.lines.joined(separator: "\n")
+        return hashID("tool:\(box.tool)\n" + box.lines.joined(separator: "\n"))
+    }
+
+    static func hashID(_ text: String) -> String {
         var h: UInt64 = 0xcbf29ce484222325   // FNV-1a (Hasher is seeded per launch)
         for b in text.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
         return "screen-" + String(h, radix: 16)
@@ -118,9 +129,63 @@ public enum ApprovalNotice {
 
     /// The approval card's request read from the screen, for a prompt the log does not have (no transcript, or the log
     /// lags). Its `toolUseId` is `screenPrompt`.
-    public static func screenRequest(_ screen: String) -> PermissionRequest? {
+    public static func screenRequest(_ screen: String, agent: String = "claude") -> PermissionRequest? {
+        if agent == "grok" {
+            guard let box = grokBox(screen) else { return nil }
+            return PermissionRequest(title: box.title, command: box.command, toolName: box.command.isEmpty ? "" : "Bash", toolUseId: grokID(box), state: .pending)
+        }
         guard let box = screenBox(screen), let id = screenPrompt(screen) else { return nil }
         return PermissionRequest(title: box.header, command: box.command, toolName: box.tool, toolUseId: id, state: .pending)
+    }
+
+    /// Grok Build 1.0.67's permission prompt (live): its last "┃" block holds "› <what it does>", the command on "│"
+    /// lines, then rows "N (○) text", (●) on the row with focus; right below the block its key line "1/N:select …
+    /// Ctrl+c:cancel". `lines`: the block with the focus marks dropped (the prompt stays the same while focus moves).
+    struct GrokBox: Sendable, Hashable {
+        var title: String
+        var command: String
+        var rows: [String]
+        var focus: Int
+        var lines: [String]
+        var yes: Int? { rows.firstIndex(of: "Yes, proceed") }
+        /// The row as Grok draws it while empty; typed feedback changes it, and that text is the user's.
+        var no: Int? { rows.firstIndex(of: "No, reject (type to add feedback)") }
+    }
+
+    static func grokBox(_ screen: String) -> GrokBox? {
+        let raw = screen.components(separatedBy: "\n")
+        guard let block = QuestionAdapter.grokBlock(raw),
+              let key = raw[block.upperBound...].first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?.trimmingCharacters(in: .whitespaces),
+              key.firstMatch(of: /^1\/\d+:select\s/) != nil, key.contains("Ctrl+c:cancel") else { return nil }
+        var title: String?, command: [String] = [], rows: [String] = [], focus: [Int] = [], lines: [String] = []
+        for t in QuestionAdapter.grokLines(raw[block]) {
+            if let m = t.wholeMatch(of: /^(\d+) \(([○●])\) (.*)$/) {
+                guard Int(m.1) == rows.count + 1 else { return nil }
+                if m.2 == "●" { focus.append(rows.count) }
+                rows.append(String(m.3))
+                lines.append("\(m.1) \(m.3)")
+            } else {
+                guard rows.isEmpty else { return nil }   // text below the rows: not a layout this reads
+                if title == nil, t.hasPrefix("›") { title = t.dropFirst().trimmingCharacters(in: .whitespaces) }
+                else if t.hasPrefix("│") { command.append(t.dropFirst().trimmingCharacters(in: .whitespaces)) }
+                lines.append(t)
+            }
+        }
+        guard let title, focus.count == 1, rows.contains("Yes, proceed"), rows.contains(where: { $0.hasPrefix("No, reject") }) else { return nil }
+        return GrokBox(title: title, command: command.joined(separator: "\n"), rows: rows, focus: focus[0], lines: lines)
+    }
+
+    static func grokID(_ box: GrokBox) -> String { hashID("tool:grok\n" + box.lines.joined(separator: "\n")) }
+
+    /// The next key for Allow or Deny on Grok's prompt, or nil: send nothing (answer in the terminal). Enter answers
+    /// the row with focus (live): Allow only from "Yes, proceed"; Deny from "No, reject", or Down first when that row
+    /// is right below "Yes, proceed". The always-approve and never-allow rows change the user's settings: never chosen.
+    static func grokKey(_ screen: String, allow: Bool) -> String? {
+        guard let b = grokBox(screen), let yes = b.yes else { return nil }
+        if allow { return b.focus == yes ? "Enter" : nil }
+        guard let no = b.no else { return nil }
+        if b.focus == no { return "Enter" }
+        return b.focus == yes && no == yes + 1 ? "Down" : nil
     }
 
     /// The request the in-app card shows and binds its buttons to: the log's call when it is the box on screen, else
@@ -205,8 +270,32 @@ extension HerdrClient {
         guard let now = await approvalState(paneId: paneId, agentKind: agentKind, blocked: blocked, pending: pending),
               ApprovalNotice.outcome(actionIdentifier: action, boundPrompt: prompt, now: now, writes: true) == .send(allow: allow) else { return false }
         if let allowed = gate?.allowed { guard await allowed() else { return false } }
+        if agentKind == "grok" {
+            guard let onScreen = ApprovalNotice.promptIDs(now, writes: true).last else { return false }
+            return try await respondGrok(paneId: paneId, screenPrompt: onScreen, allow: allow, gate: gate)
+        }
         try await respond(to: paneId, allow: allow)
         return true
+    }
+
+    /// Grok's prompt `screenPrompt`: each key only while that prompt is on screen with the focus where the key needs it
+    /// (`grokKey`), read right before the key. Deny: Down, wait for the focus on "No, reject", Enter. False: no answer
+    /// was given (a Down may have moved the focus only).
+    func respondGrok(paneId: String, screenPrompt: String, allow: Bool, gate: KeyGate?) async throws -> Bool {
+        var moved = false
+        for _ in 0..<20 {
+            let screen = try await visibleText(paneId: paneId)
+            guard let box = ApprovalNotice.grokBox(screen), ApprovalNotice.grokID(box) == screenPrompt else { return false }
+            let key = ApprovalNotice.grokKey(screen, allow: allow)
+            if key == "Down", moved { try await Task.sleep(for: .milliseconds(150)); continue }   // the move not drawn yet
+            guard let key else { return false }
+            if let allowed = gate?.allowed { guard await allowed() else { return false } }
+            try await sendNamedKeys([key], to: paneId)
+            if key == "Enter" { return true }
+            moved = true
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        return false
     }
 
     /// Read-only: the pane's state for `ApprovalNotice`, with its visible screen. Nil when the screen cannot be read.

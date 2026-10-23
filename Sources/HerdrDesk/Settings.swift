@@ -22,8 +22,9 @@ struct SettingsView: View {
     private var readOnlyLaunch: Bool { CommandLine.arguments.contains("--read-only") }
     /// Nil: no Remote access section (snapshots of the other settings).
     var remote: RemoteHub? = nil
-    /// Claude Code's status line switch; snapshots get a preview that never reads or writes.
+    /// Claude Code's and Grok Build's status line switches; snapshots get a preview that never reads or writes.
     var statusLine: StatusLineSetup = .previewOff
+    var grokStatusLine: StatusLineSetup = .grokPreviewOff
     /// The Settings page: fills its column and scrolls, so a long page (Remote access) never runs off the screen.
     /// Snapshots keep the full height at a fixed width.
     var scrolls = false
@@ -147,6 +148,7 @@ struct SettingsView: View {
             }
         }
         StatusLineRow(setup: statusLine)
+        StatusLineRow(setup: grokStatusLine)
         // The question hook serves the phone: shown while Remote access is on, as before.
         if let remote, remote.enabled {
             ClaudeHookRow(setup: remote.claudeHook)
@@ -284,6 +286,7 @@ struct SettingsSplit: View {
     var fixed: SettingsTab? = nil
     var remote: RemoteHub? = nil
     var statusLine: StatusLineSetup = .previewOff
+    var grokStatusLine: StatusLineSetup = .grokPreviewOff
     var scrolls = false
     var reduceTransparency: Bool? = nil
     var list = true
@@ -302,7 +305,7 @@ struct SettingsSplit: View {
                     .onDisappear { SettingsProbe.pageList = .zero }
                 Divider()
             }
-            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, statusLine: statusLine, scrolls: scrolls)
+            SettingsView(tab: tab, reduceTransparency: reduceTransparency, remote: remote, statusLine: statusLine, grokStatusLine: grokStatusLine, scrolls: scrolls)
                 .frame(maxWidth: scrolls ? .infinity : nil, maxHeight: scrolls ? .infinity : nil, alignment: .top)
                 .probe { SettingsProbe.content = $0 }
                 .id(tab)
@@ -357,7 +360,7 @@ struct SettingsPage: View {
 
     var body: some View {
         let own = model.sidebarVisibility == .detailOnly
-        SettingsSplit(remote: model.remote, statusLine: .live, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
+        SettingsSplit(remote: model.remote, statusLine: .live, grokStatusLine: .grokLive, scrolls: true, list: own, back: own ? { model.closeSettings() } : nil)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { Button("Back") { model.closeSettings() }.keyboardShortcut(.cancelAction).hidden() }
             .probe { SettingsProbe.page = $0 }

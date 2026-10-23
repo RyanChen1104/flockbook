@@ -85,6 +85,38 @@ public enum QuestionAdapter {
         })
     }
 
+    // MARK: (a) Parse — Grok Build ask_user_question
+
+    /// `{questions:[{question, options:[{label, description}], multi_select?}]}`. Grok Build logs the call while its
+    /// picker is open, and the result when it is answered.
+    static func grok(callId: String, input: [String: Any]) -> QuestionRequest? {
+        guard let qs = input["questions"] as? [[String: Any]], !qs.isEmpty else { return nil }
+        let questions = qs.map { q -> QuestionRequest.Question in
+            let opts = (q["options"] as? [[String: Any]] ?? []).map { o -> QuestionRequest.Option in
+                let (label, rec) = stripRecommended(o["label"] as? String ?? "")
+                return .init(label: label, detail: o["description"] as? String ?? "", recommended: rec)
+            }
+            return .init(header: "", text: q["question"] as? String ?? "", options: opts,
+                         multiSelect: q["multi_select"] as? Bool ?? q["multiSelect"] as? Bool ?? false)
+        }
+        return QuestionRequest(toolUseId: callId, agent: "grok", questions: questions)
+    }
+
+    /// Grok Build 1.0.67's result: `rawOutput.UserAnswered.answers[{question, picked:[label], typed?}]`, else the
+    /// result text (`"question"="answer", …`). A failed call or any other result (dismissed) is no answer.
+    static func grokState(_ q: QuestionRequest, failed: Bool, output: Any?, text: String) -> QuestionRequest.State {
+        if failed { return .declined }
+        if let list = ((output as? [String: Any])?["UserAnswered"] as? [String: Any])?["answers"] as? [[String: Any]] {
+            return answered(q.questions.map { question -> String? in
+                guard let a = list.first(where: { $0["question"] as? String == question.text }) else { return nil }
+                let typed = (a["typed"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return ((a["picked"] as? [String] ?? []) + (typed.isEmpty ? [] : [typed])).joined(separator: ", ")
+            })
+        }
+        if text.hasPrefix("User has answered") { return claudeState(q, isError: false, result: nil, text: text) }
+        return .declined
+    }
+
     static func answered(_ answers: [String?]) -> QuestionRequest.State {
         guard answers.contains(where: { $0 != nil }) else { return .answered(nil) }
         return .answered(answers.map { $0 ?? "" })
@@ -97,7 +129,11 @@ public enum QuestionAdapter {
 
     /// Text that is on screen only while the agent's question picker is open.
     public static func markers(agent: String) -> [String] {
-        agent == "codex" ? ["enter to submit"] : ["Chat about this", "Review your answers"]
+        switch agent {
+        case "codex": ["enter to submit"]
+        case "grok": ["Shift+x:dismiss"]
+        default: ["Chat about this", "Review your answers"]
+        }
     }
 
     /// One step of an answer. `waitFor` blocks until the picker (not the rest of the screen) shows the text.
@@ -139,11 +175,14 @@ public enum QuestionAdapter {
     }
 
     /// The picker part of the screen only, flattened: Claude from its tab bar down, Codex from its "Question k/n" line
-    /// down. Text above it (the user's own prompt often repeats the question) must not count. Nil = no picker.
+    /// down, Grok from the top of its "┃" block down. Text above it (the user's own prompt often repeats the
+    /// question) must not count. Nil = no picker.
     public static func pickerRegion(agent: String, screen: String) -> String? {
         let lines = screen.components(separatedBy: "\n")
         let start: Int?
-        if agent == "codex" {
+        if agent == "grok" {
+            start = grokBlock(lines)?.lowerBound
+        } else if agent == "codex" {
             start = lines.lastIndex { $0.firstMatch(of: /^\s*Question \d+\/\d+/) != nil }
         } else {
             start = lines.lastIndex { l in
@@ -170,6 +209,7 @@ public enum QuestionAdapter {
         guard q.questions.indices.contains(k) else { return false }
         let want = q.questions[k], labels = want.options.map { flat($0.label) }
         if q.agent == "codex" { return codexExact(q, question: k, screen: screen, notes: other, row: row) }
+        if q.agent == "grok" { return other == nil && grokExact(q, question: k, screen: screen) }
         // A request from the hook (not read from the screen) gets the exact compare; screen reads keep the parser.
         // The screen must prove question `k` only: when another question of the request also matches it (alike once
         // whitespace is dropped), the hub cannot know which one is open, so no key.
@@ -342,7 +382,11 @@ public enum QuestionAdapter {
             if a.picks.isEmpty && other.isEmpty { throw Failure.unsupported("question \(k + 1): no answer") }
             if !q.questions[k].multiSelect && a.picks.count > 1 { throw Failure.unsupported("question \(k + 1): one choice only") }
         }
-        return q.agent == "codex" ? try codexSteps(q, answers) : claudeSteps(q, answers)
+        switch q.agent {
+        case "codex": return try codexSteps(q, answers)
+        case "grok": return try grokSteps(q, answers)
+        default: return claudeSteps(q, answers)
+        }
     }
 
     static func otherText(_ a: QuestionAnswer) -> String? {
@@ -396,6 +440,20 @@ public enum QuestionAdapter {
         return out
     }
 
+    /// Grok Build 1.0.67. Single choice: a digit picks and moves on; on the last question it submits all (live).
+    /// Its multi-choice rows and free-text row show no focus or typed state in plain text until a later redraw, so a
+    /// key could not be checked: those are answered in the terminal.
+    static func grokSteps(_ q: QuestionRequest, _ answers: [QuestionAnswer]) throws -> [Step] {
+        var out: [Step] = []
+        for (k, question) in q.questions.enumerated() {
+            if question.multiSelect { throw Failure.unsupported("Grok's multi-choice picker is answered in the terminal") }
+            if otherText(answers[k]) != nil { throw Failure.unsupported("Grok's free text is answered in the terminal") }
+            out.append(.text("\(answers[k].picks[0] + 1)"))
+            if k + 1 < q.questions.count { out.append(.waitFor(needle(q.questions[k + 1]))) }
+        }
+        return out
+    }
+
     /// `.message` delivery: the text sent as a user message. One question: the answer; several: "question: answer" lines.
     public static func messageText(for q: QuestionRequest, answers: [QuestionAnswer]) -> String {
         let parts = zip(q.questions, answers).map { question, a -> String in
@@ -403,6 +461,56 @@ public enum QuestionAdapter {
             return q.questions.count == 1 ? v : "\(question.text) \(v)"
         }
         return parts.joined(separator: "\n")
+    }
+}
+
+// MARK: Grok Build: the picker on screen
+
+extension QuestionAdapter {
+    /// The lines of Grok's picker: the last run of lines that start with "┃" (its left bar). Nil when there is none.
+    static func grokBlock(_ lines: [String]) -> Range<Int>? {
+        let bar: (String) -> Bool = { $0.trimmingCharacters(in: .whitespaces).hasPrefix("┃") }
+        guard let last = lines.lastIndex(where: bar) else { return nil }
+        var first = last
+        while first > 0, bar(lines[first - 1]) { first -= 1 }
+        return first..<(last + 1)
+    }
+
+    /// A "┃" block's text lines: the bar, the scrollbar "█" at a line's end and blank lines dropped.
+    static func grokLines(_ block: ArraySlice<String>) -> [String] {
+        block.map { l in
+            var t = Substring(l.trimmingCharacters(in: .whitespaces).dropFirst())   // the "┃"
+            while let c = t.last, c == "█" || c.isWhitespace { t = t.dropLast() }
+            return t.trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }
+    }
+
+    /// Grok Build 1.0.67's picker shows question `k` of `q` exactly, nothing picked yet: in its "┃" block the
+    /// question text, then rows "1 (○) label  description" for the options in order and no other, then its own
+    /// "z (○) Type your answer here", then "[k/n] …" with "Enter:select" ("Enter:submit" on the last question).
+    /// Text is compared with all whitespace dropped (wrapping does not count); the scrollbar "█" at a line's end is
+    /// not text. A picked row (●), a field being edited or the focus on the free-text row ("Enter:edit") refuses.
+    static func grokExact(_ q: QuestionRequest, question k: Int, screen: String) -> Bool {
+        guard q.agent == "grok", !q.toolUseId.hasPrefix("screen-"), q.questions.indices.contains(k) else { return false }
+        let want = q.questions[k]
+        guard !want.multiSelect else { return false }
+        let lines = screen.components(separatedBy: "\n")
+        guard let block = grokBlock(lines), pickerRegion(agent: "grok", screen: screen) != nil else { return false }
+        let body = grokLines(lines[block])
+        let bare: (String) -> String = { String($0.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }) }
+        let rowRe = /^(\d+|z) \(([○●])\) (.*)$/
+        guard let firstRow = body.firstIndex(where: { $0.wholeMatch(of: rowRe) != nil }), firstRow > 0,
+              body.count == firstRow + want.options.count + 2 else { return false }
+        guard bare(body[..<firstRow].joined()) == bare(want.text) else { return false }
+        for (i, o) in want.options.enumerated() {
+            guard let m = body[firstRow + i].wholeMatch(of: rowRe), m.1 == "\(i + 1)", m.2 == "○" else { return false }
+            let labels = o.recommended ? recommendedSuffixes.map { bare(o.label + $0) } + [bare(o.label)] : [bare(o.label)]
+            guard labels.contains(where: { bare(String(m.3)) == $0 + bare(o.detail) }) else { return false }
+        }
+        guard body[firstRow + want.options.count] == "z (○) Type your answer here" else { return false }
+        let foot = body[firstRow + want.options.count + 1]
+        let last = k + 1 == q.questions.count
+        return foot.hasPrefix("[\(k + 1)/\(q.questions.count)] ") && foot.hasSuffix(last ? "Enter:submit" : "Enter:select")
     }
 }
 
@@ -547,6 +655,10 @@ extension HerdrClient {
             let ck: Set<Int>? = hooked && multi ? checked : nil
             let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0, answers: answers) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f, row: fr, checks: ck) }
             if hooked, step.sendsKeys { _ = try await waitScreen(paneId: paneId, timeout: 1.5, same) }
+            // Grok on the Mac (no gate): the exact question before each key too, not only its first words.
+            if q.agent == "grok", gate == nil, step.sendsKeys {
+                guard try await waitScreen(paneId: paneId, timeout: 1.5, same) else { throw QuestionAdapter.Failure.notOnScreen }
+            }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)

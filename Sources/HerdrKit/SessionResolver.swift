@@ -13,7 +13,8 @@ public struct LeadSwap: Sendable, Hashable {
 /// 1. The pane's process: the env holds `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` (the session), so panes of
 ///    other herdr sessions never match. The agent is the newest child of the pane's shell.
 /// 2. A log file that the agent's process tree holds open (`lsof`). Exactly one, or none.
-/// 3. Codex only: the rollout whose `session_meta` cwd is the pane's cwd and that started at or after the agent.
+/// 3. Grok Build only: the session `active_sessions.json` lists for the agent's pid.
+/// 4. Codex only: the rollout whose `session_meta` cwd is the pane's cwd and that started at or after the agent.
 ///    Exactly one unclaimed match, or none. It never guesses between two.
 ///
 /// The result is cached per pane and kept while the agent pid stays the same.
@@ -223,8 +224,17 @@ public actor SessionResolver {
     }
 
     private func find(_ n: Need, agent: Proc, procs: [Proc], claimed: Set<String>) -> String? {
-        let open = Self.openFiles(pids: Self.subtree(agent.pid, procs: procs))
-        if let p = Self.logPath(openFiles: open, kind: n.kind), !Self.isClaimed(p, claimed) { return p }
+        let tree = Self.subtree(agent.pid, procs: procs)
+        let open = Self.openFiles(pids: tree)
+        let grok = n.kind == "grok" ? Self.grokHome(agent.line) : nil
+        if let p = Self.logPath(openFiles: open, kind: n.kind, grokHome: grok), !Self.isClaimed(p, claimed) { return p }
+        if let grok {   // Grok Build lists its running sessions with their pids
+            let sessions = grok + "/sessions"
+            guard let data = FileManager.default.contents(atPath: grok + "/active_sessions.json"),
+                  let id = Self.grokSession(active: data, pids: tree),
+                  let p = SessionLog.locateGrok(sessionId: id, sessionsDir: sessions)?.path, !Self.isClaimed(p, claimed) else { return nil }
+            return p
+        }
         guard n.kind == "codex" else { return nil }
         let c = Self.codexCandidates(dir: codexDir, cwd: n.cwd, after: agent.start).filter { !Self.isClaimed($0, claimed) }
         return c.count == 1 ? c[0] : nil
@@ -269,9 +279,21 @@ public actor SessionResolver {
         return out
     }
 
-    /// The one agent log among open files, or nil when there is none or more than one.
-    public static func logPath(openFiles: [String], kind: String) -> String? {
+    /// The one agent log among open files, or nil when there is none or more than one. Grok Build keeps its session's
+    /// `events.jsonl` open, not the conversation: the log is `updates.jsonl` in the same folder. `grokHome`: the agent's
+    /// `GROK_HOME` (default `~/.grok`).
+    public static func logPath(openFiles: [String], kind: String, grokHome: String? = nil) -> String? {
         let home = NSHomeDirectory()
+        if kind == "grok" {
+            let sessions = (grokHome ?? home + "/.grok") + "/sessions/"
+            let dirs = Set(openFiles.compactMap { p -> String? in
+                guard p.hasPrefix(sessions), !p.contains("/../") else { return nil }
+                let rest = p.dropFirst(sessions.count).split(separator: "/")
+                guard rest.count == 3, rest[2] == "events.jsonl" || rest[2] == "updates.jsonl" else { return nil }
+                return sessions + rest[0] + "/" + rest[1]
+            })
+            return dirs.count == 1 ? dirs.first! + "/updates.jsonl" : nil
+        }
         let hits = Set(openFiles.filter { p in
             guard p.hasSuffix(".jsonl"), !p.contains("/../") else { return false }
             switch kind {
@@ -284,11 +306,30 @@ public actor SessionResolver {
         return hits.count == 1 ? hits.first : nil
     }
 
-    /// A path counts as claimed when it, or its session id (the file name ends in `<id>.jsonl`), is in `claimed`.
+    /// A path counts as claimed when it, or its session id (the file name ends in `<id>.jsonl`; Grok Build's
+    /// `<id>/updates.jsonl`), is in `claimed`.
     public static func isClaimed(_ path: String, _ claimed: Set<String>) -> Bool {
         if claimed.contains(path) { return true }
         let name = (path as NSString).lastPathComponent
-        return claimed.contains { !$0.isEmpty && !$0.contains("/") && (name == "\($0).jsonl" || name.hasSuffix("-\($0).jsonl")) }
+        let folder = name == "updates.jsonl" ? ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent : nil
+        return claimed.contains { !$0.isEmpty && !$0.contains("/") && (name == "\($0).jsonl" || name.hasSuffix("-\($0).jsonl") || folder == $0) }
+    }
+
+    /// Grok Build's home for an agent process: `GROK_HOME` from its env (`ps -E`), else `~/.grok`.
+    public static func grokHome(_ procLine: String) -> String {
+        if let m = (" " + procLine + " ").firstMatch(of: /\sGROK_HOME=(\S+)\s/) { return String(m.1) }
+        return NSHomeDirectory() + "/.grok"
+    }
+
+    /// The session of the one `active_sessions.json` entry whose pid is one of `pids`; nil for none or several.
+    public static func grokSession(active: Data, pids: [Int32]) -> String? {
+        guard let list = try? JSONSerialization.jsonObject(with: active) as? [[String: Any]] else { return nil }
+        let want = Set(pids.map(Int.init))
+        let ids = Set(list.compactMap { e -> String? in
+            guard let pid = e["pid"] as? Int, want.contains(pid), let id = e["session_id"] as? String, !id.isEmpty else { return nil }
+            return id
+        })
+        return ids.count == 1 ? ids.first : nil
     }
 
     /// Codex rollouts (`YYYY/MM/DD/rollout-<local time>-<id>.jsonl`) that started at or after `after` (2 s slack:

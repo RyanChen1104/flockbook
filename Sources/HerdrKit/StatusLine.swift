@@ -547,6 +547,13 @@ public enum StatusLineWrapper {
         let folder = StatusLineFolder(url: dir)
         let session = ClaudeStatusInfo(json: input)?.session
         if let session { folder.save(input: input, session: session) }
+        // Grok Build's built-in line: no command to run; drawn from the input.
+        if let o = folder.original(), o["type"] as? String == "builtin" {
+            let line = GrokBuiltinLine.render(input, items: o["items"] as? [String] ?? GrokStatusLineSetting.defaultItems, now: Date())
+            let out = line.isEmpty ? Data() : Data((line + "\n").utf8)
+            if let session { folder.save(output: out, session: session) }
+            return Result(output: out, status: 0)
+        }
         guard let cmd = folder.originalCommand() else {
             if let session { folder.save(output: Data(), session: session) }
             return Result(output: Data(), status: 0)

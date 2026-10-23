@@ -165,7 +165,7 @@ public struct QuestionRequest: Sendable, Hashable {
         case declined
     }
     public var toolUseId: String
-    /// `Agent.kind` of the asking agent: "claude" or "codex".
+    /// `Agent.kind` of the asking agent: "claude", "codex" or "grok".
     public var agent: String
     public var delivery: Delivery
     public var questions: [Question]

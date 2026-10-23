@@ -52,8 +52,8 @@ import CryptoKit
     var remotePictures: Bool { get }
     /// The log file of an agent session, where its pictures are read back (`LogImage.read`).
     func logURL(session: String) -> URL?
-    /// Claude Code's saved status line of this agent session (`StatusLineFolder`); nil when the feature is off or none.
-    func statusLine(session: String) -> StatusLineRecord?
+    /// The saved status line of this agent session (`StatusLineFolder`; Claude Code or Grok Build); nil when its switch is off or none.
+    func statusLine(kind: String, session: String) -> StatusLineRecord?
 }
 
 public enum HubSendResult: Sendable, Hashable { case sent, changed, failed }
@@ -591,8 +591,10 @@ extension Hub {
         let queued = HubQueued(pane: p.id, st.queued)
         if force ? !queued.items.isEmpty : queued != (lastQueued[p.id] ?? HubQueued(pane: p.id, nil)) { out.append(.queued(queued)) }
         lastQueued[p.id] = queued
-        // The status line (Claude only), the same way.
-        let line = HubStatusLine(pane: p.id, record: p.agent.flatMap { $0.kind == "claude" ? $0.sessionId : nil }.flatMap { backend.statusLine(session: $0) })
+        // The status line (Claude Code and Grok Build), the same way.
+        let line = HubStatusLine(pane: p.id, record: p.agent.flatMap { a in
+            a.kind == "claude" || a.kind == "grok" ? a.sessionId.flatMap { backend.statusLine(kind: a.kind, session: $0) } : nil
+        })
         if force ? !line.isEmpty : line != (lastStatusLine[p.id] ?? HubStatusLine(pane: p.id, segments: [])) { out.append(.statusLine(line)) }
         lastStatusLine[p.id] = line
         return out

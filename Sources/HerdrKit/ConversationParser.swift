@@ -14,6 +14,7 @@ public struct ConversationParser: Sendable {
     var runsByKey: [String: [(tool: String, label: ToolLabel, id: String)]] = [:]
     var questionAt: [String: Int] = [:]      // AskUserQuestion tool_use id -> index in `done`
     var pi = PiState()                               // pi entry tree (see ConversationParser+Pi.swift)
+    var grok = GrokState()                           // Grok Build chunk merging (see ConversationParser+Grok.swift)
     /// Claude Code's queue of messages typed while it works (`queue-operation` lines).
     public private(set) var queue = ClaudeQueueLog()
 
@@ -55,6 +56,7 @@ public struct ConversationParser: Sendable {
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         lineTS = Self.parseTime(o["timestamp"] as? String)
         lineOffset = offset
+        if let g = Self.grokUpdate(o) { feedGrok(g.update, meta: g.meta, top: o, offset: offset); return }
         if let payload = o["payload"] as? [String: Any] { feedCodex(type: o["type"] as? String, payload: payload, offset: offset); return }
         if o["uuid"] == nil, let t = o["type"] as? String, Self.piTypes.contains(t) { feedPi(o, line: line, offset: offset); return }
         if Self.isCursor(o) { feedCursor(o, offset: offset); return }
