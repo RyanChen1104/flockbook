@@ -75,7 +75,7 @@ import Observation
         do {
             let now: State
             if isGrok {
-                now = switch GrokStatusLineSetting.state(try grokText(), command: command, wasOn: folder.wasOn) {
+                now = switch try GrokStatusLineSetting.state(try grokText(), command: command, wasOn: folder.wasOn) {
                 case .on: .on
                 case .moved: .moved
                 case .off: .off
@@ -125,6 +125,7 @@ import Observation
     /// The owner switched it off: their own statusLine goes back.
     func turnOff() {
         guard previewState == nil else { return }
+        refresh()   // the state now: a file that cannot be read is a problem, not "replaced"
         do {
             if state == .replaced { folder.forgetOriginal(); folder.clean() }   // theirs is in already; only our note goes
             else {

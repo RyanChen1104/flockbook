@@ -655,6 +655,10 @@ extension HerdrClient {
             let ck: Set<Int>? = hooked && multi ? checked : nil
             let same: @Sendable (String) -> Bool = { r ? QuestionAdapter.showsReview(q, screen: $0, answers: answers) : QuestionAdapter.shows(q, question: k, screen: $0, other: inRow, focus: f, row: fr, checks: ck) }
             if hooked, step.sendsKeys { _ = try await waitScreen(paneId: paneId, timeout: 1.5, same) }
+            // Grok on the Mac (no gate): the exact question before each key too, not only its first words.
+            if q.agent == "grok", gate == nil, step.sendsKeys {
+                guard try await waitScreen(paneId: paneId, timeout: 1.5, same) else { throw QuestionAdapter.Failure.notOnScreen }
+            }
             switch step {
             case .text(let s):
                 try await gated(gate, paneId: paneId, screen: same)

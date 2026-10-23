@@ -6,7 +6,7 @@ import Foundation
 /// folder, with its type, command or built-in items) and puts ours in its place, with the owner's other keys (padding,
 /// refresh_interval); Off puts the kept text back exactly, or takes ours out when they had none. A status line set in
 /// another shape (dotted keys, an inline table, a subtable) is refused: nothing is written. Grok reads the table at
-/// startup, so a change shows from Grok's next launch.
+/// startup, so a change shows from Grok's next launch. A table Flockbook cannot read is refused: no state, no write.
 public enum GrokStatusLineSetting {
     public enum State: Sendable, Hashable { case off, on, replaced, moved }
 
@@ -37,18 +37,30 @@ public enum GrokStatusLineSetting {
 
     static func lines(_ text: String) -> [String] { text.components(separatedBy: "\n") }
 
-    /// A table header line: its name with spaces dropped; nil: not a header.
+    /// A table header line: its name with spaces dropped; nil: not a header. A byte order mark before it is skipped.
     static func tableName(_ line: String) -> String? {
+        let line = line.hasPrefix("\u{FEFF}") ? String(line.dropFirst()) : line
         guard let m = line.wholeMatch(of: /\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?\r?/) else { return nil }
         return String(m.1).filter { !$0.isWhitespace }
     }
 
     /// Finds the table, refusing a status line set in any other shape. Nil: none.
     static func table(_ ls: [String]) throws -> Table? {
-        var current = "", found: Int?
+        var current = "", found: Int?, open: String?
         for (i, l) in ls.enumerated() {
+            if open != nil {
+                // Text of a multi-line string; a header for ui there could be taken for the table.
+                if let name = tableName(l), name == "ui" || name.hasPrefix("ui.") {
+                    throw Failure.unexpected("config.toml has [\(name)] inside a multi-line string, which Flockbook does not change")
+                }
+                open = openString(l, open: open)
+                continue
+            }
             if let name = tableName(l) {
                 current = name
+                if l.trimmingCharacters(in: .whitespaces).trimmingPrefix("\u{FEFF}").hasPrefix("[["), name == "ui" || name.hasPrefix("ui.") {
+                    throw Failure.unexpected("config.toml has [[\(name)]], an array of tables, which Flockbook does not change")
+                }
                 if name == header {
                     guard found == nil else { throw Failure.unexpected("config.toml has two [ui.status_line] tables") }
                     found = i
@@ -57,10 +69,12 @@ public enum GrokStatusLineSetting {
                 }
                 continue
             }
-            let t = l.trimmingCharacters(in: .whitespaces)
+            open = openString(l, open: nil)
+            let t = (i == 0 ? Substring(l).trimmingPrefix("\u{FEFF}") : Substring(l)).trimmingCharacters(in: .whitespaces)
             guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { continue }
             let key = t[..<eq].filter { !$0.isWhitespace && $0 != "\"" && $0 != "'" }
-            if (current == "ui" && key.hasPrefix("status_line")) || (current.isEmpty && key.hasPrefix("ui.status_line")) {
+            // ui set at the top level (an inline table cannot take our table after it) or [ui]'s status_line key.
+            if (current == "ui" && key.hasPrefix("status_line")) || (current.isEmpty && (key == "ui" || key.hasPrefix("ui."))) {
                 throw Failure.unexpected("Grok's status line is set as \"\(t)\", which Flockbook does not change; use a plain [ui.status_line] table")
             }
         }
@@ -97,32 +111,82 @@ public enum GrokStatusLineSetting {
         return Table(start: start, end: end, entries: entries)
     }
 
+    /// The multi-line string ("\"\"\"" or "'''") still open at the end of `line`: `open`, one open before the line,
+    /// or one the line starts. Nil: none. Single-line strings and comments are skipped.
+    static func openString(_ line: String, open: String?) -> String? {
+        let c = Array(line.unicodeScalars)
+        var i = 0, open = open
+        func at(_ q: Unicode.Scalar) -> Bool { i + 2 < c.count && c[i] == q && c[i + 1] == q && c[i + 2] == q }
+        while i < c.count {
+            if let d = open {
+                let q = d.unicodeScalars.first!
+                if q == "\"", c[i] == "\\" { i += 2; continue }
+                if at(q) {
+                    i += 3
+                    var n = 0   // up to two quote marks of the text right before the end
+                    while n < 2, i < c.count, c[i] == q { i += 1; n += 1 }
+                    open = nil
+                } else { i += 1 }
+                continue
+            }
+            switch c[i] {
+            case "#": return nil
+            case "\"" where at("\""): open = "\"\"\""; i += 3
+            case "'" where at("'"): open = "'''"; i += 3
+            case "\"":
+                i += 1
+                while i < c.count, c[i] != "\"" { i += c[i] == "\\" ? 2 : 1 }
+                i += 1
+            case "'":
+                i += 1
+                while i < c.count, c[i] != "'" { i += 1 }
+                i += 1
+            default: i += 1
+            }
+        }
+        return open
+    }
+
     /// Only spaces or a comment.
     static func comment(_ s: Substring) -> Bool {
         let t = s.trimmingCharacters(in: .whitespaces)
         return t.isEmpty || t.hasPrefix("#")
     }
 
-    /// A basic or literal string at the start of `s`, and what follows it.
+    /// A basic or literal string at the start of `s`, and what follows it. Read per Unicode scalar, as `quoted`
+    /// writes it (a quote mark or backslash followed by a combining mark is still a quote mark or backslash).
     static func string(_ s: Substring) -> (String, Substring)? {
-        guard let q = s.first, q == "\"" || q == "'" else { return nil }
-        var out = "", i = s.index(after: s.startIndex)
-        while i < s.endIndex {
-            let c = s[i]
-            if c == q { return (out, s[s.index(after: i)...]) }
-            if c == "\n" { return nil }
+        let u = s.unicodeScalars
+        guard let q = u.first, q == "\"" || q == "'" else { return nil }
+        var out = String.UnicodeScalarView(), i = u.index(after: u.startIndex)
+        while i < u.endIndex {
+            let c = u[i]
+            if c == q { return (String(out), Substring(u[u.index(after: i)...])) }
+            if (c.value < 0x20 && c != "\t") || c.value == 0x7F { return nil }   // control characters: not TOML
             if q == "\"", c == "\\" {
-                i = s.index(after: i)
-                guard i < s.endIndex else { return nil }
-                switch s[i] {
+                i = u.index(after: i)
+                guard i < u.endIndex else { return nil }
+                switch u[i] {
                 case "\"": out.append("\"")
                 case "\\": out.append("\\")
                 case "n": out.append("\n")
                 case "t": out.append("\t")
+                case "r": out.append("\r")
+                case "b": out.append("\u{8}")
+                case "f": out.append("\u{C}")
+                case "u", "U":
+                    var hex = ""
+                    for _ in 0..<(u[i] == "u" ? 4 : 8) {
+                        i = u.index(after: i)
+                        guard i < u.endIndex, u[i].properties.isASCIIHexDigit else { return nil }
+                        hex.unicodeScalars.append(u[i])
+                    }
+                    guard let v = UInt32(hex, radix: 16), let sc = Unicode.Scalar(v) else { return nil }
+                    out.append(sc)
                 default: return nil   // other escapes: not read
                 }
             } else { out.append(c) }
-            i = s.index(after: i)
+            i = u.index(after: i)
         }
         return nil
     }
@@ -144,14 +208,32 @@ public enum GrokStatusLineSetting {
         }
     }
 
+    /// A TOML basic string, escaped per Unicode scalar: a quote mark or backslash followed by a combining mark is
+    /// still escaped, and control characters are written as \uXXXX.
     static func quoted(_ s: String) -> String {
-        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        var out = String.UnicodeScalarView()
+        out.append("\"")
+        for u in s.unicodeScalars {
+            switch u {
+            case "\"": out.append(contentsOf: "\\\"".unicodeScalars)
+            case "\\": out.append(contentsOf: "\\\\".unicodeScalars)
+            case "\u{0}"..."\u{1F}", "\u{7F}": out.append(contentsOf: String(format: "\\u%04X", u.value).unicodeScalars)
+            default: out.append(u)
+            }
+        }
+        out.append("\"")
+        return String(out)
     }
 
     static func isOurs(_ t: Table?, command: String) -> Bool { t?.command == command && t?.type == "command" }
     static func isMoved(_ t: Table?, command: String) -> Bool {
         guard let c = t?.command else { return false }
         return ClaudeStatusLineSetting.isMoved(["command": c], command: command)
+    }
+    /// Ours (or an older copy's) with another type: refused, as Flockbook cannot tell what the owner meant.
+    static func checkType(_ t: Table?, command: String) throws {
+        guard let t, t.command == command || isMoved(t, command: command), t.type != "command" else { return }
+        throw Failure.unexpected("[ui.status_line] has Flockbook's command with type \(t.type.map { "\"\($0)\"" } ?? "unset"); set type = \"command\" in ~/.grok/config.toml")
     }
 
     /// `text` with ours, and the owner's table to keep (nil: ours was in already, or only its path changed).
@@ -160,6 +242,7 @@ public enum GrokStatusLineSetting {
     public static func enabling(_ text: String, command: String) throws -> (text: String, original: [String: Any]?) {
         var ls = lines(text)
         let t = try table(ls)
+        try checkType(t, command: command)
         if isOurs(t, command: command) { return (text, nil) }
         if let t, isMoved(t, command: command), let e = t.entries.first(where: { $0.key == "command" }) {
             ls.replaceSubrange(e.lines, with: ["command = " + quoted(command)])
@@ -193,7 +276,9 @@ public enum GrokStatusLineSetting {
     /// (the owner set another since), nothing to change. Throws when the kept table is gone.
     public static func disabling(_ text: String, command: String, original: [String: Any]?) throws -> String? {
         var ls = lines(text)
-        guard let t = try table(ls), isOurs(t, command: command) || isMoved(t, command: command) else { return nil }
+        let found = try table(ls)
+        try checkType(found, command: command)
+        guard let t = found, isOurs(t, command: command) || isMoved(t, command: command) else { return nil }
         guard let original else {
             throw Failure.unexpected("Flockbook's copy of your own status line is gone, so it cannot be put back; set [ui.status_line] in ~/.grok/config.toml again")
         }
@@ -207,9 +292,11 @@ public enum GrokStatusLineSetting {
         return t.end == lines(text).count - 1 && out.hasSuffix(tail) ? String(out.dropLast(tail.count)) : out
     }
 
-    /// `wasOn`: the owner switched ours on and not off since.
-    public static func state(_ text: String, command: String, wasOn: Bool) -> State {
-        let t = try? table(lines(text))
+    /// `wasOn`: the owner switched ours on and not off since. Throws when the table cannot be read: ours may still be
+    /// in it, so it is not "replaced" (Off would forget the owner's kept table).
+    public static func state(_ text: String, command: String, wasOn: Bool) throws -> State {
+        let t = try table(lines(text))
+        try checkType(t, command: command)
         if isOurs(t, command: command) { return .on }
         if isMoved(t, command: command) { return .moved }
         return wasOn ? .replaced : .off
@@ -311,7 +398,11 @@ public enum GrokBuiltinLine {
         guard input.count <= ClaudeStatusInfo.maxBytes, let o = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any] else { return "" }
         func dict(_ k: String) -> [String: Any]? { o[k] as? [String: Any] }
         func cut(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(n - 1)) + "…" : s }
-        func nonEmpty(_ s: String?) -> String? { s.flatMap { $0.isEmpty ? nil : $0 } }
+        // Control characters dropped: the session name may come from the model, and the line goes to Grok's terminal.
+        func clean(_ s: String) -> String {
+            String(String.UnicodeScalarView(s.unicodeScalars.filter { !($0.value < 0x20 || (0x7F...0x9F).contains($0.value)) }))
+        }
+        func nonEmpty(_ s: String?) -> String? { s.map(clean).flatMap { $0.isEmpty ? nil : $0 } }
         var parts: [String] = []
         for item in items {
             switch item {
