@@ -139,7 +139,7 @@ struct PaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { paneFrame = $0; QuestionProbe.paneFrame = $0 }
-        .task(id: pane.cwd) { branch = await GitInfo.branch(cwd: pane.cwd) }
+        .task(id: pane.cwd) { branch = await GitInfo.branch(cwd: pane.cwd, host: model.store.session.remote) }
         .task(id: pane.agent?.status) { await readScreenQuestion() }
         .task(id: "\(pane.agent?.status.rawValue ?? "")-\(focused)") {
             // While blocked or a tool call is pending, re-read the screen every 2 s.

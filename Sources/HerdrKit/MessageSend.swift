@@ -15,7 +15,15 @@ import Foundation
     @discardableResult
     public static func send(_ text: String, to paneId: String, client: HerdrClient, kind: String?, directory: String,
                             gate: KeyGate? = nil, maxWait: Duration = .seconds(5)) async -> Bool {
-        let steps = ImagePaste.plan(text, directory: directory)
+        await send(steps: ImagePaste.plan(text, directory: directory), text: text, to: paneId, client: client, kind: kind,
+                   gate: gate, maxWait: maxWait)
+    }
+
+    /// The same send with the steps made already (a remote session pastes host paths, `RemoteUpload.hostSteps`).
+    /// `text`: the message as written; sent as is when `steps` hold no image.
+    @discardableResult
+    public static func send(steps: [ImagePaste.Step], text: String, to paneId: String, client: HerdrClient, kind: String?,
+                            gate: KeyGate? = nil, maxWait: Duration = .seconds(5)) async -> Bool {
         let images = steps.filter { if case .paste = $0 { true } else { false } }.count
         // `gate` (a remote device): before every step the agent is not blocked now and nothing on screen would take
         // the keys as a choice (a prompt, a question, any picker), read last.

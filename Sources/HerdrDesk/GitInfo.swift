@@ -1,11 +1,19 @@
 import Foundation
+import HerdrKit
 
 enum GitInfo {
     private static let cache = Cache()
 
     /// Current branch of the repo containing `cwd`, or nil if unreadable. Read-only `git` call, 2 s timeout,
-    /// cached per cwd for 10 s.
-    static func branch(cwd: String) async -> String? {
+    /// cached per cwd for 10 s. With `host` (a remote session) git runs there (`RemoteGit`, 5 s, cached 30 s).
+    static func branch(cwd: String, host: RemoteHost? = nil) async -> String? {
+        if let host {
+            let key = "\(host.label)\u{0}\(cwd)"
+            if let hit = cache.get(key, maxAge: 30) { return hit }
+            let result = await RemoteGit.branch(cwd: cwd, host: host)
+            cache.set(key, result)
+            return result
+        }
         let path = (cwd as NSString).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         if let hit = cache.get(path) { return hit }
@@ -36,9 +44,9 @@ enum GitInfo {
         private let lock = NSLock()
         private var map: [String: (at: Date, value: String?)] = [:]
         /// Outer optional = cache miss.
-        func get(_ k: String) -> String?? {
+        func get(_ k: String, maxAge: TimeInterval = 10) -> String?? {
             lock.lock(); defer { lock.unlock() }
-            guard let e = map[k], Date().timeIntervalSince(e.at) < 10 else { return nil }
+            guard let e = map[k], Date().timeIntervalSince(e.at) < maxAge else { return nil }
             return .some(e.value)
         }
         func set(_ k: String, _ v: String?) { lock.lock(); map[k] = (Date(), v); lock.unlock() }

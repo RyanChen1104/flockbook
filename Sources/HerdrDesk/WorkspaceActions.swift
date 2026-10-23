@@ -107,20 +107,30 @@ extension AppModel {
 }
 
 /// "New workspace" sheet: a name (optional, herdr names it otherwise) and a start folder (home by default).
+/// A remote session (`HerdrSession.remote`) takes a host path as text instead (no panel on this Mac's disk); empty:
+/// herdr's default folder on the host.
 struct NewWorkspaceSheet: View {
     @Environment(AppModel.self) private var model
     @State private var name = ""
     @State private var folder = NSHomeDirectory()
+    @State private var hostFolder = ""
     @FocusState private var focused: Bool
+
+    private var remote: RemoteHost? { model.store.session.remote }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New workspace").font(.headline)
             TextField("Name", text: $name).textFieldStyle(.roundedBorder).focused($focused).onSubmit(create)
-            HStack {
-                Text(Self.pretty(folder)).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                Spacer()
-                Button("Choose…") { choose() }
+            if let remote {
+                TextField("Folder on \(remote.label) (empty: herdr's default)", text: $hostFolder)
+                    .textFieldStyle(.roundedBorder).onSubmit(create)
+            } else {
+                HStack {
+                    Text(Self.pretty(folder)).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    Spacer()
+                    Button("Choose…") { choose() }
+                }
             }
             HStack {
                 Spacer()
@@ -134,7 +144,7 @@ struct NewWorkspaceSheet: View {
 
     private func create() {
         model.newWorkspaceOpen = false
-        model.createWorkspace(name: name, cwd: folder)
+        model.createWorkspace(name: name, cwd: remote == nil ? folder : hostFolder.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func choose() {

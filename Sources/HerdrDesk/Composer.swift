@@ -281,7 +281,8 @@ struct ComposerView: View {
             guard !(await deliver(message)) else { return }
             if text.isEmpty && images.isEmpty { text = sent.text; images = sent.images }
             returnedText = text
-            withAnimation(.easeOut(duration: 0.2)) { sendError = "Not sent: herdr did not take the message. Press Return to try again." }
+            let why = MessageSender.takeFailure(message).map { "Not sent. \($0) Press Return to try again." }
+            withAnimation(.easeOut(duration: 0.2)) { sendError = why ?? "Not sent: herdr did not take the message. Press Return to try again." }
         }
     }
     private func removeImage(_ url: URL) {
