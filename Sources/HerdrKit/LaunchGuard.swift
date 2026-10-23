@@ -28,7 +28,7 @@ public enum LaunchGuard {
     /// Options that change a launch or a check: the session, the look, the preview stores, the fuzz seed, live-check modes.
     public static let options: Set<String> = [
         "--session", "--read-only", "--light", "--dark", "--save-window", "--preview", "--preview-dense", "--seed",
-        "--deny", "--image", "--warm", "--other", "--legacy-look",
+        "--deny", "--image", "--warm", "--other", "--legacy-look", "--remote", "--remote-local",
     ]
     public static let known: Set<String> = headless.union(content).union(realWindow).union(options)
 
