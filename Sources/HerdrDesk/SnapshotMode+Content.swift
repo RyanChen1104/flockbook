@@ -32,6 +32,7 @@ import SwiftUI
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }
+        if args.contains("--test-permission") { Task { await permission() }; return true }
         if args.contains("--test-screencolumn") { Task { await screenColumn() }; return true }
         if args.contains("--test-scroll-real") {
             // Not in `flags`: the one content check with a real window (owner's leave), so the app keeps its WindowGroup window.

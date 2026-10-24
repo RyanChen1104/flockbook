@@ -18,7 +18,7 @@ public enum LaunchGuard {
     /// Content-area checks (ContentTests), also headless.
     public static let content: Set<String> = [
         "--test-sendfail", "--test-loadstate", "--test-termfail", "--test-termtheme", "--test-glyph", "--test-panebars", "--test-surfaces", "--test-search",
-        "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-screencolumn",
+        "--test-textsize", "--test-scrolltop", "--test-shortcuts", "--test-question", "--test-permission", "--test-screencolumn",
         "--test-question-live", "--bench-conversation", "--test-conversation-churn", "--test-busy-tab",
         "--test-open-latest", "--test-open-latest-live", "--test-open-latest-log",
         "--test-legacy-look", "--test-pictures",

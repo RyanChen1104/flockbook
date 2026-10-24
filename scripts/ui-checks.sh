@@ -51,6 +51,7 @@ OFFLINE=(
     "scrolltop|scrolltop-test: PASS|--test-scrolltop"
     "shortcuts|shortcuts-test: PASS|--test-shortcuts"
     "question|question-test: PASS|--test-question"
+    "permission|permission-test: PASS|--test-permission"
     "screencolumn|screencolumn-test: PASS|--test-screencolumn"
     "conversation-churn|churn-test: PASS|--test-conversation-churn"
     "busy-tab|busy-tab: PASS|--test-busy-tab"

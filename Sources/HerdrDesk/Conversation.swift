@@ -880,6 +880,14 @@ private struct CodeBox: View {
     }
 }
 
+/// Tests (`--test-permission`): a card every blocked pane shows in its composer slot, as if read from its screen; nil in
+/// the app.
+@MainActor enum ApprovalProbe {
+    static var injected: PermissionRequest?
+    /// The composer card's global frame, last reported.
+    static var cardFrame = CGRect.zero
+}
+
 struct ApprovalCard: View {
     let request: PermissionRequest
     let agentName: String
