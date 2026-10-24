@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The app's UI checks, one HerdrDesk run each: [ONLY=name,...] scripts/ui-checks.sh [offline|real] [out-dir]
+# The app's UI checks, one HerdrDesk run each: [ONLY=name,...] [SHARD=i/n] scripts/ui-checks.sh [offline|real] [out-dir]
 #   offline (default): every check that needs no herdr server and opens no window (preview stores, offscreen windows).
 #   real: the two checks with a real window (--test-fullscreen-real, --test-scroll-real). They take the screen and the
 #         focus: CI runners only, or with the owner's leave. Needs FLOCKBOOK_VISIBLE_OK=1.
@@ -62,8 +62,12 @@ REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"
     "scroll-real|scroll-real|--preview --test-scroll-real"
 )
-# Fail on the CI runner's newer macOS (26.6), pass on 26.1: to be looked into, then removed from here.
-KNOWN=" island-height settings-page screencolumn glyph "
+# Checks that fail for a reason being looked into, e.g. " island-height glyph "; empty now.
+KNOWN=" "
+# Fail now and then on a loaded runner, for a reason not fixed yet: a failure here runs the check once more, and a pass
+# then is a warning ("flaky passed on retry"). Only these: every other check fails on its first failure.
+#   conversation-churn: autoload-fling-busy, every core spun on a macOS 15 runner: one anchor fix lands a frame late.
+FLAKY=" conversation-churn "
 case "$MODE" in
     offline) CHECKS=("${OFFLINE[@]}") ;;
     real)
@@ -86,6 +90,41 @@ if [ -n "${ONLY:-}" ]; then
     CHECKS=("${picked[@]}")
 fi
 
+# Seconds a check takes on a CI runner (macos-26 and macos-15 alike); a check not named here counts as 15.
+estimate() {
+    case "$1" in
+        conversation-churn) echo 140 ;; tab-overflow) echo 113 ;; question) echo 47 ;; hittest) echo 45 ;;
+        snapshot) echo 44 ;; settings-page) echo 44 ;; snapshot-statusline) echo 41 ;; snapshot-remote) echo 36 ;;
+        snapshot-settings) echo 33 ;; chrome) echo 25 ;; root-width) echo 23 ;; screencolumn) echo 22 ;;
+        shortcuts|tabdrag|menus|glyph|pictures) echo 16 ;; composer|termtheme|scrolltop) echo 10 ;;
+        bottom|sidebar|search|busy-tab|textsize) echo 8 ;;
+        snapshot-reading|panebars|tabkeys|loadstate|island-height|legacy-look|sendfail|table) echo 5 ;;
+        closetab|termfail|surfaces|sidebar-layout|panemenu|settings-migration) echo 2 ;;
+        *) echo 15 ;;
+    esac
+}
+
+# SHARD=2/3: run the second of three groups. Longest check first, into the group with the fewest seconds so far
+# (the lower group on a tie): the same groups on every runner. Applied after ONLY.
+if [ -n "${SHARD:-}" ]; then
+    [[ "$SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" -ge 1 ] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] \
+        || { echo "ui-checks: SHARD must be i/n with 1 <= i <= n, not '$SHARD'" >&2; exit 2; }
+    shard=${BASH_REMATCH[1]}; shards=${BASH_REMATCH[2]}
+    load=(); for ((g = 1; g <= shards; g++)); do load[g]=0; done
+    order=$(for ((k = 0; k < ${#CHECKS[@]}; k++)); do echo "$(estimate "${CHECKS[k]%%|*}") $k"; done | sort -k1,1nr -k2,2n)
+    mine=()
+    while read -r secs k; do
+        best=1; for ((g = 2; g <= shards; g++)); do [ "${load[g]}" -lt "${load[best]}" ] && best=$g; done
+        load[best]=$(( load[best] + secs ))
+        [ "$best" = "$shard" ] && mine+=("$k")
+    done <<< "$order"
+    picked=(); for k in $(printf '%s\n' ${mine[@]+"${mine[@]}"} | sort -n); do picked+=("${CHECKS[k]}"); done
+    names=(); for entry in ${picked[@]+"${picked[@]}"}; do names+=("${entry%%|*}"); done
+    echo "ui-checks: shard $SHARD (~${load[shard]}s): ${names[*]:-none}"
+    [ ${#picked[@]} -gt 0 ] || { echo "ui-checks $MODE: nothing to run (SHARD=$SHARD)"; exit 0; }
+    CHECKS=("${picked[@]}")
+fi
+
 if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
     echo "ui-checks: screen is locked; not starting" >&2; exit 3
 fi
@@ -105,13 +144,8 @@ run_limited() {
     return "$code"
 }
 
-failed=(); known_failed=()
-summary="$OUT/summary.txt"; : > "$summary"
-for entry in "${CHECKS[@]}"; do
-    IFS='|' read -r name pass argline <<< "$entry"
-    read -r -a args <<< "$argline"
-    log="$OUT/logs/$name.log"
-    [ "$MODE" = real ] && export FS_REAL_DIR="$OUT/$name"
+# One run of the current check: sets secs and verdict.
+run_once() {
     start=$(date +%s)
     run_limited "$LIMIT" "$BIN" "${args[@]}" > "$log" 2>&1; code=$?
     secs=$(( $(date +%s) - start ))
@@ -120,6 +154,25 @@ for entry in "${CHECKS[@]}"; do
     elif [ "$code" != 0 ]; then verdict="exit $code"
     elif grep -q 'FAIL' "$log"; then verdict="FAIL line"
     elif [ "$pass" != - ] && ! grep -qF "$pass" "$log"; then verdict="no '$pass' line"
+    fi
+}
+
+failed=(); known_failed=(); flaky_passed=()
+summary="$OUT/summary.txt"; : > "$summary"
+for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r name pass argline <<< "$entry"
+    read -r -a args <<< "$argline"
+    log="$OUT/logs/$name.log"
+    [ "$MODE" = real ] && export FS_REAL_DIR="$OUT/$name"
+    run_once
+    if [ "$verdict" != ok ] && [[ "$FLAKY" == *" $name "* ]]; then
+        first="$verdict"; mv "$log" "$OUT/logs/$name.first.log"
+        printf '%-20s %4ss  %s\n' "$name" "$secs" "$first; once more (FLAKY)" | tee -a "$summary"
+        grep 'FAIL' "$OUT/logs/$name.first.log" | sed "s/^/$name failed, first run: /"
+        run_once
+        if [ "$verdict" = ok ]; then
+            flaky_passed+=("$name"); echo "::warning title=ui-checks::$name failed ($first), passed on retry: flaky"
+        fi
     fi
     line=$(printf '%-20s %4ss  %s' "$name" "$secs" "$verdict")
     echo "$line" | tee -a "$summary"
@@ -137,5 +190,5 @@ for entry in "${CHECKS[@]}"; do
         echo "::notice title=ui-checks::$name passes now: remove it from KNOWN in scripts/ui-checks.sh"
     fi
 done
-echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}" | tee -a "$summary"
+echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}${flaky_passed:+; flaky passed on retry: ${flaky_passed[*]}}" | tee -a "$summary"
 [ ${#failed[@]} = 0 ]

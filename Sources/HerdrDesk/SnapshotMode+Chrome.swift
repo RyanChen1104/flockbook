@@ -242,33 +242,39 @@ import SwiftUI
         let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         WindowChrome.apply(win)
         win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
+        let ws = NSWorkspace.shared
+        print("island-height: backing scale \(win.backingScaleFactor), Reduce Transparency \(ws.accessibilityDisplayShouldReduceTransparency), Reduce Motion \(ws.accessibilityDisplayShouldReduceMotion)")
         let t0 = Date()
         while Date().timeIntervalSince(t0) < 8, WindowChrome.toolbarRow(win) == nil { try? await Task.sleep(for: .milliseconds(100)) }
         try? await Task.sleep(for: .seconds(1))
-        func image() -> NSBitmapImageRep? {
+        func image(_ w: NSWindow = win) -> NSBitmapImageRep? {
             typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
             guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
-                  let img = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue() else { return nil }
+                  let img = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(w.windowNumber), 1)?.takeRetainedValue() else { return nil }
             return NSBitmapImageRep(cgImage: img)
         }
         /// Top and bottom of the shape under column x (points from the window top): the first and last rows in the band
         /// that differ from the band's own colour above the shape.
-        func extent(_ rep: NSBitmapImageRep, x: CGFloat) -> (top: CGFloat, bottom: CGFloat)? {
-            let k = CGFloat(rep.pixelsWide) / win.frame.width
+        // from: the first row looked at (pt from the window top), also the background sample; above the island's top.
+        func extent(_ rep: NSBitmapImageRep, x: CGFloat, width: CGFloat = win.frame.width, from: CGFloat = 2) -> (top: CGFloat, bottom: CGFloat)? {
+            let k = CGFloat(rep.pixelsWide) / width
             func lum(_ y: Int) -> CGFloat {
                 guard let c = rep.colorAt(x: Int(x * k), y: y)?.usingColorSpace(.sRGB) else { return 0 }
                 return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
             }
-            let bg = lum(Int(2 * k)), rows = (Int(2 * k)..<Int(50 * k)).filter { abs(lum($0) - bg) > 0.012 }
+            let bg = lum(Int(from * k)), rows = (Int(from * k)..<Int(50 * k)).filter { abs(lum($0) - bg) > 0.012 }
             guard let a = rows.first, let b = rows.last else { return nil }
             return (CGFloat(a) / k, CGFloat(b + 1) / k)
         }
-        func check(_ tag: String, island: CGRect, actions: CGRect, file: String) {
-            guard let rep = image() else { step("\(tag): window picture", false); return }
+        func check(_ tag: String, island: CGRect, actions: CGRect, file: String, in w: NSWindow? = nil) {
+            let w = w ?? win
+            guard let rep = image(w) else { step("\(tag): window picture", false); return }
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "build/snapshots-glass/island-height-\(file).png"))
             // Away from the rounded ends: a quarter in from the island's left end, the group's middle.
-            let i = extent(rep, x: island.minX + island.width / 4), a = extent(rep, x: actions.midX)
+            let i = extent(rep, x: island.minX + island.width / 4, width: w.frame.width), a = extent(rep, x: actions.midX, width: w.frame.width)
             func f(_ e: (top: CGFloat, bottom: CGFloat)?) -> String { e.map { String(format: "%.1f...%.1f (%.1f)", $0.top, $0.bottom, $0.bottom - $0.top) } ?? "none" }
+            // Before macOS 26 the + / terminal buttons have no capsule (no glass): only the island is there to measure.
+            guard #available(macOS 26, *) else { step("\(tag): island \(f(i)) (buttons without a capsule before macOS 26)", i != nil); return }
             step("\(tag): island \(f(i)) = buttons \(f(a))",
                  i != nil && a != nil && abs(i!.top - a!.top) <= 0.5 && abs(i!.bottom - a!.bottom) <= 0.5)
         }
@@ -298,6 +304,26 @@ import SwiftUI
         try? await Task.sleep(for: .seconds(1))
         if let r = WindowChrome.toolbarRow(win) { check("full screen revealed (toolbar copy)", island: r.island, actions: r.actions, file: "fullscreen-revealed") }
         else { step("revealed: toolbar row measured", false) }
+        win.orderOut(nil)
+        // Reduce Transparency (on on CI runners) draws the island flat with a hairline, as flat mode does (where the buttons
+        // have no capsule to compare with). The hairline stays inside the island's frame: centred on the edge it stands out
+        // half a point, a whole row taller than the buttons' capsule on a 1x display.
+        let fhost = NSHostingView(rootView: RootView(flat: true).environment(AppModel(store: .preview)).frame(width: size.width, height: size.height))
+        fhost.frame = NSRect(origin: .zero, size: size)
+        let fwin = OffscreenWindow(contentRect: fhost.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        WindowChrome.apply(fwin)
+        fwin.contentView = fhost; fwin.setFrameOrigin(NSPoint(x: -3000, y: -3000)); fwin.orderFrontRegardless()
+        let t1 = Date()
+        while Date().timeIntervalSince(t1) < 8, WindowChrome.toolbarRow(fwin) == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        try? await Task.sleep(for: .seconds(1))
+        if let r = WindowChrome.toolbarRow(fwin), let rep = image(fwin) {
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "build/snapshots-glass/island-height-flat.png"))
+            // On macOS 15 the island's frame starts 1 pt from the window top: look from the row above it.
+            let e = extent(rep, x: r.island.minX + r.island.width / 4, width: fwin.frame.width, from: max(0, r.island.minY - 1))
+            step(String(format: "flat island: drawn %@ inside its frame %.1f...%.1f", e.map { String(format: "%.1f...%.1f", $0.top, $0.bottom) } ?? "none", r.island.minY, r.island.maxY),
+                 e.map { abs($0.top - r.island.minY) <= 0.25 && abs($0.bottom - r.island.maxY) <= 0.25 } ?? false)
+        } else { step("flat: toolbar row and picture", false) }
+        fwin.orderOut(nil)
         print("island-height: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
     }

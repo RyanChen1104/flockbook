@@ -559,7 +559,12 @@ import SwiftUI
         }
         let (busy, moving) = await measure(.working, picture: "\(dir)/glyphs.png")
         let (idle, still) = await measure(.idle, picture: nil)
-        step("12 working glyphs animate (window captures differ)", moving)
+        // Reduce Motion (on on CI runners) stops the spinner (SpinnerArc): the working glyphs stand still then.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            step("Reduce Motion: the 12 working glyphs stand still (window captures equal)", !moving)
+        } else {
+            step("12 working glyphs animate (window captures differ)", moving)
+        }
         step("control: idle glyphs do not (captures equal)", !still)
         step(String(format: "CPU 12 working %.1f %% vs idle glyphs %.1f %% (<= +1.5)", busy, idle), busy - idle <= 1.5)
         print("glyph-test: picture \(dir)/glyphs.png")
