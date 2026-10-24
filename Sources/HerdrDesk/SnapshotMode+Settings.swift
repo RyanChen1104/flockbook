@@ -383,6 +383,11 @@ extension ChromeTests {
         if let composer { win.makeFirstResponder(composer) }
         try? await Task.sleep(for: .milliseconds(400))
         let readAt = conversation?.contentView.bounds.minY ?? .nan
+        if conversation == nil {   // which scroll views there are, and why none counts (macOS 15 on CI)
+            for sv in views(root, NSScrollView.self) {
+                print("settings-page-test: scroll view \(type(of: sv)) frame \(sv.frame) document \(sv.documentView?.frame.size ?? .zero) insets \(sv.contentInsets.top)/\(sv.contentInsets.bottom)")
+            }
+        }
         step("a conversation to scroll (\(conversation.map { "\(Int($0.documentView?.frame.height ?? 0)) pt doc, at \(Int(readAt))" } ?? "none")) and a focused composer (\(win.firstResponder === composer))",
              conversation != nil && composer != nil && win.firstResponder === composer)
         func same(_ how: String) {
