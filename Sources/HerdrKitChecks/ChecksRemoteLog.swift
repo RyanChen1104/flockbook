@@ -45,6 +45,15 @@ import UniformTypeIdentifiers
         check(await at("pi", root + "/pi/run.txt", nil) == nil, "remote log: absolute path not ending in .jsonl -> nil")
         check(await at("pi", root + "/pi/../pi/run.jsonl", nil) == nil, "remote log: absolute path with /../ -> nil")
         check(await at("pi", root + "/pi/gone.jsonl", nil) == nil, "remote log: missing absolute path -> nil")
+        // Grok Build: sessions/<cwd folder>/<id>/updates.jsonl (not events.jsonl or chat_history.jsonl).
+        let grok = root + "/grok"
+        try put(grok + "/%2Fproj/g1/events.jsonl", "{}\n")
+        try put(grok + "/%2Fproj/g1/updates.jsonl", "{}\n")
+        try put(grok + "/%2Fproj/g2/chat_history.jsonl", "{}\n")
+        check(await at("grok", "g1", grok) == grok + "/%2Fproj/g1/updates.jsonl", "remote log: Grok updates.jsonl found on the host")
+        check(await at("grok", "g2", grok) == nil, "remote log: Grok session without updates.jsonl -> nil")
+        check(RemoteLogMirror.locateCommand(agent: "grok", sessionId: "g1", dir: nil)?.contains("\"${GROK_HOME:-$HOME/.grok}\"/sessions") == true,
+              "remote log: Grok without a folder: the host's GROK_HOME, else ~/.grok")
         check(RemoteLogMirror.locateCommand(agent: "claude", sessionId: "s1", dir: nil)?.contains("\"$HOME\"/.claude/projects") == true,
               "remote log: without a folder the host's own home is used")
     }

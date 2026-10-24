@@ -257,7 +257,7 @@ public actor RemoteLogMirror {
         }
         guard !id.isEmpty, !id.contains("/"), !id.contains("..") else { return nil }
         let rel = agent == "codex" ? ".codex/sessions" : agent == "cursor" ? ".cursor/projects" : ".claude/projects"
-        let d = dir.map(q) ?? "\"$HOME\"/\(rel)"
+        let d = dir.map(q) ?? (agent == "grok" ? "\"${GROK_HOME:-$HOME/.grok}\"/sessions" : "\"$HOME\"/\(rel)")
         let glob: String
         var newest = false
         switch agent {
@@ -265,6 +265,8 @@ public actor RemoteLogMirror {
             glob = "\(d)/*/*/*/rollout-*\(q("-\(id).jsonl"))"; newest = true
         case "cursor":  // projects/*/agent-transcripts/<id>/<id>.jsonl
             glob = "\(d)/*/agent-transcripts/\(q(id))/\(q(id + ".jsonl"))"
+        case "grok":    // sessions/<cwd folder>/<id>/updates.jsonl (not chat_history.jsonl, which compaction rewrites)
+            glob = "\(d)/*/\(q(id))/updates.jsonl"
         default:        // Claude Code: projects/*/<id>.jsonl
             glob = "\(d)/*/\(q(id + ".jsonl"))"
         }
