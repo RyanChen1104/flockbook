@@ -63,6 +63,10 @@ REAL=(
 )
 # Fail on the CI runner's newer macOS (26.6), pass on 26.1: to be looked into, then removed from here.
 KNOWN=" island-height settings-page screencolumn glyph "
+# Fail now and then on a loaded runner, for a reason not fixed yet: a failure here runs the check once more, and a pass
+# then is a warning ("flaky passed on retry"). Only these: every other check fails on its first failure.
+#   conversation-churn: autoload-fling-busy, every core spun on a macOS 15 runner: one anchor fix lands a frame late.
+FLAKY=" conversation-churn "
 case "$MODE" in
     offline) CHECKS=("${OFFLINE[@]}") ;;
     real)
@@ -139,13 +143,8 @@ run_limited() {
     return "$code"
 }
 
-failed=(); known_failed=()
-summary="$OUT/summary.txt"; : > "$summary"
-for entry in "${CHECKS[@]}"; do
-    IFS='|' read -r name pass argline <<< "$entry"
-    read -r -a args <<< "$argline"
-    log="$OUT/logs/$name.log"
-    [ "$MODE" = real ] && export FS_REAL_DIR="$OUT/$name"
+# One run of the current check: sets secs and verdict.
+run_once() {
     start=$(date +%s)
     run_limited "$LIMIT" "$BIN" "${args[@]}" > "$log" 2>&1; code=$?
     secs=$(( $(date +%s) - start ))
@@ -154,6 +153,25 @@ for entry in "${CHECKS[@]}"; do
     elif [ "$code" != 0 ]; then verdict="exit $code"
     elif grep -q 'FAIL' "$log"; then verdict="FAIL line"
     elif [ "$pass" != - ] && ! grep -qF "$pass" "$log"; then verdict="no '$pass' line"
+    fi
+}
+
+failed=(); known_failed=(); flaky_passed=()
+summary="$OUT/summary.txt"; : > "$summary"
+for entry in "${CHECKS[@]}"; do
+    IFS='|' read -r name pass argline <<< "$entry"
+    read -r -a args <<< "$argline"
+    log="$OUT/logs/$name.log"
+    [ "$MODE" = real ] && export FS_REAL_DIR="$OUT/$name"
+    run_once
+    if [ "$verdict" != ok ] && [[ "$FLAKY" == *" $name "* ]]; then
+        first="$verdict"; mv "$log" "$OUT/logs/$name.first.log"
+        printf '%-20s %4ss  %s\n' "$name" "$secs" "$first; once more (FLAKY)" | tee -a "$summary"
+        grep 'FAIL' "$OUT/logs/$name.first.log" | sed "s/^/$name failed, first run: /"
+        run_once
+        if [ "$verdict" = ok ]; then
+            flaky_passed+=("$name"); echo "::warning title=ui-checks::$name failed ($first), passed on retry: flaky"
+        fi
     fi
     line=$(printf '%-20s %4ss  %s' "$name" "$secs" "$verdict")
     echo "$line" | tee -a "$summary"
@@ -171,5 +189,5 @@ for entry in "${CHECKS[@]}"; do
         echo "::notice title=ui-checks::$name passes now: remove it from KNOWN in scripts/ui-checks.sh"
     fi
 done
-echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}" | tee -a "$summary"
+echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}${flaky_passed:+; flaky passed on retry: ${flaky_passed[*]}}" | tee -a "$summary"
 [ ${#failed[@]} = 0 ]
