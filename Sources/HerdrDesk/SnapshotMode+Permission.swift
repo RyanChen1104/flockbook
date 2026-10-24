@@ -30,11 +30,16 @@ extension ContentTests {
         step("long fixture reads as a card (\(long?.command.split(separator: "\n").count ?? 0) lines)", (long?.command.split(separator: "\n").count ?? 0) > 30)
         step("wide fixture reads as a card (\(wide?.command.count ?? 0) chars)", (wide?.command.count ?? 0) > 1000)
 
-        // "none": the same window without a card, the baseline.
+        // "none": the same window without a card, the baseline. A window is clamped to the screen (a CI runner's is 1024x768),
+        // so a card's window must get the size the baseline got on this Mac, not the size asked for.
+        var baseline: [String: CGSize] = [:]
+        let small = NSSize(width: 900, height: 480)
         for (name, request) in [("none", nil), ("long", long), ("wide", wide)] as [(String, PermissionRequest?)] {
             if name != "none", request == nil { continue }
             ApprovalProbe.injected = request
-            for (size, full) in [(NSSize(width: 1440, height: 860), true), (NSSize(width: 960, height: 600), false), (NSSize(width: 900, height: 480), false)] {
+            // Also a window asked taller than the screen (a CI runner's 1024x768 clamps every size here), windowed and full.
+            let over = NSSize(width: 1440, height: (NSScreen.main?.frame.height ?? 768) + 300)
+            for (size, full) in [(NSSize(width: 1440, height: 860), true), (over, true), (over, false), (NSSize(width: 960, height: 600), false), (NSSize(width: 900, height: 480), false)] {
                 ApprovalProbe.cardFrame = .zero
                 let model = AppModel(store: .preview)
                 if let ws = model.store.workspaces.first(where: { $0.tabs.contains { $0.status == .blocked } }),
@@ -49,9 +54,11 @@ extension ContentTests {
                 try? await Task.sleep(for: .seconds(2))
                 let tag = "\(name)-\(Int(size.width))x\(Int(size.height))\(full ? "-full" : "")"
                 let h = win.frame.height, card = ApprovalProbe.cardFrame, pane = QuestionProbe.paneFrame
-                let content = host.frame.size
-                step("\(tag): window keeps its size (\(Int(content.width))x\(Int(content.height)))",
-                     abs(content.width - size.width) < 1 && abs(content.height - size.height) < 1)
+                let content = host.frame.size, key = "\(Int(size.width))x\(Int(size.height))\(full)"
+                if request == nil { baseline[key] = content }
+                let want = baseline[key] ?? size
+                step("\(tag): window keeps the baseline's size (\(Int(content.width))x\(Int(content.height)), baseline \(Int(want.width))x\(Int(want.height)))",
+                     abs(content.width - want.width) < 1 && abs(content.height - want.height) < 1)
                 if request != nil {
                     step("\(tag): card shown inside the window (y \(Int(card.minY))..\(Int(card.maxY)) of \(Int(h)), \(Int(card.height)) tall)",
                          card.height > 100 && card.minY >= 0 && card.maxY <= h + 0.5)
@@ -62,6 +69,21 @@ extension ContentTests {
                 if full {
                     let island = TabProbe.island
                     step("\(tag): tab row inside the window (y \(Int(island.minY))..\(Int(island.maxY)))", island.height > 0 && island.minY >= 0 && island.maxY <= h)
+                }
+                // Made smaller with the card shown: the card's height follows the pane down, it never holds the window at its old size.
+                if !full {
+                    win.setContentSize(small); try? await Task.sleep(for: .seconds(1.5))
+                    let shrunk = host.frame.size, skey = "\(key)-small"
+                    if request == nil { baseline[skey] = shrunk }
+                    let swant = baseline[skey] ?? small
+                    step("\(tag): made \(Int(small.width))x\(Int(small.height)), the window gets the baseline's size (\(Int(shrunk.width))x\(Int(shrunk.height)), baseline \(Int(swant.width))x\(Int(swant.height)))",
+                         abs(shrunk.width - swant.width) < 1 && abs(shrunk.height - swant.height) < 1)
+                    if request != nil {
+                        let card = ApprovalProbe.cardFrame
+                        step("\(tag): made smaller, card inside the window (y \(Int(card.minY))..\(Int(card.maxY)) of \(Int(win.frame.height)))",
+                             card.height > 100 && card.minY >= 0 && card.maxY <= win.frame.height + 0.5)
+                    }
+                    win.setContentSize(size); try? await Task.sleep(for: .seconds(0.5))
                 }
                 // A window tens of thousands of points tall cannot be captured: the picture is the layout at the asked size.
                 host.sizingOptions = []; win.setContentSize(size); try? await Task.sleep(for: .seconds(0.5))
