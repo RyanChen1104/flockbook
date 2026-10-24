@@ -8,5 +8,6 @@ One short line: what this release is about.
 ### 🔒 Security
 
 ### 🐛 Bug Fixes
+- A Claude Code permission prompt with a long command no longer breaks the window: the tabs, the conversation and the reply field stay in place, and the command scrolls inside the card.
 
 ### ⚙️ Changes

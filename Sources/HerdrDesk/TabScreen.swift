@@ -185,7 +185,8 @@ extension PaneView {
             ApprovalCard(request: r, agentName: agent.name, canRespond: true,
                          onAllow: { approve(true, r) },
                          onDeny: { approve(false, r) },
-                         onOpen: { model.showTerminal = true })
+                         onOpen: { model.showTerminal = true },
+                         maxHeight: Self.cardHeight(pane: paneFrame.height, label: labelShown))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ApprovalProbe.cardFrame = $0 }
                 .id(r.toolUseId)
                 .inputColumn()
