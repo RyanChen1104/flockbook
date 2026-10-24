@@ -583,6 +583,10 @@ enum SnapshotRunner {
         // the panel edge per frame. Display-link frames and CPU over the slide (offscreen window: the owner judges by eye).
         for name in ["show", "hide"] {
             let m = await ChromeTests.sampleToggle(win, model)
+            // The visibility follows AppKit's slide when it ends, later than the 0.5 s of samples on a busy runner: wait for
+            // it (3 s at most) before checking it and before the next toggle, which a slide still running could swallow.
+            let want: NavigationSplitViewVisibility = name == "hide" ? .detailOnly : .all, settle = Date()
+            while Date().timeIntervalSince(settle) < 3, model.sidebarVisibility != want { try? await Task.sleep(for: .milliseconds(50)) }
             print(String(format: "chrome-test: toggle %@: %d display frames in 0.5 s, interval avg %.1f ms, max %.1f ms, over 1.5x nominal %d; CPU %.0f ms (%.0f%% of one core)",
                          name, m.frames.count, m.frames.avg, m.frames.max, m.frames.slow, m.cpu * 1000, m.cpu / 0.5 * 100))
             print("chrome-test: toggle \(name): window content x during the slide \(Set(m.roots.map { String(format: "%.1f", $0) }).sorted()) (the test's fixed-width root, overflowed by the split for a moment)")
