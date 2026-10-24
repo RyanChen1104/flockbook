@@ -29,7 +29,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/ci/') }}
 
 jobs:
-  # A push to main whose SHA already passed (on its ci/ branch, or by hand) skips every other job: the run shows green.
+  # A push to main whose SHA already passed a push run (its ci/ branch) skips every other job: the run shows green.
+  # Manual runs do not count: they may have run only some checks or only macOS 15.
   gate:
     name: Already green?
     runs-on: ubuntu-latest
@@ -46,7 +47,7 @@ jobs:
           if [ "$ON_MAIN" = true ]; then
             # An API error counts as "not found": the run goes on.
             found=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=100" \
-              --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and .conclusion == \"success\" and (.event == \"push\" or .event == \"workflow_dispatch\")) | .html_url] | first // empty") || found=
+              --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and .conclusion == \"success\" and .event == \"push\") | .html_url] | first // empty") || found=
             if [ -n "$found" ]; then skip=1; echo "::notice title=CI skipped::$GITHUB_SHA already passed: $found"; fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
