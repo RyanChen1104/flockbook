@@ -255,13 +255,14 @@ import SwiftUI
         }
         /// Top and bottom of the shape under column x (points from the window top): the first and last rows in the band
         /// that differ from the band's own colour above the shape.
-        func extent(_ rep: NSBitmapImageRep, x: CGFloat, width: CGFloat = win.frame.width) -> (top: CGFloat, bottom: CGFloat)? {
+        // from: the first row looked at (pt from the window top), also the background sample; above the island's top.
+        func extent(_ rep: NSBitmapImageRep, x: CGFloat, width: CGFloat = win.frame.width, from: CGFloat = 2) -> (top: CGFloat, bottom: CGFloat)? {
             let k = CGFloat(rep.pixelsWide) / width
             func lum(_ y: Int) -> CGFloat {
                 guard let c = rep.colorAt(x: Int(x * k), y: y)?.usingColorSpace(.sRGB) else { return 0 }
                 return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
             }
-            let bg = lum(Int(2 * k)), rows = (Int(2 * k)..<Int(50 * k)).filter { abs(lum($0) - bg) > 0.012 }
+            let bg = lum(Int(from * k)), rows = (Int(from * k)..<Int(50 * k)).filter { abs(lum($0) - bg) > 0.012 }
             guard let a = rows.first, let b = rows.last else { return nil }
             return (CGFloat(a) / k, CGFloat(b + 1) / k)
         }
@@ -317,7 +318,8 @@ import SwiftUI
         try? await Task.sleep(for: .seconds(1))
         if let r = WindowChrome.toolbarRow(fwin), let rep = image(fwin) {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "build/snapshots-glass/island-height-flat.png"))
-            let e = extent(rep, x: r.island.minX + r.island.width / 4, width: fwin.frame.width)
+            // On macOS 15 the island's frame starts 1 pt from the window top: look from the row above it.
+            let e = extent(rep, x: r.island.minX + r.island.width / 4, width: fwin.frame.width, from: max(0, r.island.minY - 1))
             step(String(format: "flat island: drawn %@ inside its frame %.1f...%.1f", e.map { String(format: "%.1f...%.1f", $0.top, $0.bottom) } ?? "none", r.island.minY, r.island.maxY),
                  e.map { abs($0.top - r.island.minY) <= 0.25 && abs($0.bottom - r.island.maxY) <= 0.25 } ?? false)
         } else { step("flat: toolbar row and picture", false) }
