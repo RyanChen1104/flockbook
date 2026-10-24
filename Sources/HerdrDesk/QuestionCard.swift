@@ -140,6 +140,7 @@ struct QuestionCard: View {
     @State private var chrome: CGFloat = 0
     @FocusState private var focus: Field?
     enum Field: Hashable { case card, other }
+    @State private var anchor = ViewAnchor()
 
     init(model: QuestionRequest, agentName: String, canSend: Bool = false, maxHeight: CGFloat = .infinity,
          onSend: @escaping ([QuestionAnswer]) async throws -> Void = { _ in },
@@ -213,7 +214,8 @@ struct QuestionCard: View {
         .focused($focus, equals: .card)
         .onKeyPress(phases: .down) { press in key(press) }
         .onAppear { if !underSettings { focus = .card } }
-        .onChange(of: underSettings) { _, on in if !on { focus = .card } }   // came under the page: Back focuses it
+        .background(ViewAnchor.Probe(anchor: anchor))
+        .onChange(of: underSettings) { _, on in if !on { focusAfterBack() } }   // came under the page: Back focuses it
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(agentName) asks you")
     }
@@ -346,6 +348,17 @@ struct QuestionCard: View {
         }
     }
 
+    /// After this update, when the card is enabled again. On macOS 15 a focus set inside a window's content does not make
+    /// that content the first responder (macOS 26 does): the card came while the page held the keys, the window itself
+    /// is the first responder after Back, and the keys never reach the card. So the content takes it first, then the card.
+    private func focusAfterBack() {
+        DispatchQueue.main.async {
+            if let v = anchor.view, let win = v.window, let content = win.contentView, v.isDescendant(of: content),
+               win.firstResponder == nil || win.firstResponder === win { win.makeFirstResponder(content) }
+            DispatchQueue.main.async { focus = .card }
+        }
+    }
+
     private func key(_ press: KeyPress) -> KeyPress.Result {
         guard !underSettings else { return .ignored }
         guard press.modifiers.subtracting(.shift).isEmpty else { return .ignored }
@@ -365,6 +378,16 @@ struct QuestionCard: View {
             case .ignored: return .ignored
             }
         }
+    }
+}
+
+/// The AppKit view behind a SwiftUI view, for its window.
+private final class ViewAnchor {
+    weak var view: NSView?
+    struct Probe: NSViewRepresentable {
+        let anchor: ViewAnchor
+        func makeNSView(context: Context) -> NSView { let v = NSView(); anchor.view = v; return v }
+        func updateNSView(_ view: NSView, context: Context) {}
     }
 }
 

@@ -3,7 +3,7 @@ import Foundation
 /// Sends a composer message to a pane (the Mac composer and the remote hub; `MessageSender` in the app).
 /// Plain text: one call, text + Enter. With image files of ours (`ImagePaste.plan`): the text goes through the same
 /// text call without Enter (a newline stays in the agent's input), each path as a bracketed paste (typed, Claude Code
-/// keeps it as text). Claude Code and Codex turn a pasted path into `[Image #n]` asynchronously and drop an Enter
+/// keeps it as text). Claude Code, Codex and Grok Build turn a pasted path into `[Image #n]` asynchronously and drop an Enter
 /// that arrives meanwhile, so the screen is polled (read-only) until the new markers show in the input, and only
 /// then Enter is sent. No new marker in time, or the screen cannot be read: no Enter (the message stays in the input).
 @MainActor public enum MessageSend {

@@ -48,7 +48,7 @@ public enum Hub {
     /// `approve` from any client is checked by the same rule. Nil: no approval open.
     public static func openApproval(_ s: ApprovalNotice.PaneState, logged: PermissionRequest?) -> HubApproval? {
         guard let id = ApprovalNotice.prompt(s, writes: true) else { return nil }
-        let r = logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen)
+        let r = logged?.toolUseId == id ? logged : ApprovalNotice.screenRequest(s.screen, agent: s.agentKind)
         guard let r else { return nil }
         return HubApproval(id: id, tool: r.toolName, title: r.title, command: r.command, state: .pending)
     }
@@ -105,14 +105,15 @@ public enum Hub {
         return q.toolUseId + "-" + String(hash, radix: 16)
     }
 
-    /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude
-    /// or Codex question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
+    /// The screen shows something typed text would answer as a choice: a permission prompt (read or not), a Claude,
+    /// Codex or Grok question picker (with its notes view), or any picker with its key line near the bottom ("Enter to
     /// confirm", "Esc to cancel", "enter to submit", "enter continue"), such as Claude's setup and folder-trust
     /// pickers and Codex's trust picker.
     public static func screenTakesKeys(_ screen: String) -> Bool {
         if ApprovalNotice.screenBox(screen) != nil || QuestionAdapter.claudeScreen(screen) != nil
             || QuestionAdapter.pickerRegion(agent: "codex", screen: screen) != nil
             || QuestionAdapter.pickerRegion(agent: "claude", screen: screen) != nil
+            || QuestionAdapter.pickerRegion(agent: "grok", screen: screen) != nil || ApprovalNotice.grokBox(screen) != nil
             || unreadablePrompt(screen: screen, blocked: false) { return true }
         let lines = screen.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.suffix(12)
         let keyLines = ["enter to confirm", "esc to cancel", "enter to submit", "enter to select", "enter continue"]

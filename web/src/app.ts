@@ -2,6 +2,7 @@
 // Talks to the hub on the same origin (`/ws`). Plain DOM, no packages. Remote protocol v1.
 import type { Queue, Answer, Approval, HubMessage, Item, Level, Pane, Picture, QuestionRequest, Status, StatusLine, StyledRun, Tab, Workspace } from "./protocol.ts";
 import { inline, markdown } from "./markdown.ts";
+import { monogram } from "./monogram.ts";
 
 const TOKEN_KEY = "flockbook.token", SIDE_KEY = "flockbook.side";
 const app = document.getElementById("app") as HTMLElement;
@@ -516,13 +517,6 @@ function dot(s: Status): HTMLElement {
   const el = h("span", { class: `dot ${s}`, role: "img", "aria-label": statusText[s] });
   el.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${glyphs[s]}</svg>`;   // fixed markup, no data
   return el;
-}
-/** "[ME] Meadow · Migration" -> "MM", "OpenAtlas" -> "OA" (the app's Monogram). */
-function monogram(raw: string): string {
-  let s = raw.replace(/^\[[^\]]*\]\s*/, "") || raw;
-  let words = s.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (words.length === 1) words = words[0].split(/(?=\p{Lu})/u);
-  return (words.length >= 2 ? words[0][0] + words[1][0] : s.slice(0, 2)).toUpperCase();
 }
 const canInput = (): boolean => state.level === "input";
 function toast(text: string): void {
@@ -1240,8 +1234,9 @@ function queueView(pane: string, q: Queue): HTMLElement {
   const when = q.agent === "claude" ? "Goes in after the current step or when the turn ends." : "Goes in when this turn ends.";
   const note = q.pullsAll ? (q.items.length > 1 ? `All ${q.items.length} come back as one message.` : "It comes back to the composer.")
     : "Sending it again adds it to the turn now running.";
-  // Only Claude Code's queue can be taken back exactly (its log); Codex's is edited in its terminal.
-  const blocked = !q.pullsAll ? `${when} To change it, press Shift+Left in Codex's terminal.`
+  // Only Claude Code's queue can be taken back exactly (its log); Codex's and Grok's are edited in their terminals.
+  const edit = q.agent === "grok" ? "To change it, press Ctrl+; in Grok's terminal." : "To change it, press Shift+Left in Codex's terminal.";
+  const blocked = !q.pullsAll ? `${when} ${edit}`
     : !q.pullable ? "The agent's input box has text. Clear it in the terminal to pull back."
     : q.items.includes(null) ? "The queued text cannot be read yet." : null;
   const pull = async (): Promise<void> => {

@@ -6,7 +6,7 @@ extension AppModel {
     /// READ-ONLY: the pane's queue from its screen and log. Nothing unless the agent works and has a queue Flockbook reads.
     func checkQueue(for pane: Pane) async {
         deliverPulled(pane: pane.id)
-        guard let a = pane.agent, a.status == .working, QueuePull.pullKey(agent: a.kind) != nil else {
+        guard let a = pane.agent, a.status == .working, QueuedInput.reads(kind: a.kind) else {
             if queued[pane.id] != nil { queued[pane.id] = nil }
             return
         }
@@ -130,7 +130,7 @@ struct QueuedStrip: View {
         return "Sending it again adds it to the turn now running."
     }
     private var blocked: String? {
-        if !queue.pullsAll { return "\(when) To change it, press Shift+Left in Codex's terminal." }
+        if !queue.pullsAll { return [when, QueuedInput.editHint(agent: queue.agent)].compactMap { $0 }.joined(separator: " ") }
         if !queue.pullable { return "The agent's input box has text. Clear it in the terminal to pull back." }
         if queue.items.contains(where: { $0 == nil }) { return "The queued text cannot be read yet." }
         return nil
@@ -155,7 +155,7 @@ struct QueuedStrip: View {
                 Text(blocked ?? "\(when) \(pullNote)").font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
                 if pulling { ProgressView().controlSize(.small) }
-                // Only Claude Code's queue can be taken back exactly (its log); Codex's is edited in its terminal.
+                // Only Claude Code's queue can be taken back exactly (its log); Codex's and Grok's are edited in their terminals.
                 if queue.pullsAll {
                     Button(pullLabel, action: onPull)
                         .controlSize(.small)

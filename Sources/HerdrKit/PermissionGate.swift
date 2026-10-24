@@ -6,8 +6,9 @@ public enum PermissionGate {
     /// Text Claude Code draws on its permission prompt.
     public static let promptMarker = "Do you want"
 
+    /// Claude Code's marker, or Grok Build's prompt (`ApprovalNotice.grokBox`).
     public static func screenShowsPrompt(_ screenText: String) -> Bool {
-        screenText.contains(promptMarker)
+        screenText.contains(promptMarker) || ApprovalNotice.grokBox(screenText) != nil
     }
 }
 

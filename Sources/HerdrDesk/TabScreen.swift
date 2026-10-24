@@ -179,13 +179,15 @@ extension PaneView {
                          onLoadAll: { try await loadAllQuestions() })
                 .id(q.toolUseId)   // fresh answers per question
                 .inputColumn()
-        } else if let r = model.cardInComposer(pane) {
+        } else if let r = ApprovalProbe.injected.flatMap({ agent.status == .blocked ? $0 : nil }) ?? model.cardInComposer(pane) {
             // A prompt the log does not have (no transcript, a log that lags, a box the log's call does not match): the
             // card from the screen, where the question card goes.
             ApprovalCard(request: r, agentName: agent.name, canRespond: true,
                          onAllow: { approve(true, r) },
                          onDeny: { approve(false, r) },
-                         onOpen: { model.showTerminal = true })
+                         onOpen: { model.showTerminal = true },
+                         maxHeight: Self.cardHeight(pane: paneFrame.height, label: labelShown))
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ApprovalProbe.cardFrame = $0 }
                 .id(r.toolUseId)
                 .inputColumn()
         } else {

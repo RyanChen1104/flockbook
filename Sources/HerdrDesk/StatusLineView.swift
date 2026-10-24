@@ -2,10 +2,9 @@ import HerdrKit
 import SwiftUI
 
 extension AppModel {
-    /// Reads a Claude pane's saved status line (the wrapper's files; read-only). Off, or none: no line.
+    /// Reads a Claude or Grok pane's saved status line (the wrapper's files; read-only). Off, or none: no line.
     func checkStatusLine(for pane: Pane) {
-        let r = pane.agent.flatMap { $0.kind == "claude" ? $0.sessionId : nil }
-            .flatMap { StatusLineSetup.live.record(session: $0) }
+        let r = pane.agent.flatMap { a in a.sessionId.flatMap { s in StatusLineSetup.live(agent: a.kind)?.record(session: s) } }
             .flatMap { $0.isEmpty ? nil : $0 }
         if statusLines[pane.id] != r { statusLines[pane.id] = r }
     }
@@ -31,7 +30,7 @@ struct StatusLineBar: View {
                 .padding(.horizontal, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel("Claude Code status line")
+                .accessibilityLabel("Status line")
                 .readingColumn(size, width, alignment: .leading)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { StatusLineProbe.frame = $0 }
                 // Close over the composer (its column has 6 pt over it).

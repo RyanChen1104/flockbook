@@ -454,6 +454,12 @@ async function fakeRun() {
     const d = document.createElement('div'); d.append(markdown('-\\n- b\\n\\n1.'));
     return d.querySelectorAll('ul > li').length === 2 && d.querySelectorAll('ol > li').length === 1; })()`) === true,
     "markdown: an empty - or 1. item is a list item");
+  // A workspace's monogram, as the app's (ChecksMonogram.swift): an apostrophe inside a word does not split it.
+  const monoCases = [["Brandon's Brain", "BB"], ["Brandon’s Brain", "BB"], ["O'Neil Lab", "OL"], ["O’Neil Lab", "OL"], ["Don't Panic", "DP"],
+    ["[ME] Meadow · Migration", "MM"], ["OpenAtlas", "OA"], ["flockbook", "FL"], ["[ME]", "ME"]];
+  const monoGot = JSON.parse(await p.eval(`(async () => { const { monogram } = await import('/monogram.js');
+    return JSON.stringify(${JSON.stringify(monoCases.map(([n]) => n))}.map(monogram)); })()`));
+  for (const [i, [name, want]] of monoCases.entries()) check(monoGot[i] === want, `monogram: ${name} -> ${want} (${monoGot[i]})`);
   await p.eval("document.querySelector('#md-test').scrollIntoView()");
   await p.shot("markdown");
   await p.shot("markdown", true);
@@ -808,6 +814,19 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("queue-codex");
   await p.shot("queue-codex", true);
+  // Grok Build: the same, the note says Ctrl+; in Grok's terminal.
+  await p.type("#composer-text", "grok queue");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
+  await p.eval("location.hash = '#pane=w2%3Ap3'");
+  check(await p.until("document.querySelectorAll('.msg.user.queued').length === 1") === true, "queue: Grok's queued message is shown");
+  check(await p.eval("!document.querySelector('#pull-queued') && document.querySelector('.queue-foot').textContent.includes(\"Ctrl+; in Grok's terminal\")") === true,
+    "queue: Grok: no Pull back, the note says Ctrl+; in its terminal");
+  await p.eval("window.scrollTo(0, document.body.scrollHeight)");
+  await p.shot("queue-grok");
+  await p.type("#composer-text", "grok gone");
+  await p.click("#composer-send");
+  await p.until("!document.querySelector('.toast')", 8000);
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   await p.until("location.hash === '#pane=w2%3Ap2' && !!document.querySelector('#composer-text')");
   await p.type("#composer-text", "");

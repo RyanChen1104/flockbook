@@ -1,13 +1,13 @@
 import Foundation
 
-/// Messages the owner typed while the agent works that the agent has not taken yet: Claude Code's and Codex's own
-/// queues, shown faded at the end of the conversation. Flockbook keeps no queue of its own.
+/// Messages the owner typed while the agent works that the agent has not taken yet: Claude Code's, Codex's and Grok
+/// Build's own queues, shown faded at the end of the conversation. Flockbook keeps no queue of its own.
 ///
 /// Claude Code: its session log records the queue (`queue-operation` lines), the screen confirms it is still open
 /// ("ctrl+enter to send now" under the queued rows) and fills in text the log left out (an enqueue during compaction
-/// has no content). Codex logs nothing until a message goes in: only its screen ("Queued follow-up inputs") shows it.
+/// has no content). Codex and Grok Build log nothing until a message goes in: only their screens show it.
 public struct QueuedInput: Codable, Hashable, Sendable {
-    /// "claude" or "codex".
+    /// "claude", "codex" or "grok".
     public var agent: String
     /// Oldest first. Nil: the agent queued a message whose text neither the log nor the screen shows.
     public var items: [String?]
@@ -24,6 +24,7 @@ public struct QueuedInput: Codable, Hashable, Sendable {
         switch agent.kind {
         case "claude": return claude(screen: screen, log: log)
         case "codex": return codex(screen: screen)
+        case "grok": return grokScreen(screen).map { QueuedInput(agent: "grok", items: $0, pullable: false) }
         default: return nil
         }
     }
@@ -160,6 +161,41 @@ public struct QueuedInput: Codable, Hashable, Sendable {
     static func codex(screen: String) -> QueuedInput? {
         codexScreen(screen).map { QueuedInput(agent: "codex", items: $0.items, pullable: $0.inputEmpty) }
     }
+
+    // MARK: Grok Build
+
+    static let grokFooter = "Ctrl+;:queue"
+
+    /// The queue as Grok Build 1.0.67 shows it (live): rows "    #N text" above its input box, numbered from 1, one
+    /// row each (a long message cut with "…"), while its footer, the last line, offers "Ctrl+;:queue". The last such
+    /// run counts: numbered lines in the answer above it are not the queue.
+    public static func grokScreen(_ screen: String) -> [String]? {
+        let lines = screen.components(separatedBy: "\n")
+        guard let footer = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }), footer.contains(grokFooter),
+              let box = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("╭") }) else { return nil }
+        func row(_ l: String) -> (Int, String)? {
+            guard let m = l.wholeMatch(of: /\ {4}#(\d+) (.*)/), let n = Int(m.1) else { return nil }
+            return (n, trailing(String(m.2)))
+        }
+        guard let last = lines[..<box].lastIndex(where: { row($0) != nil }) else { return nil }
+        var first = last
+        while first > 0, row(lines[first - 1]) != nil { first -= 1 }
+        let rows = lines[first...last].compactMap(row)
+        guard rows.enumerated().allSatisfy({ $0.offset + 1 == $0.element.0 }) else { return nil }
+        return rows.map(\.1)
+    }
+
+    /// The agents whose queue Flockbook reads (only Claude Code's can be pulled back: `QueuePull`).
+    public static func reads(kind: String) -> Bool { kind == "claude" || kind == "codex" || kind == "grok" }
+
+    /// Where to change a queue Flockbook cannot pull back: in the agent's own terminal. Nil: Claude Code (pulled back).
+    public static func editHint(agent: String) -> String? {
+        switch agent {
+        case "codex": "To change it, press Shift+Left in Codex's terminal."
+        case "grok": "To change it, press Ctrl+; in Grok's terminal."
+        default: nil
+        }
+    }
 }
 
 /// Claude Code's queue from its session log: `enqueue` adds (its `content`, or none during compaction), `remove`
@@ -253,6 +289,9 @@ public enum QueuePull {
     /// with no more keys. Every key list goes out only after a fresh read finds the same agent. Only text the box holds
     /// exactly as the log has it goes on (to `keep` and the composer); anything else goes nowhere.
     public static func run(expect: Agent, log: ClaudeQueueLog, io: some IO, keep: @escaping @MainActor @Sendable (String) -> Bool = { _ in true }) async -> Outcome {
+        if expect.kind == "grok" {
+            return .refused("Grok Build shows its queue only on screen, one row each, where Flockbook cannot read the text exactly. Change it in Grok's terminal (Ctrl+;). Nothing was sent.")
+        }
         guard let key = pullKey(agent: expect.kind) else { return .refused("This agent has no queue Flockbook can pull back.") }
         // Only Claude Code's log gives queued text exactly. Codex shows its queue on screen only, where trailing blank
         // lines and spaces are gone and a line break looks like wrapping: no text Flockbook could take is sure to be it.

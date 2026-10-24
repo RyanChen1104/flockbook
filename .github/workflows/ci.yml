@@ -6,14 +6,56 @@ on:
   pull_request:
     branches: [main]
   # Manual run: the offline checks and the two checks with a real window.
+  # only: check names (spaces or commas) for both OSes; macos15_only: skip the macos-26 jobs.
   workflow_dispatch:
+    inputs:
+      only:
+        description: 'Run only these UI checks (e.g. "question busy-tab"); empty = all'
+        type: string
+        default: ''
+      macos15_only:
+        description: 'Only build and run on macOS 15'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read   # the gate job reads this workflow's earlier runs
+
+# A newer push to a ci/ branch or a PR cancels the older run; main runs to the end.
+# The event is in the group, so a manual run does not cancel the push run on the same branch.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/ci/') }}
 
 jobs:
+  # A push to main whose SHA already passed a push run (its ci/ branch) skips every other job: the run shows green.
+  # Manual runs do not count: they may have run only some checks or only macOS 15.
+  gate:
+    name: Already green?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ON_MAIN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          skip=0
+          if [ "$ON_MAIN" = true ]; then
+            # An API error counts as "not found": the run goes on.
+            found=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=100" \
+              --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and .conclusion == \"success\" and .event == \"push\") | .html_url] | first // empty") || found=
+            if [ -n "$found" ]; then skip=1; echo "::notice title=CI skipped::$GITHUB_SHA already passed: $found"; fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build + checks
+    needs: gate
+    if: ${{ needs.gate.outputs.skip != '1' && !inputs.macos15_only }}
     # macos-26 (arm64) carries Xcode 26.x; Package.swift needs Swift 6.2 and the macOS 26 SDK.
     runs-on: macos-26
     timeout-minutes: 45
@@ -36,43 +78,65 @@ jobs:
       - name: Build
         run: swift build
 
+      # The debug app for the UI check groups, with what it loads from beside it (@loader_path).
+      # A tar keeps the executable bit and Sparkle's symlinks; upload-artifact drops both.
+      - name: Pack HerdrDesk
+        run: |
+          BIN="$(swift build --show-bin-path)"
+          tar -czf herdrdesk-macos26.tgz -C "$BIN" HerdrDesk Sparkle.framework SwiftTerm_SwiftTerm.bundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdrdesk-macos26-${{ github.run_id }}
+          retention-days: 14
+          overwrite: true
+          path: herdrdesk-macos26.tgz
+
       # Headless checks only: they use a fake herdr socket and fixtures, no herdr server, no window.
       - name: HerdrKitChecks
         run: swift run HerdrKitChecks
 
+  # The offline checks in 3 groups at once (SHARD in scripts/ui-checks.sh); one group when `only` names checks.
+  # 3 groups here and 2 on macOS 15: 5 macOS jobs, the most that run at the same time.
   ui:
-    name: UI checks
+    name: UI checks (${{ matrix.shard }})
     needs: build
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.only && '[1]' || '[1, 2, 3]') }}
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+      BIN: build/bin/HerdrDesk
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/cache@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: .build
-          key: spm-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
+          name: herdrdesk-macos26-${{ github.run_id }}
 
-      - name: Build
-        timeout-minutes: 30
-        run: swift build --product HerdrDesk
+      - name: Unpack HerdrDesk
+        run: mkdir -p build/bin && tar -xzf herdrdesk-macos26.tgz -C build/bin
 
       # Preview stores and offscreen windows: no herdr server. Each check has its own time limit (UI_CHECK_TIMEOUT).
       - name: Offline UI checks
-        timeout-minutes: 30
+        timeout-minutes: 20
         env:
           UI_CHECK_TIMEOUT: '180'
+          ONLY: ${{ inputs.only }}
+          SHARD: ${{ !inputs.only && format('{0}/3', matrix.shard) || '' }}
         run: scripts/ui-checks.sh offline build/ui-checks
 
-      # The two checks with a real window and full screen: manual runs only, also when an offline check failed.
+      # The two checks with a real window and full screen: manual runs only, in the first group,
+      # also when an offline check failed.
       - name: Real-window checks
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && matrix.shard == 1 }}
         timeout-minutes: 10
         env:
           FLOCKBOOK_VISIBLE_OK: '1'
           UI_CHECK_TIMEOUT: '60'
+          ONLY: ${{ inputs.only }}
         run: scripts/ui-checks.sh real build/ui-checks-real
 
       - name: Upload screenshots
@@ -80,8 +144,9 @@ jobs:
         timeout-minutes: 10
         uses: actions/upload-artifact@v4
         with:
-          name: ui-checks-${{ github.run_number }}-${{ github.run_attempt }}
+          name: ui-checks-${{ github.run_id }}-${{ matrix.shard }}
           retention-days: 14
+          overwrite: true
           if-no-files-found: warn
           path: |
             build/ui-checks
@@ -90,16 +155,17 @@ jobs:
 
   # macOS 15 (the lowest supported): build on macos-26 (the only runner with Xcode 26 and Swift 6.2),
   # then run the built binaries on a macos-15 runner. HerdrKitTests (Swift Testing) needs the toolchain: 26 only.
+  # The headless checks and the app build in two jobs at once: the checks also run when the app does not build.
   build-macos15:
     name: Build for macOS 15
+    needs: gate
+    if: ${{ needs.gate.outputs.skip != '1' }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
     outputs:
-      kit: ${{ steps.kit.outputs.ok }}
       bin: ${{ steps.kit.outputs.bin }}
-      app: ${{ steps.app.outputs.ok }}
     steps:
       - uses: actions/checkout@v4
 
@@ -107,12 +173,13 @@ jobs:
       - name: Lowest macOS in the sources
         run: scripts/check-min-os.sh 15.0
 
+      # Its own cache: the app job builds release, this one debug.
       - uses: actions/cache@v4
         with:
           path: .build
-          key: spm15-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
+          key: spm15-kit-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm15-${{ runner.os }}-xcode26.1.1-
 
-      # The headless checks and the agents' command come first: they also run when the app does not build.
       - name: Build HerdrKitChecks, flockbook-notify and flockbook-statusline
         id: kit
         run: |
@@ -125,38 +192,53 @@ jobs:
           # Archive with the build's own path: upload-artifact drops the executable bit.
           tar -czf kit-macos15.tgz -C / "${BIN#/}/HerdrKitChecks" "${BIN#/}/flockbook-notify" "${BIN#/}/flockbook-statusline"
           echo "bin=$BIN" >> "$GITHUB_OUTPUT"
-          echo "ok=1" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kit-macos15-${{ github.run_number }}-${{ github.run_attempt }}
+          name: kit-macos15-${{ github.run_id }}
           retention-days: 14
+          overwrite: true
           path: kit-macos15.tgz
+
+  bundle-macos15:
+    name: Bundle for macOS 15
+    needs: gate
+    if: ${{ needs.gate.outputs.skip != '1' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm15-app-${{ runner.os }}-xcode26.1.1-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm15-${{ runner.os }}-xcode26.1.1-
 
       # Release build, ad-hoc signed (no SIGN_ID on CI).
       - name: Bundle Flockbook.app
-        id: app
         run: |
           scripts/bundle.sh
           scripts/check-min-os.sh 15.0 build/Flockbook.app build/Flockbook.app/Contents/MacOS/flockbook-notify build/Flockbook.app/Contents/MacOS/flockbook-statusline
           otool -L build/Flockbook.app/Contents/MacOS/HerdrDesk
           tar -czf app-macos15.tgz build/Flockbook.app
-          echo "ok=1" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: app-macos15-${{ github.run_number }}-${{ github.run_attempt }}
+          name: app-macos15-${{ github.run_id }}
           retention-days: 14
+          overwrite: true
           path: app-macos15.tgz
 
-  test-macos15:
-    name: Run on macOS 15
+  kit-macos15:
+    name: HerdrKitChecks on macOS 15
     needs: build-macos15
-    if: ${{ !cancelled() && needs.build-macos15.outputs.kit == '1' }}
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 20
     steps:
-      # The scripts and the fixtures; nothing is built here (no Xcode 26 on this runner).
+      # The fixtures; nothing is built here (no Xcode 26 on this runner).
       - uses: actions/checkout@v4
 
       - name: System
@@ -164,7 +246,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: kit-macos15-${{ github.run_number }}-${{ github.run_attempt }}
+          name: kit-macos15-${{ github.run_id }}
 
       # Unpacked at the build's own path (the same checkout path on both runners).
       - name: HerdrKitChecks
@@ -177,29 +259,47 @@ jobs:
           "$BIN/flockbook-notify" --help
           "$BIN/flockbook-statusline" --help
 
-      - uses: actions/download-artifact@v4
-        if: ${{ !cancelled() && needs.build-macos15.outputs.app == '1' }}
-        with:
-          name: app-macos15-${{ github.run_number }}-${{ github.run_attempt }}
+  # The same offscreen checks as on 26 (preview stores, offscreen windows, no herdr server), from the bundled app,
+  # in 2 groups (see the ui job).
+  test-macos15:
+    name: Run on macOS 15 (${{ matrix.shard }})
+    needs: bundle-macos15
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.only && '[1]' || '[1, 2]') }}
+    steps:
+      # The scripts and the fixtures; nothing is built here (no Xcode 26 on this runner).
+      - uses: actions/checkout@v4
 
-      # The same offscreen checks as on 26 (preview stores, offscreen windows, no herdr server), from the bundled app.
+      - name: System
+        run: sw_vers
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-macos15-${{ github.run_id }}
+
       - name: Offline UI checks
-        if: ${{ !cancelled() && needs.build-macos15.outputs.app == '1' }}
-        timeout-minutes: 40
+        timeout-minutes: 20
         env:
           UI_CHECK_TIMEOUT: '180'
+          ONLY: ${{ inputs.only }}
+          SHARD: ${{ !inputs.only && format('{0}/2', matrix.shard) || '' }}
           BIN: build/Flockbook.app/Contents/MacOS/HerdrDesk
         run: |
           tar -xzf app-macos15.tgz
           scripts/ui-checks.sh offline build/ui-checks-macos15
 
       - name: Upload screenshots
-        if: ${{ !cancelled() && needs.build-macos15.outputs.app == '1' }}
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         uses: actions/upload-artifact@v4
         with:
-          name: ui-checks-macos15-${{ github.run_number }}-${{ github.run_attempt }}
+          name: ui-checks-macos15-${{ github.run_id }}-${{ matrix.shard }}
           retention-days: 14
+          overwrite: true
           if-no-files-found: warn
           path: |
             build/ui-checks-macos15

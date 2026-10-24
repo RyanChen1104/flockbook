@@ -113,23 +113,7 @@ struct Monogram: View {
         let rest = String(raw[raw.index(after: e)...]).trimmingCharacters(in: .whitespaces)
         return rest.isEmpty ? raw : rest
     }
-    static func letters(_ raw: String) -> String {
-        // "[ME] Meadow · Migration" -> ignore the leading [tag]
-        var s = raw
-        if s.hasPrefix("["), let e = s.firstIndex(of: "]") { s = String(s[s.index(after: e)...]).trimmingCharacters(in: .whitespaces) }
-        if s.isEmpty { s = raw }
-        var words = s.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        if words.count == 1 {  // camelCase: OpenAtlas -> Open, Atlas
-            var parts: [String] = [], cur = ""
-            for ch in words[0] {
-                if ch.isUppercase, !cur.isEmpty { parts.append(cur); cur = "" }
-                cur.append(ch)
-            }
-            parts.append(cur); words = parts
-        }
-        if words.count >= 2 { return String(words[0].prefix(1) + words[1].prefix(1)).uppercased() }
-        return String(s.prefix(2)).uppercased()
-    }
+    static func letters(_ raw: String) -> String { WorkspaceMonogram.letters(raw) }
 }
 
 extension Tab {

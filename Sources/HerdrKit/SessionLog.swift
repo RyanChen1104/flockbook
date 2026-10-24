@@ -3,7 +3,7 @@ import Foundation
 /// Finds and tails an agent's JSONL session log (Claude Code, Codex, pi, …).
 public final class SessionLog: Sendable {
     public let sessionId: String
-    /// `Agent.kind`: "claude", "codex", "pi", …
+    /// `Agent.kind`: "claude", "codex", "pi", "cursor", "grok", …
     public let agent: String
     public var isCodex: Bool { agent == "codex" }
     /// The host the agent runs on; nil: this Mac. A remote log is read through a local `RemoteLogMirror`.
@@ -18,8 +18,10 @@ public final class SessionLog: Sendable {
     public var url: URL? { state.lock.withLock { state.url } }
 
     /// Where an agent keeps its logs (the search root for an id).
-    public static func defaultDir(agent: String) -> String {
-        NSHomeDirectory() + (agent == "codex" ? "/.codex/sessions" : agent == "cursor" ? "/.cursor/projects" : "/.claude/projects")
+    /// Grok Build: `$GROK_HOME/sessions`, else `~/.grok/sessions`.
+    public static func defaultDir(agent: String, env: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        if agent == "grok" { return (env["GROK_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory() + "/.grok") + "/sessions" }
+        return NSHomeDirectory() + (agent == "codex" ? "/.codex/sessions" : agent == "cursor" ? "/.cursor/projects" : "/.claude/projects")
     }
 
     /// The log file for a session: an absolute `.jsonl` path is used as is (any agent); otherwise it is looked up by id.
@@ -31,6 +33,7 @@ public final class SessionLog: Sendable {
         switch agent {
         case "codex": return locateCodex(sessionId: sessionId, sessionsDir: dir)
         case "cursor": return locateCursor(sessionId: sessionId, projectsDir: dir)
+        case "grok": return locateGrok(sessionId: sessionId, sessionsDir: dir)
         default: return locate(sessionId: sessionId, projectsDir: dir)   // Claude Code (and, as before, any other id)
         }
     }
@@ -157,6 +160,18 @@ public final class SessionLog: Sendable {
         let fm = FileManager.default
         for d in (try? fm.contentsOfDirectory(atPath: projectsDir)) ?? [] {
             let p = "\(projectsDir)/\(d)/agent-transcripts/\(sessionId)/\(sessionId).jsonl"
+            if fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
+        }
+        return nil
+    }
+
+    /// Grok Build: `<sessions>/<url-encoded cwd, or a slug for a long one>/<id>/updates.jsonl`. Not `chat_history.jsonl`,
+    /// which compaction rewrites.
+    public static func locateGrok(sessionId: String, sessionsDir: String) -> URL? {
+        guard !sessionId.isEmpty, !sessionId.contains("/"), !sessionId.contains("..") else { return nil }
+        let fm = FileManager.default
+        for d in (try? fm.contentsOfDirectory(atPath: sessionsDir)) ?? [] {
+            let p = "\(sessionsDir)/\(d)/\(sessionId)/updates.jsonl"
             if fm.fileExists(atPath: p) { return URL(fileURLWithPath: p) }
         }
         return nil

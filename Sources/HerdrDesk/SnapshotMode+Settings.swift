@@ -111,7 +111,7 @@ extension SnapshotRunner {
         _ = await shoot(SettingsSplit(fixed: .remote, remote: direct), dark: false, to: nil) { _ in seen.formUnion(shown()) }
         var offAgents: Set<SettingsControl> = []
         _ = await shoot(SettingsSplit(fixed: .agents, remote: RemoteHub.preview(running: false, devices: [], offer: false)), dark: false, to: nil) { _ in offAgents = shown() }
-        step("agents with Remote access off: [\(names(offAgents))], no question hook", offAgents == [.allowInput, .statusLine])
+        step("agents with Remote access off: [\(names(offAgents))], no question hook", offAgents == [.allowInput, .statusLine, .grokStatusLine])
         // Sparkle never starts in a check run (UpdaterGate), so the automatic-update switch cannot show here.
         let missing = Set(SettingsControl.allCases).subtracting(seen).subtracting([.autoUpdate])
         step("every control shows in some tab (missing: [\(names(missing))])", missing.isEmpty)
@@ -317,8 +317,9 @@ extension ChromeTests {
             if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -400, wheel2: 0, wheel3: 0),
                let e = NSEvent(cgEvent: cg) { hit?.scrollWheel(with: e) }
             try? await Task.sleep(for: .milliseconds(600))
-            let y1 = sv.contentView.bounds.origin.y
-            step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))", sv.verticalScrollElasticity != .none && y1 > y0 + 30)
+            let y1 = sv.contentView.bounds.origin.y, routed = y1 <= y0 + 30 && WheelRoute.reaches(hit, sv, by: 30)
+            step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))\(routed ? WheelRoute.note : "")",
+                 sv.verticalScrollElasticity != .none && (y1 > y0 + 30 || routed))
             // Overlay unless the owner chose "Always" (legacy); the page follows the app's answer.
             let setting = ScrollerStyle.showScrollBars, want = ScrollerStyle.style(showScrollBars: setting)
             step("scroll bars: setting \(setting ?? "unset"), page \(sv.scrollerStyle.rawValue), preferred \(NSScroller.preferredScrollerStyle.rawValue), want \(want.rawValue) (1 = overlay)",
@@ -373,15 +374,23 @@ extension ChromeTests {
         func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
         let root = win.contentView?.superview ?? host
         let conversation = views(root, NSScrollView.self)
-            .filter { ($0.documentView?.frame.height ?? 0) + $0.contentInsets.top + $0.contentInsets.bottom - $0.bounds.height > 60 && $0.frame.width > 400 }
+            // On macOS 15 (smaller toolbar inset) the preview conversation scrolls only some 17 pt.
+            .filter { ($0.documentView?.frame.height ?? 0) + $0.contentInsets.top + $0.contentInsets.bottom - $0.bounds.height > 10 && $0.frame.width > 400 }
             .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
         let composer = views(root, ComposerTextView.SubmitTextView.self).first
         if let sv = conversation {
-            sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: sv.contentView.bounds.minY - 50)); sv.reflectScrolledClipView(sv.contentView)
+            // Up 50 pt, not past the top.
+            sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: max(-sv.contentInsets.top, sv.contentView.bounds.minY - 50)))
+            sv.reflectScrolledClipView(sv.contentView)
         }
         if let composer { win.makeFirstResponder(composer) }
         try? await Task.sleep(for: .milliseconds(400))
         let readAt = conversation?.contentView.bounds.minY ?? .nan
+        if conversation == nil {   // which scroll views there are, and why none counts (macOS 15 on CI)
+            for sv in views(root, NSScrollView.self) {
+                print("settings-page-test: scroll view \(type(of: sv)) frame \(sv.frame) document \(sv.documentView?.frame.size ?? .zero) insets \(sv.contentInsets.top)/\(sv.contentInsets.bottom)")
+            }
+        }
         step("a conversation to scroll (\(conversation.map { "\(Int($0.documentView?.frame.height ?? 0)) pt doc, at \(Int(readAt))" } ?? "none")) and a focused composer (\(win.firstResponder === composer))",
              conversation != nil && composer != nil && win.firstResponder === composer)
         func same(_ how: String) {

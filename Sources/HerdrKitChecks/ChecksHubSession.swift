@@ -30,7 +30,7 @@ import Foundation
     func logURL(session: String) -> URL? { logURLs[session] }
     /// Saved status lines per agent session.
     var statusLines: [String: StatusLineRecord] = [:]
-    func statusLine(session: String) -> StatusLineRecord? { statusLines[session] }
+    func statusLine(kind: String, session: String) -> StatusLineRecord? { statusLines[session] }
 
     func conversation(session: String) -> [ConversationItem] { items[session] ?? [] }
     func hasEarlier(session: String) -> Bool { earlier[session] != nil }
