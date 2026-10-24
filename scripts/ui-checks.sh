@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The app's UI checks, one HerdrDesk run each: scripts/ui-checks.sh [offline|real] [out-dir]
+# The app's UI checks, one HerdrDesk run each: [ONLY=name,...] scripts/ui-checks.sh [offline|real] [out-dir]
 #   offline (default): every check that needs no herdr server and opens no window (preview stores, offscreen windows).
 #   real: the two checks with a real window (--test-fullscreen-real, --test-scroll-real). They take the screen and the
 #         focus: CI runners only, or with the owner's leave. Needs FLOCKBOOK_VISIBLE_OK=1.
@@ -14,14 +14,6 @@ MODE="${1:-offline}"
 OUT="${2:-build/ui-checks}"
 BIN="${BIN:-.build/debug/HerdrDesk}"
 LIMIT="${UI_CHECK_TIMEOUT:-180}"   # seconds per check; a hung check is killed and fails, the others still run
-
-if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
-    echo "ui-checks: screen is locked; not starting" >&2; exit 3
-fi
-[ -x "$BIN" ] || { echo "ui-checks: $BIN not found: run swift build first" >&2; exit 2; }
-mkdir -p "$OUT/logs"
-# A herdr pane's variables would point the app at the owner's session.
-unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_ENV
 
 # name | PASS line it must print ("-": exit 0 is the verdict) | arguments
 OFFLINE=(
@@ -78,6 +70,29 @@ case "$MODE" in
         CHECKS=("${REAL[@]}") ;;
     *) echo "usage: scripts/ui-checks.sh [offline|real] [out-dir]" >&2; exit 2 ;;
 esac
+
+# ONLY="question busy-tab" (spaces or commas): run just these. A name of the other mode is skipped; an unknown name exits 2.
+if [ -n "${ONLY:-}" ]; then
+    known_names=" "; for entry in "${OFFLINE[@]}" "${REAL[@]}"; do known_names+="${entry%%|*} "; done
+    for want in ${ONLY//,/ }; do
+        [[ "$known_names" == *" $want "* ]] || { echo "ui-checks: no check named '$want' (ONLY)" >&2; exit 2; }
+    done
+    picked=()
+    for entry in "${CHECKS[@]}"; do
+        [[ " ${ONLY//,/ } " == *" ${entry%%|*} "* ]] && picked+=("$entry")
+    done
+    [ ${#picked[@]} -gt 0 ] || { echo "ui-checks $MODE: nothing to run (ONLY=$ONLY)"; exit 0; }
+    CHECKS=("${picked[@]}")
+fi
+
+if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+    echo "ui-checks: screen is locked; not starting" >&2; exit 3
+fi
+[ -x "$BIN" ] || { echo "ui-checks: $BIN not found: run swift build first" >&2; exit 2; }
+mkdir -p "$OUT/logs"
+# A herdr pane's variables would point the app at the owner's session.
+unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_ENV
+
 
 # Runs "$@" with a time limit (macOS has no timeout(1)): TERM at the limit, KILL 5 s later. Exit 124 on a timeout.
 run_limited() {
