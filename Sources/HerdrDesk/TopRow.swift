@@ -481,7 +481,8 @@ struct IslandGlass: ViewModifier {
     func body(content: Content) -> some View {
         if flat && !legacy || reduce {
             content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+                // strokeBorder is a view, not a shape: hit-testable over the whole capsule, it would take the tabs' clicks.
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)).allowsHitTesting(false))
         } else {
             content.glassSurface(Capsule())
         }
