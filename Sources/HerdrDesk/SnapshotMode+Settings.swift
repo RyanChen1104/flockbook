@@ -374,11 +374,14 @@ extension ChromeTests {
         func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
         let root = win.contentView?.superview ?? host
         let conversation = views(root, NSScrollView.self)
-            .filter { ($0.documentView?.frame.height ?? 0) + $0.contentInsets.top + $0.contentInsets.bottom - $0.bounds.height > 60 && $0.frame.width > 400 }
+            // On macOS 15 (smaller toolbar inset) the preview conversation scrolls only some 17 pt.
+            .filter { ($0.documentView?.frame.height ?? 0) + $0.contentInsets.top + $0.contentInsets.bottom - $0.bounds.height > 10 && $0.frame.width > 400 }
             .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
         let composer = views(root, ComposerTextView.SubmitTextView.self).first
         if let sv = conversation {
-            sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: sv.contentView.bounds.minY - 50)); sv.reflectScrolledClipView(sv.contentView)
+            // Up 50 pt, not past the top.
+            sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: max(-sv.contentInsets.top, sv.contentView.bounds.minY - 50)))
+            sv.reflectScrolledClipView(sv.contentView)
         }
         if let composer { win.makeFirstResponder(composer) }
         try? await Task.sleep(for: .milliseconds(400))
