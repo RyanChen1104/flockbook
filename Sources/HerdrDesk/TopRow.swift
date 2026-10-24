@@ -472,7 +472,8 @@ struct FullScreenTopRow: View {
 }
 
 /// Glass capsule island. Regular glass (HIG: clear is for photo/video backgrounds): text scrolling behind shows only as a blur.
-/// Flat (snapshot) mode and Reduce Transparency: plain fill.
+/// Flat (snapshot) mode and Reduce Transparency: plain fill, its hairline inside the capsule (the same height as the
+/// buttons' glass).
 struct IslandGlass: ViewModifier {
     @Environment(\.flatGlass) private var flat
     @Environment(\.legacyLook) private var legacy
@@ -480,7 +481,7 @@ struct IslandGlass: ViewModifier {
     func body(content: Content) -> some View {
         if flat && !legacy || reduce {
             content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-                .overlay(Capsule().stroke(Color.primary.opacity(0.1)))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
         } else {
             content.glassSurface(Capsule())
         }

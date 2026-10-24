@@ -9,4 +9,6 @@ One short line: what this release is about.
 
 ### 🐛 Bug Fixes
 
+- With Reduce Transparency on, the tab island is exactly as tall as the + and terminal buttons beside it.
+
 ### ⚙️ Changes
