@@ -898,7 +898,10 @@ struct ApprovalCard: View {
     /// Outside a scroll view (the composer slot): the card's height limit; the command scrolls inside.
     var maxHeight: CGFloat? = nil
     @State private var commandHeight: CGFloat = 0
-    @State private var chrome: CGFloat = 0
+    /// The title row's and the button row's heights: the card's height without the command is these, two spacings and the
+    /// padding. Measured on their own, never from the card's height, which follows the command.
+    @State private var head: CGFloat = 0
+    @State private var foot: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -909,6 +912,7 @@ struct ApprovalCard: View {
                     .background(Color.orange, in: RoundedRectangle(cornerRadius: Radius.control))
                 Text(request.title).font(.headline).lineLimit(maxHeight == nil ? nil : 3)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { head = $0 }
             if maxHeight != nil {
                 // A text view's own height is taken at the narrowest width (a window's minimum size asks at width 0): a long
                 // command there made the window tens of thousands of points tall. In a scroll view of measured height it never is.
@@ -916,7 +920,7 @@ struct ApprovalCard: View {
                     command.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandHeight = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .frame(height: scrollHeight)
+                .frame(minHeight: min(commandHeight, 60), maxHeight: scrollHeight)   // never a fixed height: the window may get smaller
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control))
             } else {
                 command.background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control))
@@ -932,9 +936,9 @@ struct ApprovalCard: View {
                     Button(action: onOpen) { Label("Open terminal", systemImage: "apple.terminal") }.buttonStyle(.borderedProminent)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { foot = $0 }
         }
         .padding(16)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if maxHeight != nil { chrome = $0 - scrollHeight } }
         .glassCard(radius: Radius.card, tint: .orange.opacity(0.08))
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
     }
@@ -946,7 +950,11 @@ struct ApprovalCard: View {
     }
 
     /// The command's height: all of it when it fits under `maxHeight`, else what is left after the rest of the card.
-    private var scrollHeight: CGFloat { min(commandHeight, max(60, (maxHeight ?? .infinity) - chrome)) }
+    private var scrollHeight: CGFloat {
+        let chrome: CGFloat = head + foot + 2 * 12 + 2 * 16   // the rows, the VStack's two spacings, the padding
+        let limit: CGFloat = maxHeight ?? .infinity
+        return min(commandHeight, max(60, limit - chrome))
+    }
 }
 
 /// Wrapping row layout for chips.
