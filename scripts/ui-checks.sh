@@ -61,8 +61,8 @@ REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"
     "scroll-real|scroll-real|--preview --test-scroll-real"
 )
-# Fail on the CI runner's newer macOS (26.6), pass on 26.1: to be looked into, then removed from here.
-KNOWN=" island-height settings-page screencolumn glyph "
+# Fixed for the CI runners (macOS 15, Reduce Transparency); still listed until CI shows them green there.
+KNOWN=" island-height settings-page "
 # Fail now and then on a loaded runner, for a reason not fixed yet: a failure here runs the check once more, and a pass
 # then is a warning ("flaky passed on retry"). Only these: every other check fails on its first failure.
 #   conversation-churn: autoload-fling-busy, every core spun on a macOS 15 runner: one anchor fix lands a frame late.
