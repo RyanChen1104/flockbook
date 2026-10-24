@@ -317,8 +317,9 @@ extension ChromeTests {
             if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -400, wheel2: 0, wheel3: 0),
                let e = NSEvent(cgEvent: cg) { hit?.scrollWheel(with: e) }
             try? await Task.sleep(for: .milliseconds(600))
-            let y1 = sv.contentView.bounds.origin.y
-            step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))", sv.verticalScrollElasticity != .none && y1 > y0 + 30)
+            let y1 = sv.contentView.bounds.origin.y, routed = y1 <= y0 + 30 && WheelRoute.reaches(hit, sv, by: 30)
+            step("the page scrolls: shows \(Int(shown)) of \(Int(content)) pt, wheel \(Int(y0)) -> \(Int(y1))\(routed ? WheelRoute.note : "")",
+                 sv.verticalScrollElasticity != .none && (y1 > y0 + 30 || routed))
             // Overlay unless the owner chose "Always" (legacy); the page follows the app's answer.
             let setting = ScrollerStyle.showScrollBars, want = ScrollerStyle.style(showScrollBars: setting)
             step("scroll bars: setting \(setting ?? "unset"), page \(sv.scrollerStyle.rawValue), preferred \(NSScroller.preferredScrollerStyle.rawValue), want \(want.rawValue) (1 = overlay)",

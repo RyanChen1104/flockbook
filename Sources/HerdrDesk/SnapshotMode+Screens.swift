@@ -66,9 +66,9 @@ extension ContentTests {
             if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -120, wheel2: 0, wheel3: 0),
                let e = NSEvent(cgEvent: cg) { hit?.scrollWheel(with: e) }
             try? await Task.sleep(for: .milliseconds(600))
-            let y1 = sv.contentView.bounds.origin.y
-            step("wheel \(name): over the margin (x \(Int(x)), column from \(Int(col.minX))) \(scrollable ? "scrolls \(Int(y0)) -> \(Int(y1))" : "is in the scroll view (content fits, nothing to scroll)")",
-                 scrollable ? y1 > y0 + 10 : true)
+            let y1 = sv.contentView.bounds.origin.y, routed = scrollable && y1 <= y0 + 10 && WheelRoute.reaches(hit, sv, by: 30)
+            step("wheel \(name): over the margin (x \(Int(x)), column from \(Int(col.minX))) \(scrollable ? "scrolls \(Int(y0)) -> \(Int(y1))\(routed ? WheelRoute.note : "")" : "is in the scroll view (content fits, nothing to scroll)")",
+                 scrollable ? y1 > y0 + 10 || routed : true)
             if scrollable { capture(win, to: "\(dir)/screen-\(name)-scrolled.png") }
         }
         win.orderOut(nil)
@@ -106,5 +106,21 @@ extension ContentTests {
         print("screencolumn-test: pictures in \(dir)/screen-{overview,needs-you,search}-{1200,1440,2560-full,scrolled}.png")
         print("screencolumn-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
+    }
+}
+
+/// SwiftUI's scroll view applies a wheel only in a window on a screen, and a test window is on none (OffscreenWindow).
+/// There a wheel that did not move still counts when it reaches the scroll view (the responder chain from the view under
+/// the pointer) and the view scrolls (a programmatic scroll by `d` moves it; put back after).
+@MainActor enum WheelRoute {
+    static let note = " (off screen: the wheel reaches the scroll view, which scrolls)"
+    static func reaches(_ hit: NSView?, _ sv: NSScrollView, by d: CGFloat) -> Bool {
+        guard sv.window?.screen == nil, let hit,
+              sequence(first: hit as NSResponder, next: { $0.nextResponder }).contains(where: { $0 === sv }) else { return false }
+        let start = sv.contentView.bounds.origin
+        sv.contentView.scroll(to: NSPoint(x: start.x, y: start.y + d)); sv.reflectScrolledClipView(sv.contentView)
+        let moved = sv.contentView.bounds.origin.y >= start.y + d - 1
+        sv.contentView.scroll(to: start); sv.reflectScrolledClipView(sv.contentView)
+        return moved
     }
 }
