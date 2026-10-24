@@ -174,18 +174,25 @@ enum SnapshotRunner {
         model.sidebarVisibility = .detailOnly
         try? await Task.sleep(for: .milliseconds(800))
         step("peek: strip at the left edge, ~7 pt wide (\(ChromeProbe.peekStrip))", ChromeProbe.peekStrip.minX <= 1 && (6...8).contains(ChromeProbe.peekStrip.width) && ChromeProbe.peekStrip.height > 400 && ChromeProbe.peekStrip.minY >= 11)
-        model.setPeekHover(strip: true); try? await Task.sleep(for: .milliseconds(80))
-        step("peek: not shown before the 150 ms rest", !model.sidebarPeek)
-        try? await Task.sleep(for: .milliseconds(250))
+        // The rest and the retract are timers: a busy runner can only make them later, so each check times when the change
+        // happens (a lower bound) instead of looking after a fixed sleep, which a late wake-up turns into a false fail.
+        func timeUntil(_ ok: () -> Bool) async -> Duration? {
+            let t = ContinuousClock.now
+            while ContinuousClock.now - t < .seconds(2) { if ok() { return ContinuousClock.now - t }; try? await Task.sleep(for: .milliseconds(10)) }
+            return nil
+        }
+        model.setPeekHover(strip: true)
+        step("peek: not shown at once", !model.sidebarPeek)
+        let shownAfter = await timeUntil { model.sidebarPeek }
+        step("peek: shown only after the 150 ms rest (after \(shownAfter.map { "\($0)" } ?? "never"))", (shownAfter ?? .zero) >= .milliseconds(150))
         step("peek: shown after resting on the strip; sidebarVisibility unchanged (still hidden)", model.sidebarPeek && model.sidebarVisibility == .detailOnly)
         try? await Task.sleep(for: .milliseconds(600))
         step("peek: floating panel is up (\(ChromeProbe.peekPanel)), content not pushed", ChromeProbe.peekPanel.width >= 240 && ChromeProbe.peekPanel.minX < 20)
         model.setPeekHover(strip: false, panel: true); try? await Task.sleep(for: .milliseconds(500))
         step("peek: stays while the pointer is on the panel", model.sidebarPeek)
-        model.setPeekHover(panel: false); try? await Task.sleep(for: .milliseconds(150))
-        step("peek: still there 150 ms after leaving", model.sidebarPeek)
-        try? await Task.sleep(for: .milliseconds(350))
-        step("peek: retracts ~300 ms after leaving", !model.sidebarPeek)
+        model.setPeekHover(panel: false)
+        let goneAfter = await timeUntil { !model.sidebarPeek }
+        step("peek: retracts 300 ms after leaving, not sooner (after \(goneAfter.map { "\($0)" } ?? "never"))", (goneAfter ?? .zero) >= .milliseconds(300))
         model.setPeekHover(strip: true); try? await Task.sleep(for: .milliseconds(400))
         model.select(workspace: ws.id)
         step("peek: choosing a workspace retracts it", !model.sidebarPeek)
