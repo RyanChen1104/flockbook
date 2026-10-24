@@ -43,6 +43,8 @@ scripts/ui-checks.sh offline        # the app's UI checks, in offscreen windows
 - **Bug fix:** first write a check that fails (red) and commit it. Then fix the bug (green) in a second commit. Most logic checks are in `Sources/HerdrKitChecks/`.
 - **UI change:** attach screenshots in light mode and in dark mode to the pull request.
 - Run all the checks above before you send the pull request. Say in the pull request which checks you ran.
+- To run only some UI checks, name them: `ONLY="question busy-tab" scripts/ui-checks.sh offline`.
+- **User-visible change:** add one line to `docs/release-notes/next.md`, under its section, in the same pull request.
 
 Two rules protect your own agents:
 
@@ -58,6 +60,12 @@ Look at `git log` for examples. The style:
 - `Area: what changed, in plain words`, for example `Terminals: find herdr where its installer puts it`.
 - A red commit ends with `(red)`, for example `Checks: a terminal that cannot start says why (red)`.
 - Use the body to say why, in short sentences.
+
+## Releases
+
+1. Rename `docs/release-notes/next.md` to `docs/release-notes/vX.Y.Z.md`. Fill in the version and one short intro line. Delete empty sections.
+2. Add a new `next.md` from the old template (the comment line and the four empty sections).
+3. Commit both, then push the tag `vX.Y.Z`. The release page is that file, plus Installation and the Full Changelog link (`scripts/release-notes.sh`).
 
 ## AI-assisted contributions
 

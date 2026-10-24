@@ -27,6 +27,8 @@ jobs:
       # Pin the toolchain: Xcode 26.1.1 ships Swift 6.2.1, the same compiler the app is developed with.
       DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
       ARCHS: arm64 x86_64
+    outputs:
+      notes_file: ${{ steps.notes.outputs.file }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,6 +138,22 @@ jobs:
           LINK="https://flockbook.mclee.dev" \
             scripts/appcast.sh "dist/Flockbook-$VERSION.zip" dist
 
+      # docs/release-notes/<tag>.md, when it exists, replaces the notes above: its text, Installation, Full Changelog.
+      - name: Release notes
+        id: notes
+        run: |
+          code=0
+          APPCAST=$([ -f dist/appcast.xml ] && echo 1 || true) scripts/release-notes.sh "$TAG" > dist/NOTES.custom.md || code=$?
+          if [ "$code" = 0 ]; then
+            mv dist/NOTES.custom.md dist/NOTES.md
+            echo "file=1" >> "$GITHUB_OUTPUT"
+          elif [ "$code" = 3 ]; then
+            rm -f dist/NOTES.custom.md; echo "No docs/release-notes/$TAG.md: GitHub's generated notes."
+          else
+            exit "$code"
+          fi
+          cat dist/NOTES.md
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -173,6 +191,7 @@ jobs:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           body_path: dist/NOTES.md
-          generate_release_notes: true
+          # Off with docs/release-notes/<tag>.md: that file already has the changes and the Full Changelog link.
+          generate_release_notes: ${{ needs.build.outputs.notes_file != '1' }}
           files: ${{ steps.assets.outputs.files }}
           fail_on_unmatched_files: true
