@@ -816,6 +816,11 @@ enum SnapshotRunner {
         }
         print("live diag: logFound=\(found) foundButEmpty=\(zeroFound) codex=\(codex) noSession=\(noSession)")
         print("live: connected=\(store.connected) workspaces=\(store.workspaces.count)")
+        // The Overview cards' ages: each tab's newest agent log time, none for a tab without one.
+        await store.refreshLogTimes()
+        for ws in store.workspaces { for t in ws.tabs {
+            print("live age: \(ws.label) / \(t.label) agents=\(t.panes.compactMap(\.agent).map(\.kind)) \(store.lastActivity(of: t).map { LogAge.label($0, now: Date()) } ?? "none")")
+        } }
         render(Case(name: "live-main", screen: .tab, dark: false, tab: 0, terminal: false), dir: dir, store: store)
         render(Case(name: "live-overview", screen: .overview, dark: false, tab: 0, terminal: false), dir: dir, store: store)
         NSApp.terminate(nil)
