@@ -138,6 +138,10 @@ struct HerdrDeskApp: App {
         if args.contains("--serve-remote"), store.session.name != nil {
             Task { @MainActor in await HubLiveTest.serve(model: m) }
         }
+        if let i = args.firstIndex(of: "--test-remote-live"), args.indices.contains(i + 1), store.session.name != nil {
+            let paneId = args[i + 1]
+            Task { @MainActor in await RemoteLiveTest.run(model: m, paneId: paneId) }
+        }
         if args.contains("--test-remote"), store.session.name != nil {
             Task { @MainActor in await HubLiveTest.remote(model: m) }
         }
