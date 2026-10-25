@@ -135,6 +135,7 @@ struct InboxView: View {
 struct OverviewView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("overviewGroup", store: AppDefaults.store) private var group = "status"
+    @State private var now = Date()
 
     private func rank(_ s: AgentStatus) -> Int { s == .blocked ? 0 : s == .working ? 1 : s == .done ? 2 : 3 }
 
@@ -176,6 +177,13 @@ struct OverviewView: View {
             .screenColumn("overview")   // centred: a wide window does not leave the grid against the left edge
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task {   // the card ages: the logs' times (each looked at once per 30 s at most) and the clock they count from
+            while !Task.isCancelled {
+                await model.store.refreshLogTimes()
+                now = Date()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
     }
 
     private var greeting: String {
@@ -216,16 +224,37 @@ struct OverviewView: View {
                     HStack(spacing: 10) {
                         StatusGlyph(status: t.status, size: 16)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(t.primaryAgent?.name ?? t.label).font(.headline).lineLimit(1)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(t.primaryAgent?.name ?? t.label).font(.headline).lineLimit(1)
+                                    .background { OverviewProbe.reader(t.id, \.name) }
+                                Spacer(minLength: 0)
+                                // How long ago its agent last wrote its log; none when no log was found (a shell tab).
+                                if let at = model.store.lastActivity(of: t, now: now) {
+                                    Text(LogAge.label(at, now: now)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                                        .background { OverviewProbe.reader(t.id, \.age, LogAge.label(at, now: now)) }
+                                }
+                            }
                             Text("\(ws.label) · \(t.label)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
-                        Spacer()
                     }
                     .padding(12)
+                    .background { OverviewProbe.reader(t.id, \.card) }
                     .background { GlassReader { RoundedRectangle(cornerRadius: Radius.card).fill($0.card) } }
                     .overlay(RoundedRectangle(cornerRadius: Radius.card).stroke(t.status == .blocked ? Color.orange.opacity(0.5) : Color.primary.opacity(0.09)))
                 }.buttonStyle(.plain)
             }
+        }
+    }
+}
+
+/// Where the Overview cards drew their parts, by tab id, in window coordinates (checks).
+@MainActor enum OverviewProbe {
+    struct Card { var name = CGRect.zero, age = CGRect.zero, card = CGRect.zero, ageText: String? }
+    static var cards: [String: Card] = [:]
+    static func reader(_ id: String, _ part: WritableKeyPath<Card, CGRect>, _ text: String? = nil) -> some View {
+        GeometryReader { g in
+            Color.clear.onAppear { cards[id, default: Card()][keyPath: part] = g.frame(in: .global); if let text { cards[id]?.ageText = text } }
+                .onChange(of: g.frame(in: .global)) { cards[id, default: Card()][keyPath: part] = $1 }
         }
     }
 }

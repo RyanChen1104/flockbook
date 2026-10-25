@@ -96,6 +96,9 @@ enum PreviewData {
         ]),
     ] }
 
+    /// Tab id → seconds since its agents last wrote their logs. Harbor's tab has none: no log found.
+    static let logAges: [String: TimeInterval] = ["a": 180, "b": 24 * 60, "c": 10, "d": 2 * 3600, "j1": 86400 + 60, "j2": 5 * 60]
+
     static let conversation: [ConversationItem] = [
         ConversationItem(id: "c1", kind: .userText("Where is the team at?")),
         ConversationItem(id: "c2", kind: .assistantText("Four agents are active. One needs you: orchard-web-dev wants to run a build.")),

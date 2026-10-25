@@ -4,6 +4,20 @@ import SwiftUI
 /// Offscreen check that Overview, Needs you and Search keep their content in the centred screen column
 /// (`--test-screencolumn`, `--light` for the light pictures). Windows 1200 and 1440 wide, and a 2560 full-screen layout.
 extension ContentTests {
+    /// Overview cards: the age of the agent's last log write at the right end of the name's line, none without a log.
+    static func overviewAges(_ step: (String, Bool) -> Void) {
+        for (id, want) in [("b", "24m"), ("c", "now"), ("d", "2h"), ("j1", "1d")] {
+            guard let c = OverviewProbe.cards[id], c.card.width > 0 else { step("overview card \(id): drawn", false); continue }
+            step("overview card \(id): age \(c.ageText ?? "none") (want \(want))", c.ageText == want)
+            step("overview card \(id): age on the name's line (\(Int(c.age.midY)) in \(Int(c.name.minY))..\(Int(c.name.maxY)))",
+                 c.age.midY > c.name.minY && c.age.midY < c.name.maxY)
+            step("overview card \(id): age at the right edge, inside the padding (\(Int(c.age.maxX)) vs card \(Int(c.card.maxX)))",
+                 abs(c.card.maxX - 12 - c.age.maxX) < 0.5 && c.age.minX > c.name.maxX)
+        }
+        let h = OverviewProbe.cards["h1"]
+        step("overview card h1 (no log): no age (\(h?.ageText ?? "none"))", h?.card.width ?? 0 > 0 && h?.ageText == nil)
+    }
+
     static func screenColumn() async {
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("screencolumn-test: \(n) \(ok ? "ok" : "FAIL")") }
@@ -35,6 +49,7 @@ extension ContentTests {
                 step("\(tag) \(name): column \(Int(col.minX))..\(Int(col.maxX)) (\(Int(col.width))) centred in area \(Int(area.minX))..\(Int(area.maxX)) (\(Int(area.width)))",
                      abs(col.midX - area.midX) < 1.5 && col.width <= ScreenColumn.width + 0.5
                      && (room ? col.width > ScreenColumn.width - slack : col.width > area.width - slack))
+                if name == "overview", tag == "1200" { overviewAges(step) }
                 capture(win, to: "\(dir)/screen-\(name)-\(tag).png")
             }
             if full { ChromeTests.emulateFullScreen(win, model, false) }
