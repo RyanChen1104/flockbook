@@ -1262,6 +1262,47 @@ enum SnapshotRunner {
             tv3.insertNewline(nil); try? await Task.sleep(for: .seconds(0.6))
             let pasted = sent.count == 2 ? ImagePaste.plan(sent[1], directory: tmp.path).filter { if case .paste = $0 { true } else { false } }.count : 0
             step("dropped image sends as a pasted path", pasted == 1)
+            // 9. A real drop (AppKit's route, FakeDrag): the screenshot file on the text (NSTextView takes it, not the
+            // composer's drop area) and below it, and a file promise (a screenshot's thumbnail) on the text.
+            tv3.string = ""; probe3.text = ""
+            final class Promise: NSObject, NSFilePromiseProviderDelegate {
+                let src: URL; init(_ s: URL) { src = s }
+                func filePromiseProvider(_ p: NSFilePromiseProvider, fileNameForType t: String) -> String { src.lastPathComponent }
+                func filePromiseProvider(_ p: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
+                    do { try FileManager.default.copyItem(at: src, to: url); completionHandler(nil) } catch { completionHandler(error) }
+                }
+            }
+            let promise = Promise(shot)
+            // A promise needs a real drag session: hand over the file as the provider would.
+            let receive = ComposerTextView.SubmitTextView.receive
+            ComposerTextView.SubmitTextView.receive = { _, dir, done in
+                let u = dir.appendingPathComponent(shot.lastPathComponent)
+                promise.filePromiseProvider(NSFilePromiseProvider(), writePromiseTo: u) { done($0 == nil ? u : nil) }
+            }
+            defer { ComposerTextView.SubmitTextView.receive = receive }
+            // Points are read at drop time: a chip row moves the text.
+            let onText = { tv3.convert(NSPoint(x: 20, y: tv3.bounds.midY), to: nil) }
+            let belowText = { tv3.convert(NSPoint(x: 200, y: tv3.bounds.maxY + 16), to: nil) }
+            for (name, at, writers) in [("file on the text", onText, [shot as NSURL] as [NSPasteboardWriting]),
+                                        ("file below the text", belowText, [shot as NSURL]),
+                                        ("promise on the text", onText, [NSFilePromiseProvider(fileType: "public.png", delegate: promise)])] {
+                while probe3.images.count > 0 { probe3.removeFirst?(); try? await Task.sleep(for: .milliseconds(100)) }
+                tv3.selectAll(nil); tv3.delete(nil); try? await Task.sleep(for: .milliseconds(400))
+                let chips = probe3.images.count, point = at()
+                let fd = FakeDrag(writers: writers, at: point, in: win)
+                let view = fd.enter()
+                try? await Task.sleep(for: .milliseconds(300))
+                step("drag \(name): the drop outline shows", probe3.dropping)
+                let took = view.map(fd.finish) ?? false
+                try? await Task.sleep(for: .milliseconds(600))
+                step("drag \(name): taken by \(view.map { "\(type(of: $0))" } ?? "none"), outline gone", took && !probe3.dropping)
+                step("drop \(name): a chip, no path", probe3.images.count == chips + 1 && !tv3.string.contains(shot.lastPathComponent))
+            }
+            // Another file dropped on the text: its path, quoted as the composer quotes it.
+            tv3.selectAll(nil); tv3.delete(nil); try? await Task.sleep(for: .milliseconds(300))
+            let other = FakeDrag(urls: [note], at: onText(), in: win), chips = probe3.images.count
+            _ = other.enter().map(other.finish); try? await Task.sleep(for: .milliseconds(600))
+            step("drop a text file on the text: its path, no chip", tv3.string.contains(note.path) && probe3.images.count == chips)
             try? FileManager.default.removeItem(at: shot); try? FileManager.default.removeItem(at: note)
         } else { failures += 1; print("composer-test: image FAIL no text view") }
         print("composer-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
