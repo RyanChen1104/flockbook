@@ -24,6 +24,20 @@ enum PasteImages {
         return nil
     }
 
+    /// Dropped or attached files: each image file becomes one of ours (as a pasted file URL does), so it is sent as
+    /// a pasted path and Enter waits for its marker; a path typed with Enter in one call leaves the image unsent.
+    /// Folders and other files come back in `rest` (their path is inserted).
+    static func take(_ urls: [URL]) -> (images: [URL], rest: [URL]) {
+        var images: [URL] = [], rest: [URL] = []
+        for u in urls {
+            let type = (try? u.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            if u.isFileURL, type?.conforms(to: .image) == true, let png = pngData(NSImage(contentsOf: u)), let c = write(png) {
+                images.append(c)
+            } else { rest.append(u) }
+        }
+        return (images, rest)
+    }
+
     /// Cheap type check (no file written): is there an image Paste should take? Same rule as `capture`.
     static func hasImage(_ pb: NSPasteboard) -> Bool {
         let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true,

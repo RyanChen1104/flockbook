@@ -213,7 +213,7 @@ struct ComposerView: View {
             }
             HStack(spacing: 10) {
                 Button { attach() } label: { Image(systemName: "plus").foregroundStyle(.secondary) }
-                    .buttonStyle(HoverIconStyle()).help("Attach file (inserts its path)").disabled(readOnly)
+                    .buttonStyle(HoverIconStyle()).help("Attach file (an image attaches, another file inserts its path)").disabled(readOnly)
                 if let branch {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.triangle.branch").font(.subheadline)
@@ -240,7 +240,7 @@ struct ComposerView: View {
         .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
         .dropDestination(for: URL.self) { urls, _ in
             guard !readOnly else { return false }
-            handle.insert(urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+            attachFiles(urls)
             return true
         } isTargeted: { dropping = $0 }
         .onChange(of: text) {
@@ -251,7 +251,10 @@ struct ComposerView: View {
         .onChange(of: sendError) { probe?.error = sendError }
         .onChange(of: focusRequest) { DispatchQueue.main.async { handle.focus() } }
         .onChange(of: images) { onDraft(ComposerDraft(text: text, images: images)); probe?.images = images }
-        .onAppear { probe?.images = images; probe?.removeFirst = { if let u = images.first { removeImage(u) } } }
+        .onAppear {
+            probe?.images = images; probe?.removeFirst = { if let u = images.first { removeImage(u) } }
+            probe?.drop = { attachFiles($0) }
+        }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .glassCard(radius: Radius.bubble)
         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
@@ -262,7 +265,13 @@ struct ComposerView: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         guard panel.runModal() == .OK else { return }
-        handle.insert(panel.urls.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ")
+        attachFiles(panel.urls)
+    }
+    /// Image files become chips (`PasteImages.take`); other files and folders insert their path.
+    private func attachFiles(_ urls: [URL]) {
+        let (taken, rest) = PasteImages.take(urls)
+        images.append(contentsOf: taken)
+        if !rest.isEmpty { handle.insert(rest.map { ComposerHandle.quoted($0) }.joined(separator: " ") + " ") }
     }
     private var canSend: Bool { !readOnly && !(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) }
     /// Message = text, then the absolute image paths (agents read an image path as an attachment).
@@ -288,4 +297,4 @@ struct ComposerView: View {
     }
 }
 
-@MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)? }
+@MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)?; var drop: (([URL]) -> Void)? }

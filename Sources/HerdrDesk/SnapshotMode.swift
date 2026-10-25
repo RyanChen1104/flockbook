@@ -1250,6 +1250,19 @@ enum SnapshotRunner {
             try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86400)], ofItemAtPath: old.path)
             PasteImages.purgeOld()
             step("purge removes >7 day files only", !FileManager.default.fileExists(atPath: old.path) && files().count == 1)
+            // 8. Dropped or attached files: an image file (a screenshot's name has spaces) becomes a chip, as a paste
+            // does (sent as a pasted path, then Enter after its marker); any other file still inserts its path.
+            let shot = FileManager.default.temporaryDirectory.appendingPathComponent("Screenshot \(UUID().uuidString).png")
+            let note = FileManager.default.temporaryDirectory.appendingPathComponent("note-\(UUID().uuidString).txt")
+            try? img.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }?.write(to: shot)
+            try? Data("hi".utf8).write(to: note)
+            probe3.drop?([shot, note]); try? await Task.sleep(for: .seconds(0.6))
+            step("dropped image becomes chip, other file inserts its path",
+                 probe3.images.count == 1 && files().count == 2 && !tv3.string.contains(shot.lastPathComponent) && tv3.string.contains(note.path))
+            tv3.insertNewline(nil); try? await Task.sleep(for: .seconds(0.6))
+            let pasted = sent.count == 2 ? ImagePaste.plan(sent[1], directory: tmp.path).filter { if case .paste = $0 { true } else { false } }.count : 0
+            step("dropped image sends as a pasted path", pasted == 1)
+            try? FileManager.default.removeItem(at: shot); try? FileManager.default.removeItem(at: note)
         } else { failures += 1; print("composer-test: image FAIL no text view") }
         print("composer-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)
