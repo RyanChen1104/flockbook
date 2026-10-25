@@ -17,6 +17,7 @@ import SwiftUI
         if args.contains("--test-termfail") { Task { await termFail() }; return true }
         if args.contains("--test-termtheme") { Task { await termTheme() }; return true }
         if args.contains("--test-glyph") { Task { await glyph() }; return true }
+        if args.contains("--test-nerdglyph") { Task { await nerdGlyph() }; return true }
         if args.contains("--test-panebars") { Task { await paneBars() }; return true }
         if args.contains("--test-surfaces") { Task { await surfaces() }; return true }
         if args.contains("--test-search") { Task { await search() }; return true }
