@@ -7,7 +7,7 @@ import AppKit
 /// Glass materials (.glassEffect, .bar, .thinMaterial) may not render off-screen.
 @MainActor
 enum SnapshotRunner {
-    struct Case { let name: String; let screen: Screen; let dark: Bool; let tab: Int; let terminal: Bool; var search = ""; var real = false; var zoom = false; var quiet = false; var group: String? = nil; var dense = false; var sidebarW: CGFloat = 250 }
+    struct Case { let name: String; let screen: Screen; let dark: Bool; let tab: Int; let terminal: Bool; var search = ""; var real = false; var zoom = false; var quiet = false; var group: String? = nil; var dense = false; var sidebarW: CGFloat = 250; var pane: String? = nil }
 
     static func run(dir: String) {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -816,7 +816,8 @@ enum SnapshotRunner {
         }
         print("live diag: logFound=\(found) foundButEmpty=\(zeroFound) codex=\(codex) noSession=\(noSession)")
         print("live: connected=\(store.connected) workspaces=\(store.workspaces.count)")
-        render(Case(name: "live-main", screen: .tab, dark: false, tab: 0, terminal: false), dir: dir, store: store)
+        // LIVE_PANE: shoot the tab holding this pane (default: the first tab).
+        render(Case(name: "live-main", screen: .tab, dark: false, tab: 0, terminal: false, pane: ProcessInfo.processInfo.environment["LIVE_PANE"]), dir: dir, store: store)
         render(Case(name: "live-overview", screen: .overview, dark: false, tab: 0, terminal: false), dir: dir, store: store)
         NSApp.terminate(nil)
     }
@@ -1343,6 +1344,8 @@ enum SnapshotRunner {
         model.promptVisible = Set(store.workspaces.flatMap(\.tabs).flatMap(\.panes).filter { $0.agent?.status == .blocked }.map(\.id))
         model.screen = c.screen
         model.selectTab(index: c.tab)
+        if let id = c.pane, let ws = store.workspaces.first(where: { $0.tabs.contains { $0.panes.contains { $0.id == id } } }),
+           let t = ws.tabs.first(where: { $0.panes.contains { $0.id == id } }) { model.select(tab: t, in: ws) }
         model.screen = c.screen
         model.searchText = c.search
         if c.zoom, let t = model.tab, let p = t.panes.first { model.toggleZoom(p, in: t) }
