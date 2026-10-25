@@ -30,6 +30,15 @@ extension HerdrStore {
         return s
     }
 
+    /// The mock tree with a shell tab (no agent, status unknown) in Harbor.
+    public static var previewWithShell: HerdrStore {
+        let s = HerdrStore(session: .default())
+        var ws = PreviewData.workspaces
+        ws[2].tabs.append(PreviewData.tab("h2", "Shell", 2, .unknown, [PreviewData.pane("13", nil)]))
+        s.setPreview(workspaces: ws, connected: true)
+        return s
+    }
+
     /// Workspaces with many tabs and long names: for sidebar layout checks.
     public static var previewDense: HerdrStore {
         let sts: [AgentStatus] = [.idle, .done, .working, .blocked, .done, .idle, .done, .working, .idle, .done, .idle, .done, .idle, .done]

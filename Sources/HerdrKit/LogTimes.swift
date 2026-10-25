@@ -52,3 +52,17 @@ public final class LogTimeCache: @unchecked Sendable {
         return (time == nil ? nil : url, time)   // a moved or removed log is looked for again next time
     }
 }
+
+/// Overview's sections when it groups by status. Every tab is in one, so the header's tab count is the card count.
+public struct OverviewGroups<Row> {
+    public var needsYou: [Row] = [], working: [Row] = [], resting: [Row] = []
+    public init(_ rows: [Row], tab: (Row) -> Tab) {
+        for r in rows {
+            switch tab(r).status {
+            case .blocked: needsYou.append(r)
+            case .working: working.append(r)
+            case .done, .idle, .unknown: resting.append(r)   // unknown: a tab with no agent, such as a shell
+            }
+        }
+    }
+}

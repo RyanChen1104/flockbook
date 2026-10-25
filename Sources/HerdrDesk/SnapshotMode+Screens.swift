@@ -18,9 +18,31 @@ extension ContentTests {
         step("overview card h1 (no log): no age (\(h?.ageText ?? "none"))", h?.card.width ?? 0 > 0 && h?.ageText == nil)
     }
 
+    /// Grouped by status, a shell tab (status unknown) is a card under "Done and resting": one card per tab in the header.
+    static func overviewShell(_ step: (String, Bool) -> Void) async {
+        let model = AppModel(store: .previewWithShell)
+        let size = NSSize(width: 1200, height: 800)
+        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        WindowChrome.apply(win)
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -4000, y: -3000)); win.orderFrontRegardless()
+        OverviewProbe.cards = [:]
+        model.screen = .overview
+        try? await Task.sleep(for: .seconds(1.2))
+        let tabs = model.store.workspaces.flatMap(\.tabs).count
+        let shell = OverviewProbe.cards["h2"]
+        step("overview shell tab: a card, no age (\(shell.map { "\(Int($0.card.width)) wide, \($0.ageText ?? "none")" } ?? "no card"))",
+             shell?.card.width ?? 0 > 0 && shell?.ageText == nil)
+        step("overview: one card per tab (\(OverviewProbe.cards.count) cards, \(tabs) tabs)", OverviewProbe.cards.count == tabs)
+        capture(win, to: "\(dir)/screen-overview-shell.png")
+        win.orderOut(nil)
+    }
+
     static func screenColumn() async {
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("screencolumn-test: \(n) \(ok ? "ok" : "FAIL")") }
+        await overviewShell(step)
 
         var seen: [String: (CGRect, CGRect)] = [:]
         ScreenColumn.probe = { seen[$0] = ($1, $2) }

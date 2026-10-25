@@ -43,3 +43,12 @@ func checksLogTimes() async {
     check(LogTimeCache.newest(of: tab, times: times) == t0 - 60, "log times: a tab shows its newest agent log")
     check(LogTimeCache.newest(of: shell, times: times) == nil, "log times: a shell tab shows no time")
 }
+
+func checksOverviewGroups() {
+    let t = { (id: String, st: AgentStatus) in Tab(id: id, label: id, number: 1, panes: [], status: st) }
+    let tabs = [t("b", .blocked), t("w", .working), t("d", .done), t("i", .idle), t("u", .unknown)]
+    let g = OverviewGroups(tabs) { $0 }
+    check(g.needsYou.map(\.id) == ["b"] && g.working.map(\.id) == ["w"], "overview groups: needs you and working")
+    check(g.resting.map(\.id) == ["d", "i", "u"], "overview groups: done, idle and unknown (a shell) rest (\(g.resting.map(\.id)))")
+    check(g.needsYou.count + g.working.count + g.resting.count == tabs.count, "overview groups: every tab has a card")
+}

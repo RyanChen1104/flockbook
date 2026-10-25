@@ -141,9 +141,8 @@ struct OverviewView: View {
 
     var body: some View {
         let all = model.store.workspaces.flatMap { ws in ws.tabs.map { (ws, $0) } }
-        let blocked = all.filter { $0.1.status == .blocked }
-        let working = all.filter { $0.1.status == .working }
-        let calm = all.filter { $0.1.status == .done || $0.1.status == .idle }
+        let groups = OverviewGroups(all) { $0.1 }
+        let blocked = groups.needsYou, working = groups.working, calm = groups.resting
         OptionalScroll {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .top) {

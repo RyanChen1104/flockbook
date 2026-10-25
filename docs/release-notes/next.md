@@ -12,3 +12,5 @@ One short line: what this release is about.
 ### 🐛 Bug Fixes
 
 ### ⚙️ Changes
+
+- Overview grouped by status shows every tab: a tab with no agent, such as a shell, is under Done and resting, so the card count matches the tab count in the header.
