@@ -44,6 +44,7 @@ OFFLINE=(
     "termfail|termfail-test: PASS|--test-termfail"
     "termtheme|termtheme-test: PASS|--test-termtheme"
     "glyph|glyph-test: PASS|--test-glyph"
+    "nerdglyph|nerdglyph-test: PASS|--test-nerdglyph"
     "panebars|panebars-test: PASS|--test-panebars"
     "surfaces|surfaces-test: PASS|--test-surfaces"
     "search|search-test: PASS|--test-search"
@@ -57,6 +58,7 @@ OFFLINE=(
     "busy-tab|busy-tab: PASS|--test-busy-tab"
     "legacy-look|legacy-look-test: PASS|--test-legacy-look"
     "pictures|pictures-test: PASS|--test-pictures"
+    "dragroute|dragroute-test: PASS|--test-dragroute"
 )
 REAL=(
     "fullscreen-real|fs-real|--preview --test-fullscreen-real"
@@ -96,7 +98,8 @@ estimate() {
         conversation-churn) echo 140 ;; tab-overflow) echo 113 ;; question) echo 47 ;; hittest) echo 45 ;;
         snapshot) echo 44 ;; settings-page) echo 44 ;; snapshot-statusline) echo 41 ;; snapshot-remote) echo 36 ;;
         snapshot-settings) echo 33 ;; chrome) echo 25 ;; root-width) echo 23 ;; screencolumn) echo 22 ;;
-        shortcuts|tabdrag|menus|glyph|pictures) echo 16 ;; composer|termtheme|scrolltop) echo 10 ;;
+        shortcuts|tabdrag|menus|glyph|pictures) echo 16 ;; composer|termtheme|nerdglyph|scrolltop) echo 10 ;;
+        dragroute) echo 4 ;;
         bottom|sidebar|search|busy-tab|textsize) echo 8 ;;
         snapshot-reading|panebars|tabkeys|loadstate|island-height|legacy-look|sendfail|table) echo 5 ;;
         closetab|termfail|surfaces|sidebar-layout|panemenu|settings-migration) echo 2 ;;

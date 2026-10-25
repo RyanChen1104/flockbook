@@ -816,6 +816,11 @@ enum SnapshotRunner {
         }
         print("live diag: logFound=\(found) foundButEmpty=\(zeroFound) codex=\(codex) noSession=\(noSession)")
         print("live: connected=\(store.connected) workspaces=\(store.workspaces.count)")
+        // The Overview cards' ages: each tab's newest agent log time, none for a tab without one.
+        await store.refreshLogTimes()
+        for ws in store.workspaces { for t in ws.tabs {
+            print("live age: \(ws.label) / \(t.label) agents=\(t.panes.compactMap(\.agent).map(\.kind)) \(store.lastActivity(of: t).map { LogAge.label($0, now: Date()) } ?? "none")")
+        } }
         // LIVE_PANE: shoot the tab holding this pane (default: the first tab).
         render(Case(name: "live-main", screen: .tab, dark: false, tab: 0, terminal: false, pane: ProcessInfo.processInfo.environment["LIVE_PANE"]), dir: dir, store: store)
         render(Case(name: "live-overview", screen: .overview, dark: false, tab: 0, terminal: false), dir: dir, store: store)
@@ -1251,6 +1256,100 @@ enum SnapshotRunner {
             try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 86400)], ofItemAtPath: old.path)
             PasteImages.purgeOld()
             step("purge removes >7 day files only", !FileManager.default.fileExists(atPath: old.path) && files().count == 1)
+            // 8. Dropped or attached files: an image file (a screenshot's name has spaces) becomes a chip, as a paste
+            // does (sent as a pasted path, then Enter after its marker); any other file still inserts its path.
+            let shot = FileManager.default.temporaryDirectory.appendingPathComponent("Screenshot \(UUID().uuidString).png")
+            let note = FileManager.default.temporaryDirectory.appendingPathComponent("note-\(UUID().uuidString).txt")
+            try? img.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }?.write(to: shot)
+            try? Data("hi".utf8).write(to: note)
+            probe3.drop?([shot, note]); try? await Task.sleep(for: .seconds(0.6))
+            step("dropped image becomes chip, other file inserts its path",
+                 probe3.images.count == 1 && files().count == 2 && !tv3.string.contains(shot.lastPathComponent) && tv3.string.contains(note.path))
+            tv3.insertNewline(nil); try? await Task.sleep(for: .seconds(0.6))
+            let pasted = sent.count == 2 ? ImagePaste.plan(sent[1], directory: tmp.path).filter { if case .paste = $0 { true } else { false } }.count : 0
+            step("dropped image sends as a pasted path", pasted == 1)
+            // 9. A real drop (AppKit's drag hit test, FakeDrag): the screenshot file on the text and below it, and a file
+            // promise (a screenshot's thumbnail) on the text. The glass card hides its content from that hit test.
+            tv3.string = ""; probe3.text = ""
+            final class Promise: NSObject, NSFilePromiseProviderDelegate {
+                let src: URL; init(_ s: URL) { src = s }
+                func filePromiseProvider(_ p: NSFilePromiseProvider, fileNameForType t: String) -> String { src.lastPathComponent }
+                func filePromiseProvider(_ p: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
+                    do { try FileManager.default.copyItem(at: src, to: url); completionHandler(nil) } catch { completionHandler(error) }
+                }
+            }
+            let promise = Promise(shot)
+            // A promise needs a real drag session: hand over the file as the provider would.
+            let receive = FileDrop.receive
+            FileDrop.receive = { _, dir, done in
+                let u = dir.appendingPathComponent(shot.lastPathComponent)
+                promise.filePromiseProvider(NSFilePromiseProvider(), writePromiseTo: u) { done($0 == nil ? u : nil) }
+            }
+            defer { FileDrop.receive = receive }
+            // Points are read at drop time: a chip row moves the text.
+            let onText = { tv3.convert(NSPoint(x: 20, y: tv3.bounds.midY), to: nil) }
+            let belowText = { tv3.convert(NSPoint(x: 200, y: tv3.bounds.maxY + 16), to: nil) }
+            for (name, at, writers) in [("file on the text", onText, [shot as NSURL] as [NSPasteboardWriting]),
+                                        ("file below the text", belowText, [shot as NSURL]),
+                                        ("promise on the text", onText, [NSFilePromiseProvider(fileType: "public.png", delegate: promise)])] {
+                while probe3.images.count > 0 { probe3.removeFirst?(); try? await Task.sleep(for: .milliseconds(100)) }
+                tv3.selectAll(nil); tv3.delete(nil); try? await Task.sleep(for: .milliseconds(400))
+                let chips = probe3.images.count, point = at()
+                let fd = FakeDrag(writers: writers, at: point, in: win)
+                let view = fd.enter()
+                try? await Task.sleep(for: .milliseconds(300))
+                step("drag \(name): the drop outline shows", probe3.dropping)
+                step("drag \(name): the outline is the card's edge (\(DropOutlineProbe.outline) vs \(DropOutlineProbe.card))",
+                     DropOutlineProbe.outline != .zero && DropOutlineProbe.outline.equalTo(DropOutlineProbe.card))
+                if name == "file on the text" {
+                    try? FileManager.default.createDirectory(atPath: ContentTests.dir, withIntermediateDirectories: true)
+                    ContentTests.capture(win, to: "\(ContentTests.dir)/composer-drop-outline\(NSApp.appearance?.name == .aqua ? "-light" : "").png")
+                }
+                DropOutlineProbe.outline = .zero
+                let took = view.map(fd.finish) ?? false
+                try? await Task.sleep(for: .milliseconds(600))
+                step("drag \(name): taken by \(view.map { "\(type(of: $0))" } ?? "none"), outline gone", took && !probe3.dropping)
+                step("drop \(name): a chip, no path", probe3.images.count == chips + 1 && !tv3.string.contains(shot.lastPathComponent))
+            }
+            // Another file dropped on the text: its path, quoted as the composer quotes it.
+            tv3.selectAll(nil); tv3.delete(nil); try? await Task.sleep(for: .milliseconds(300))
+            let other = FakeDrag(urls: [note], at: onText(), in: win), chips = probe3.images.count
+            _ = other.enter().map(other.finish); try? await Task.sleep(for: .milliseconds(600))
+            step("drop a text file on the text: its path, no chip", tv3.string.contains(note.path) && probe3.images.count == chips)
+            try? FileManager.default.removeItem(at: shot); try? FileManager.default.removeItem(at: note)
+            // 10. An agent on a host (`RemoteHost.Via.local`, a temp host folder). A dropped image is a chip as on this
+            // Mac: the send copies it to the host (`MessageSender`, the same plan as below). Another file is copied to the
+            // host first and its host path inserted.
+            let hostDir = tmp.appendingPathComponent("host/paste").path
+            let probe4 = PlaceholderProbe()
+            var sent4: [String] = []
+            let host4 = NSHostingView(rootView: ComposerView(agentName: "testagent", onSend: { sent4.append($0) }, probe: probe4, pasteboard: pb,
+                                                              remote: RemoteHost(via: .local), uploadFolder: hostDir).frame(width: size.width, height: size.height))
+            host4.frame = NSRect(origin: .zero, size: size)
+            win.contentView = host4
+            try? await Task.sleep(for: .seconds(1))
+            let shot4 = FileManager.default.temporaryDirectory.appendingPathComponent("Screenshot \(UUID().uuidString).png")
+            let note4 = FileManager.default.temporaryDirectory.appendingPathComponent("note-\(UUID().uuidString).txt")
+            defer { try? FileManager.default.removeItem(at: shot4); try? FileManager.default.removeItem(at: note4) }
+            try? img.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }?.write(to: shot4)
+            try? Data("remote note".utf8).write(to: note4)
+            probe4.drop?([shot4, note4])
+            for _ in 0..<40 where !probe4.text.contains(hostDir) { try? await Task.sleep(for: .milliseconds(250)) }
+            let onHost = ((try? FileManager.default.contentsOfDirectory(atPath: hostDir)) ?? []).map { "\(hostDir)/\($0)" }
+            step("remote: dropped image becomes a chip", probe4.images.count == 1 && !probe4.text.contains(shot4.lastPathComponent))
+            step("remote: another file is copied to the host and its host path inserted (\(probe4.text))",
+                 !probe4.text.contains(note4.path) && onHost.contains { probe4.text.contains($0) && FileManager.default.contents(atPath: $0) == Data("remote note".utf8) })
+            if let tv4 = find(host4) {
+                win.makeFirstResponder(tv4)
+                let chip = probe4.images.first
+                tv4.insertNewline(nil); try? await Task.sleep(for: .seconds(0.6))
+                var hostImage: String?
+                if sent4.count == 1, let steps = try? await RemoteUpload(host: RemoteHost(via: .local), folder: hostDir).hostSteps(ImagePaste.plan(sent4[0], directory: tmp.path)) {
+                    for case .paste(let p) in steps { hostImage = p }
+                }
+                step("remote: the chip's image goes to the host on send (\(hostImage ?? "none"))",
+                     hostImage.map { h in h.hasPrefix(hostDir + "/") && chip.map { c in FileManager.default.contents(atPath: h) == FileManager.default.contents(atPath: c.path) } == true } == true)
+            } else { step("remote: text view", false) }
         } else { failures += 1; print("composer-test: image FAIL no text view") }
         print("composer-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

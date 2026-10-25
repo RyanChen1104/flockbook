@@ -1,6 +1,7 @@
 import HerdrKit
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Multi-line input. Return sends, Shift-Return inserts a newline.
 /// Never sends while IME marked text is active; system dictation works because this is a real NSTextView.
@@ -10,6 +11,10 @@ struct ComposerTextView: NSViewRepresentable {
     @Binding var composing: Bool
     var pasteboard: NSPasteboard = .general
     var onPasteImages: ([URL]) -> Void = { _ in }
+    /// Files dropped on the text (an image becomes a chip; see `ComposerView.attachFiles`).
+    var onDropFiles: ([URL]) -> Void = { _ in }
+    /// A file drag is over the text (the composer shows its drop outline).
+    var onDropTarget: (Bool) -> Void = { _ in }
     var onSubmit: () -> Void
     var canSubmit = true
     var maxHeight: CGFloat = 160
@@ -25,6 +30,8 @@ struct ComposerTextView: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.pasteboard = pasteboard
         tv.onPasteImages = { [weak c = context.coordinator] in c?.parent.onPasteImages($0) }
+        tv.drop.onFiles = { [weak c = context.coordinator] in c?.parent.onDropFiles($0) }
+        tv.drop.onTarget = { [weak c = context.coordinator] in c?.parent.onDropTarget($0) }
         tv.onMarkedChange = { [weak c = context.coordinator] in c?.markedChanged() }
         tv.isRichText = false
         tv.allowsUndo = true
@@ -55,6 +62,7 @@ struct ComposerTextView: NSViewRepresentable {
         var onMarkedChange: (() -> Void)?
         var pasteboard: NSPasteboard = .general
         var onPasteImages: (([URL]) -> Void)?
+        let drop = FileDrop()
         /// A screenshot on the clipboard holds only image types, which a plain-text view does not read, so the
         /// system would grey out Edit > Paste (and ⌘V) and never call `paste`. Enable it for images.
         override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
@@ -67,6 +75,14 @@ struct ComposerTextView: NSViewRepresentable {
             // Injected pasteboard (tests): NSTextView would read the system one.
             if let t = pasteboard.string(forType: .string) { insertText(t, replacementRange: selectedRange()) }
         }
+        // When a drag reaches the text (a composer without a glass card; see `FileDropArea`): files and image promises
+        // go to the composer as on its drop area. A plain-text view would insert the raw path, and take a file promise
+        // (a screenshot's thumbnail) but insert nothing. Anything else (text) keeps NSTextView's own drop.
+        override func draggingEntered(_ info: NSDraggingInfo) -> NSDragOperation { drop.over(info) ?? super.draggingEntered(info) }
+        override func draggingUpdated(_ info: NSDraggingInfo) -> NSDragOperation { drop.over(info) ?? super.draggingUpdated(info) }
+        override func draggingExited(_ info: NSDraggingInfo?) { drop.left(); super.draggingExited(info) }
+        override func concludeDragOperation(_ info: NSDraggingInfo?) { drop.left(); super.concludeDragOperation(info) }
+        override func performDragOperation(_ info: NSDraggingInfo) -> Bool { drop.perform(info) ?? super.performDragOperation(info) }
         override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
             super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
             onMarkedChange?()
@@ -167,14 +183,17 @@ struct ComposerView: View {
     var focusRequest = 0
     /// The agent's host when it is not this Mac: attached and dropped files are copied there first (`RemoteUpload`).
     var remote: RemoteHost? = nil
+    /// The host folder for attached files (checks use a temp folder).
+    var uploadFolder = RemoteUpload.defaultFolder
     @State private var text: String
     @State private var images: [URL]
     var pasteboard: NSPasteboard = .general
     init(agentName: String, readOnly: Bool = false, branch: String? = nil, draft: ComposerDraft = ComposerDraft(),
          onSend: @escaping (String) -> Void, onDraft: @escaping (ComposerDraft) -> Void = { _ in }, probe: PlaceholderProbe? = nil, pasteboard: NSPasteboard = .general,
-         deliver: ((String) async -> Bool)? = nil, placeholder: String? = nil, focusRequest: Int = 0, remote: RemoteHost? = nil) {
+         deliver: ((String) async -> Bool)? = nil, placeholder: String? = nil, focusRequest: Int = 0, remote: RemoteHost? = nil,
+         uploadFolder: String = RemoteUpload.defaultFolder) {
         self.pasteboard = pasteboard; self.deliver = deliver; self.placeholder = placeholder; self.focusRequest = focusRequest
-        self.remote = remote
+        self.remote = remote; self.uploadFolder = uploadFolder
         self.agentName = agentName; self.readOnly = readOnly; self.branch = branch
         self.onSend = onSend; self.onDraft = onDraft; self.probe = probe
         _text = State(initialValue: draft.text); _images = State(initialValue: draft.images)
@@ -207,7 +226,7 @@ struct ComposerView: View {
                         .onAppear { probe?.shown = true }.onDisappear { probe?.shown = false }
                 }
                 ComposerTextView(text: $text, height: $height, composing: $composing, pasteboard: pasteboard,
-                                 onPasteImages: { images.append(contentsOf: $0) },
+                                 onPasteImages: { images.append(contentsOf: $0) }, onDropFiles: { attachFiles($0) }, onDropTarget: { dropping = $0 },
                                  onSubmit: { send() }, canSubmit: !readOnly && !underSettings, handle: handle)
                     .frame(height: height)
             }
@@ -222,7 +241,7 @@ struct ComposerView: View {
             }
             HStack(spacing: 10) {
                 Button { attach() } label: { Image(systemName: "plus").foregroundStyle(.secondary) }
-                    .buttonStyle(HoverIconStyle()).help(remote.map { "Attach file (copies it to \($0.label) and inserts its path there)" } ?? "Attach file (inserts its path)").disabled(readOnly)
+                    .buttonStyle(HoverIconStyle()).help(remote.map { "Attach file (an image attaches, another file is copied to \($0.label) and its path inserted there)" } ?? "Attach file (an image attaches, another file inserts its path)").disabled(readOnly)
                 if let branch {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.triangle.branch").font(.subheadline)
@@ -246,12 +265,7 @@ struct ComposerView: View {
                 .buttonStyle(.plain).disabled(!canSend).help("Send (Return)")
             }
         }
-        .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
-        .dropDestination(for: URL.self) { urls, _ in
-            guard !readOnly else { return false }
-            insertFiles(urls)
-            return true
-        } isTargeted: { dropping = $0 }
+        .onChange(of: dropping) { probe?.dropping = dropping }
         .onChange(of: text) {
             onDraft(ComposerDraft(text: text, images: images))
             if sendError != nil, !text.isEmpty, text != returnedText { withAnimation(.easeOut(duration: 0.2)) { sendError = nil } }
@@ -260,9 +274,21 @@ struct ComposerView: View {
         .onChange(of: sendError) { probe?.error = sendError }
         .onChange(of: focusRequest) { DispatchQueue.main.async { handle.focus() } }
         .onChange(of: images) { onDraft(ComposerDraft(text: text, images: images)); probe?.images = images }
-        .onAppear { probe?.images = images; probe?.removeFirst = { if let u = images.first { removeImage(u) } } }
+        .onAppear {
+            probe?.images = images; probe?.removeFirst = { if let u = images.first { removeImage(u) } }
+            probe?.drop = { attachFiles($0) }
+        }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .glassCard(radius: Radius.bubble)
+        // The drop outline is the card's own edge (same corners), over everything in it (the chips' labels too).
+        .overlay {
+            if dropping {
+                RoundedRectangle(cornerRadius: Radius.bubble).strokeBorder(Color.accentColor, lineWidth: 2)
+                    .background { GeometryReader { g in Color.clear.onAppear { DropOutlineProbe.outline = g.frame(in: .global) } } }
+            }
+        }
+        .background { GeometryReader { g in Color.clear.onAppear { DropOutlineProbe.card = g.frame(in: .global) }.onChange(of: g.frame(in: .global)) { DropOutlineProbe.card = $1 } } }
+        .background { FileDropArea(onFiles: readOnly ? nil : { attachFiles($0) }, onTarget: { dropping = $0 }) }
         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
     }
 
@@ -271,7 +297,14 @@ struct ComposerView: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         guard panel.runModal() == .OK else { return }
-        insertFiles(panel.urls)
+        attachFiles(panel.urls)
+    }
+    /// Image files become chips (`PasteImages.take`; for an agent on a host the send copies them there, see
+    /// `MessageSender`); other files and folders insert their path (`insertFiles`).
+    private func attachFiles(_ urls: [URL]) {
+        let (taken, rest) = PasteImages.take(urls)
+        images.append(contentsOf: taken)
+        if !rest.isEmpty { insertFiles(rest) }
     }
     /// Types the paths of attached or dropped files. For an agent on a host each file is copied there first and its
     /// host path is typed; a folder is not copied (the note says so).
@@ -286,7 +319,7 @@ struct ComposerView: View {
             defer { uploading -= 1 }
             var paths: [String] = []
             for u in urls {
-                do { paths.append(try await RemoteUpload(host: remote).uploadFile(u)) } catch {
+                do { paths.append(try await RemoteUpload(host: remote, folder: uploadFolder).uploadFile(u)) } catch {
                     withAnimation(.easeOut(duration: 0.2)) { sendError = "\(error)" }
                 }
             }
@@ -321,4 +354,7 @@ struct ComposerView: View {
     }
 }
 
-@MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)? }
+/// Checks: where the composer's drop outline was drawn, and the card's frame (window coordinates, from SwiftUI).
+@MainActor enum DropOutlineProbe { static var outline = CGRect.zero; static var card = CGRect.zero }
+
+@MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)?; var drop: (([URL]) -> Void)?; var dropping = false }

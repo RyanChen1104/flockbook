@@ -93,6 +93,15 @@ public enum GhosttyConfig {
         }.map { var t = $0; t.skipped = skipped; return t }
     }
 
+    /// `font-family` values in load order: Ghostty's font list (it falls back along it). An empty value clears it.
+    public static func fontFamilies(home: String = NSHomeDirectory(), environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for (key, value) in configFiles(home: home, environment: environment).flatMap({ read($0, home: home, seen: &seen) }) where key == "font-family" {
+            if value.isEmpty { out.removeAll() } else { out.append(value) }
+        }
+        return out
+    }
+
     /// Ghostty's config files in load order (later wins). They may not exist.
     public static func configFiles(home: String, environment: [String: String]) -> [String] {
         [ghosttyFolder(home: home, environment: environment), home + "/Library/Application Support/com.mitchellh.ghostty"]

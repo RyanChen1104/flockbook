@@ -17,6 +17,7 @@ import SwiftUI
         if args.contains("--test-termfail") { Task { await termFail() }; return true }
         if args.contains("--test-termtheme") { Task { await termTheme() }; return true }
         if args.contains("--test-glyph") { Task { await glyph() }; return true }
+        if args.contains("--test-nerdglyph") { Task { await nerdGlyph() }; return true }
         if args.contains("--test-panebars") { Task { await paneBars() }; return true }
         if args.contains("--test-surfaces") { Task { await surfaces() }; return true }
         if args.contains("--test-search") { Task { await search() }; return true }
@@ -29,6 +30,7 @@ import SwiftUI
         if args.contains("--test-busy-tab") { Task { await busyTab() }; return true }
         if args.contains("--test-legacy-look") { Task { await legacyLook() }; return true }
         if args.contains("--test-pictures") { Task { await pictures() }; return true }
+        if args.contains("--test-dragroute") { Task { await dragRoute() }; return true }
         if args.contains("--bench-conversation") { Task { await benchConversation(args) }; return true }
         if args.contains("--test-question-live") { Task { await questionLive(args) }; return true }   // before --test-question
         if args.contains("--test-question") { Task { await question() }; return true }

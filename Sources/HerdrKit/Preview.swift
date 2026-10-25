@@ -30,6 +30,15 @@ extension HerdrStore {
         return s
     }
 
+    /// The mock tree with a shell tab (no agent, status unknown) in Harbor.
+    public static var previewWithShell: HerdrStore {
+        let s = HerdrStore(session: .default())
+        var ws = PreviewData.workspaces
+        ws[2].tabs.append(PreviewData.tab("h2", "Shell", 2, .unknown, [PreviewData.pane("13", nil)]))
+        s.setPreview(workspaces: ws, connected: true)
+        return s
+    }
+
     /// Workspaces with many tabs and long names: for sidebar layout checks.
     public static var previewDense: HerdrStore {
         let sts: [AgentStatus] = [.idle, .done, .working, .blocked, .done, .idle, .done, .working, .idle, .done, .idle, .done, .idle, .done]
@@ -95,6 +104,9 @@ enum PreviewData {
             tab("h1", "Main", 1, .working, [pane("12", agent("harbor-ops-dev", .working))]),
         ]),
     ] }
+
+    /// Tab id → seconds since its agents last wrote their logs. Harbor's tab has none: no log found.
+    static let logAges: [String: TimeInterval] = ["a": 180, "b": 24 * 60, "c": 10, "d": 2 * 3600, "j1": 86400 + 60, "j2": 5 * 60]
 
     static let conversation: [ConversationItem] = [
         ConversationItem(id: "c1", kind: .userText("Where is the team at?")),

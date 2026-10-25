@@ -162,4 +162,15 @@ func checksGhosttyTheme() async throws {
         check(!p.reason.isEmpty, "ghostty: \(p) has a reason")
     }
     check(GhosttyThemeProblem.themeNotFound("Nord").reason.contains("Nord"), "ghostty: the reason names the theme")
+
+    // font-family: every value in load order (Ghostty's list of fonts), quotes off; an empty value clears the list.
+    let f = try fresh()
+    check(GhosttyConfig.fontFamilies(home: f.home, environment: [:]).isEmpty, "ghostty font: no config -> no families")
+    try write(f.xdg + "/config", "font-family = \"Sarasa Term TC\"\nconfig-file = more\n")
+    try write(f.xdg + "/more", "font-family = MesloLGS NF\n")
+    try write(f.support + "/config", "font-family = \"FiraCode Nerd Font Mono\"\n")
+    check(GhosttyConfig.fontFamilies(home: f.home, environment: [:]) == ["Sarasa Term TC", "MesloLGS NF", "FiraCode Nerd Font Mono"],
+          "ghostty font: families in load order, config-file included")
+    try write(f.support + "/config", "font-family =\nfont-family = JetBrains Mono\n")
+    check(GhosttyConfig.fontFamilies(home: f.home, environment: [:]) == ["JetBrains Mono"], "ghostty font: an empty value clears the list")
 }

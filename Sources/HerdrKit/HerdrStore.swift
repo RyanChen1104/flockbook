@@ -78,6 +78,31 @@ public final class HerdrStore {
         self.resolver = SessionResolver(socketPath: session.socketPath, remote: session.remote)
     }
 
+    // MARK: - Log times
+
+    /// Session id → when that agent last wrote its log (`LogTimeCache`). Filled by `refreshLogTimes`.
+    public private(set) var logTimes: [String: Date] = [:]
+    @ObservationIgnored private let logTimeCache = LogTimeCache()
+    @ObservationIgnored private var logTimesRunning = false
+
+    /// Looks at the logs of the agents shown now, off the main thread; each log at most once per 30 s. The paths are
+    /// the sessions herdr names or `SessionResolver` found (`agent.sessionId`).
+    public func refreshLogTimes(now: Date = Date()) async {
+        guard !isPreview, !logTimesRunning else { return }
+        let sessions = workspaces.flatMap(\.tabs).flatMap(\.panes).compactMap { p in p.agent.flatMap { a in a.sessionId.map { ($0, a.kind) } } }
+        logTimesRunning = true
+        let cache = logTimeCache
+        let times = await Task.detached { cache.refresh(sessions, now: now); return cache.times }.value
+        logTimesRunning = false
+        if times != logTimes { logTimes = times }
+    }
+
+    /// When the tab's agents last wrote their logs (the newest); nil when none has a log found (a shell tab).
+    public func lastActivity(of tab: Tab, now: Date = Date()) -> Date? {
+        if isPreview { return PreviewData.logAges[tab.id].map { now - $0 } }
+        return LogTimeCache.newest(of: tab, times: logTimes)
+    }
+
     // MARK: - Session fallback
 
     /// Finds logs for agent panes that herdr reports without a session (read-only; see `SessionResolver`).
