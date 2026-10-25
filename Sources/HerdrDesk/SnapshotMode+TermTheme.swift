@@ -5,6 +5,76 @@ import SwiftTerm
 import SwiftUI
 
 extension ContentTests {
+    /// Prompt icons (powerlevel10k's git branch U+F126, folder U+F07C, Powerline arrow U+E0B0, a bold icon) in the
+    /// live terminal, offscreen: each must have ink and must not be the box drawn for a code point no font has.
+    /// Needs an installed Nerd Font (the fix uses it); without one the check says so and passes.
+    static func nerdGlyph() async {
+        var failures = 0
+        func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("nerdglyph-test: \(n) \(ok ? "ok" : "FAIL")") }
+        guard let choice = TerminalFont.choice else {
+            print("nerdglyph-test: no Nerd Font installed: nothing to check"); print("nerdglyph-test: PASS"); NSApp.terminate(nil); return
+        }
+        let family: String
+        switch choice { case .ghostty(let f): family = f; case .fallback(let f): family = f }
+        guard let nerd = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12) else { step("\(family) loads", false); NSApp.terminate(nil); return }
+        print("nerdglyph-test: font \(choice)")
+        // The box: a Private Use Area code point that neither the system mono font nor the Nerd Font has.
+        func has(_ font: NSFont, _ u: UInt32) -> Bool { var c = UniChar(u), g: CGGlyph = 0; return CTFontGetGlyphsForCharacters(font as CTFont, &c, &g, 1) && g != 0 }
+        let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        guard let none = [0xE900, 0xE9F0, 0xEE40, 0xEFF0, 0xF8E0].first(where: { !has(nerd, UInt32($0)) && !has(mono, UInt32($0)) }) else {
+            step("a code point no font has", false); NSApp.terminate(nil); return
+        }
+        let rows: [(String, String)] = [("git branch U+F126", "\u{F126}"), ("folder U+F07C", "\u{F07C}"), ("Powerline U+E0B0", "\u{E0B0}"),
+                                        ("bold U+F126", "\u{1b}[1m\u{F126}\u{1b}[0m"), ("box", String(UnicodeScalar(UInt32(none))!))]
+        let tmp = NSTemporaryDirectory() + "fb-nerdglyph-\(getpid())", fm = FileManager.default
+        try? fm.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(atPath: tmp) }
+        let text = rows.map(\.1).joined(separator: "\r\n") + "\r\n"
+        let frame = #"{"type":"terminal.frame","seq":1,"full":true,"width":40,"height":10,"bytes":"\#(Data(text.utf8).base64EncodedString())"}"#
+        let script = tmp + "/herdr"
+        try? "#!/bin/sh\necho '\(frame)'\nsleep 8\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
+        TerminalNSView.testLauncher = [script]
+        defer { TerminalNSView.testLauncher = nil }
+        // Both fonts: Ghostty's (a Nerd Font) and Menlo with the Nerd Font as its fallback.
+        let model = AppModel(store: .preview), size = NSSize(width: 420, height: 220), found = TerminalFont.choice
+        defer { TerminalFont.choice = found }
+        for (tag, choice) in [("ghostty", TerminalFont.Choice.ghostty(family)), ("fallback", .fallback(family))] {
+            TerminalFont.choice = choice
+            let (win, host) = offscreen(ZStack { WindowSurface(glass: .off)
+                ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_nerdglyph_\(tag)", writable: true, focused: false) }, size)
+            win.appearance = NSAppearance(named: .darkAqua)
+            try? await Task.sleep(for: .milliseconds(1500))
+            let path = "\(dir)/nerdglyph-\(tag).png"
+            capture(win, to: path)
+            func terminalView(_ v: NSView) -> TerminalView? { (v as? TerminalView) ?? v.subviews.lazy.compactMap(terminalView).first }
+            guard let tv = terminalView(host), let at = pixels(path, host) else { step("\(tag): terminal drawn", false); win.orderOut(nil); continue }
+            print("nerdglyph-test: \(tag): font \(tv.font.fontName), picture \(path)")
+            // The cursor is on the row after the text: its cell gives the rows above (top-left origin, as `pixels`).
+            var cell = tv.convert(tv.caretFrame, to: host)
+            if !host.isFlipped { cell.origin.y = host.bounds.height - cell.maxY }
+            guard let bg = at(cell.minX + cell.width * 6, cell.midY) else { step("\(tag): background read", false); win.orderOut(nil); continue }
+            func mask(_ row: Int) -> [Bool] {
+                let top = cell.minY - CGFloat(rows.count - row) * cell.height
+                var out: [Bool] = []
+                for y in stride(from: top, to: top + cell.height, by: 0.5) { for x in stride(from: cell.minX, to: cell.minX + cell.width * 2, by: 0.5) {
+                    guard let c = at(x, y) else { out.append(false); continue }
+                    out.append(abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent) + abs(c.blueComponent - bg.blueComponent) > 0.4)
+                } }
+                return out
+            }
+            let box = mask(rows.count - 1)
+            step("\(tag): the box reference has ink (\(box.filter { $0 }.count))", box.contains(true))
+            for (i, r) in rows.dropLast().enumerated() {
+                let m = mask(i), ink = m.filter { $0 }.count, diff = zip(m, box).filter { $0 != $1 }.count
+                step("\(tag): \(r.0): drawn (ink \(ink)), not the box (\(diff) of \(m.count) samples differ)", ink > 0 && Double(diff) > Double(m.count) * 0.08)
+            }
+            win.orderOut(nil)
+        }
+        print("nerdglyph-test: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
+        NSApp.terminate(nil)
+    }
+
     /// The terminal in Ghostty-theme colours: a synthetic `light:Paper,dark:Ink` theme in a temp HOME (never the user's
     /// config), opaque background, palette, cursor and selection; back to Flockbook's colours; a theme that cannot be
     /// read falls back with a reason; the start error stays readable on the theme. Pictures of light, dark and error.

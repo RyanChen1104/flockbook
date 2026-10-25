@@ -365,6 +365,7 @@ struct TerminalNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PasteTerminalView {
         let tv = PasteTerminalView(frame: .zero)
+        TerminalFont.apply(tv)
         let c = context.coordinator
         c.writable = writable
         c.onClosed = onClosed
@@ -642,6 +643,7 @@ struct HistoryTerminalNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> HistoryTerminalView {
         let tv = HistoryTerminalView(frame: .zero)
+        TerminalFont.apply(tv)
         tv.allowMouseReporting = false
         tv.pending = text
         tv.writable = writable
