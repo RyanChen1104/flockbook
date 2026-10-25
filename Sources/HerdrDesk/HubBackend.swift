@@ -25,7 +25,7 @@ import Foundation
     func conversation(session: String) -> [ConversationItem] { store.conversation(for: session) }
     /// The store does not say if the log has more; the client learns it from `loadEarlier`.
     func hasEarlier(session: String) -> Bool { true }
-    func loadEarlier(session: String) async -> Bool { await store.loadEarlier(for: session) }
+    func loadEarlier(session: String) async -> EarlierLoadResult { await store.loadEarlier(for: session) }
     func screen(pane: String) async -> String? { try? await store.client.visibleText(paneId: pane) }
 
     /// The composer's image folder: `MessageSender` waits for the agent's image marker on paths in it.

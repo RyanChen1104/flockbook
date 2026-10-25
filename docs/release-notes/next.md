@@ -19,3 +19,5 @@ One short line: what this release is about.
 ### ⚙️ Changes
 
 - Overview grouped by status shows every tab: a tab with no agent, such as a shell, is under Done and resting, so the card count matches the tab count in the header.
+
+- Loading earlier messages reports a failed host connection, stops loading, and offers a retry while keeping the conversation visible.

@@ -12,6 +12,7 @@ import Foundation
     var screens: [String: String] = [:]
     /// Older items `loadEarlier` puts in front, once.
     var earlier: [String: [ConversationItem]] = [:]
+    var earlierFails = false
     var sendOK = true
     private(set) var sent: [String] = []
     private(set) var approved: [String] = []
@@ -34,9 +35,10 @@ import Foundation
 
     func conversation(session: String) -> [ConversationItem] { items[session] ?? [] }
     func hasEarlier(session: String) -> Bool { earlier[session] != nil }
-    func loadEarlier(session: String) async -> Bool {
+    func loadEarlier(session: String) async -> EarlierLoadResult {
+        if earlierFails { return .failed }
         if let e = earlier.removeValue(forKey: session) { items[session] = e + (items[session] ?? []) }
-        return false
+        return .end
     }
     /// Called on each screen read (a test can change the world mid-check).
     var onScreen: (() -> Void)?
@@ -224,6 +226,13 @@ import Foundation
         check(types(await s.tick()) == ["screen"], "hub session: screen change -> screen push")
         b.workspaces = ws(.done)
         check(types(await s.tick()) == ["snapshot"], "hub session: status change -> snapshot push")
+        b.earlierFails = true
+        let failedEarlier = await s.receive(msg(#"{"v":1,"type":"loadEarlier","id":"c2-failed","session":"s1","before":"i50"}"#))
+        check(types(failedEarlier) == ["reply"], "hub session: failed earlier fetch sends no empty success page")
+        if case .reply(let reply)? = failedEarlier.first {
+            check(!reply.ok && reply.error?.code == .failed, "hub session: failed earlier fetch reaches the client's retry UI")
+        } else { check(false, "hub session: failed earlier reply") }
+        b.earlierFails = false
         let e = await s.receive(msg(#"{"v":1,"type":"loadEarlier","id":"c2","session":"s1","before":"i50"}"#))
         if case .conversation(let c)? = e.first {
             check(c.mode == .prepend && c.items.first?.id == "i200" && c.items.last?.id == "i49" && c.items.count == 70 && !c.hasEarlier,

@@ -118,7 +118,7 @@ struct OpenLatestView: View {
     let holder: OpenLatestHolder
     var body: some View {
         ConversationView(items: holder.items, agentName: "open", agentStatus: .working, loadState: holder.load, hasLog: true,
-                         onLoadEarlier: { false })
+                         onLoadEarlier: { .end })
             .id(holder.pane)
             // 60 pt, like the toolbar and a pane label in the app: a top bar over 40 pt once hid the end from the follow rule.
             .paneBar(.top) { Text("open · \(holder.pane)").font(.caption).frame(maxWidth: .infinity).frame(height: 60) }

@@ -384,7 +384,7 @@ extension ContentTests {
                         let from = max(0, first - 60)
                         holder.items.insert(contentsOf: pool[from..<first], at: 0); first = from
                     }
-                    return first > 60
+                    return first > 60 ? .more : .end
                 }
                 try? await Task.sleep(for: .milliseconds(600))
                 await scroll(top: false)
@@ -603,7 +603,7 @@ extension ContentTests {
 
             // 8c. Past the oldest row of the log, near the top again: no more reads of the log.
             holder.items = ChurnData.even(120)
-            holder.load = { @MainActor [holder] in holder.reads += 1; return false }
+            holder.load = { @MainActor [holder] in holder.reads += 1; return .end }
             try? await Task.sleep(for: .milliseconds(600))
             for _ in 0..<3 { await intoTop(); try? await Task.sleep(for: .milliseconds(900)) }
             step("autoload-end: after the log said nothing older, no more reads (\(holder.reads), want 1)", holder.reads == 1)
@@ -616,7 +616,7 @@ extension ContentTests {
             try? await Task.sleep(for: .milliseconds(600))
             holder.items = ChurnData.even(30)
             holder.reads = 0
-            holder.load = { @MainActor [holder] in holder.reads += 1; return true }
+            holder.load = { @MainActor [holder] in holder.reads += 1; return .more }
             try? await Task.sleep(for: .milliseconds(600))
             ConversationProbe.pressEarlier?()
             try? await Task.sleep(for: .milliseconds(600))
@@ -638,7 +638,7 @@ extension ContentTests {
     var bottomBar: CGFloat = 64
     var topBar: CGFloat = 28
     /// The view's read of older log rows (nil: rows in memory only).
-    var load: (() async -> Bool)?
+    var load: (() async -> EarlierLoadResult)?
     var reads = 0
     var session: String? = "churn-a"
     /// Counts the reader's sends (the view goes back to the newest rows on each).
@@ -670,7 +670,7 @@ private struct ProbeView: View {
     let holder: ProbeHolder
     var body: some View {
         if holder.shown {
-            ConversationView(items: Array(ChurnData.items(3)), agentName: "probe", loadState: .ready, onLoadEarlier: { false })
+            ConversationView(items: Array(ChurnData.items(3)), agentName: "probe", loadState: .ready, onLoadEarlier: { .end })
                 .id(holder.generation)
         }
     }

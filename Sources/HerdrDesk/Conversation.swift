@@ -27,10 +27,11 @@ struct ConversationView: View {
     var scrollToken = 0
     /// The session the rows come from. Another session in the pane starts over: it may have older rows to read.
     var session: String? = nil
-    /// Reads an older part of the log; true while older content remains. nil hides the button.
-    var onLoadEarlier: (() async -> Bool)? = nil
+    /// Reads an older part of the log, distinguishing the start from a failed read. nil hides the button.
+    var onLoadEarlier: (() async -> EarlierLoadResult)? = nil
     @State private var moreEarlier = true
     @State private var loadingEarlier = false
+    @State private var earlierFailed = false
     /// Counts the sessions the view showed: a read of an older session's log that ends later changes nothing.
     @State private var earlierSession = 0
     @State private var spinnerDue = false
@@ -56,7 +57,7 @@ struct ConversationView: View {
                 list
             }
         }
-        .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false; notice = nil; tracker.adding = false }
+        .onChange(of: session) { _, _ in earlierSession += 1; moreEarlier = true; loadingEarlier = false; earlierFailed = false; notice = nil; tracker.adding = false }
     }
 
     /// Which empty view to show, or nil for the list.
@@ -218,7 +219,7 @@ struct ConversationView: View {
                         Button { showEarlier() } label: {
                             HStack(spacing: 6) {
                                 if loadingEarlier { ProgressView().controlSize(.mini) }
-                                Text(range.lowerBound > 0 ? "Show earlier (\(range.lowerBound))" : "Show earlier")
+                                Text(earlierFailed ? "Try again" : range.lowerBound > 0 ? "Show earlier (\(range.lowerBound))" : "Show earlier")
                             }
                         }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
@@ -228,6 +229,13 @@ struct ConversationView: View {
                         // The action reads the rows it was made with: new rows (a check that swaps them) make it anew.
                         .onChange(of: ConversationProbe.enabled ? ids : []) { ConversationProbe.set(.earlier, probeId) { showEarlier() } }
                         .onDisappear { ConversationProbe.clear(.earlier, probeId) }
+                    }
+                    if earlierFailed {
+                        Text("Could not load earlier messages. Check the connection and try again.")
+                            .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                            .padding(.bottom, 12)
+                            .onAppear { if ConversationProbe.enabled { ConversationProbe.earlierFailed = true } }
+                            .onDisappear { if ConversationProbe.enabled { ConversationProbe.earlierFailed = false } }
                     }
                     let rows = Self.displayRows(items[range], merged: tracker.merged)
                     let lastReply = window.detached ? nil : rows.last { if case .assistantText = $0.kind { true } else { false } }?.id
@@ -326,18 +334,27 @@ struct ConversationView: View {
     /// notice shows over the top of the rows until they are in. `early`: the reader's scroll up asked for them.
     private func showEarlier(page: Int = Self.page, early: Bool = false) {
         let ids = items.map(\.id)
-        guard !tracker.adding else { return }
+        guard !tracker.adding, !(early && earlierFailed) else { return }
         if window.range(ids).lowerBound > 0 { tracker.loadSince = Date(); add(page, notice: showNotice(), early: early); return }
         guard let load = onLoadEarlier, moreEarlier, !loadingEarlier else { return }
         loadingEarlier = true
+        earlierFailed = false
         tracker.loadSince = Date()
         tracker.loadPage = page
         tracker.loadEarly = early
         keepTop(ids, for: 4)
         let token = window.beginLoad(), mine = earlierSession, shown = showNotice()
         Task {
-            let more = await load()
-            if earlierSession == mine { moreEarlier = more; loadingEarlier = false }
+            let result = await load()
+            guard earlierSession == mine else { return }
+            loadingEarlier = false
+            moreEarlier = result != .end
+            earlierFailed = result == .failed
+            if earlierFailed {
+                window.loadEnded(token)
+                hideNotice(shown)
+                return
+            }
             // Nothing came in (the log had nothing older, or a read that failed): the notice goes.
             try? await Task.sleep(for: .milliseconds(300))
             if window.pendingLoad == token, !tracker.adding { hideNotice(shown) }
@@ -725,6 +742,7 @@ private struct EarlierNotice: View {
     static var earlier = CGRect.zero, latest = CGRect.zero
     /// The "Loading earlier" notice while older rows load (window coordinates), else zero.
     static var loading = CGRect.zero
+    static var earlierFailed = false
     /// A check holds the reader's scrolling here (an offscreen window gets no trackpad gestures).
     static var scrolling = false
     /// Anchor moves the fallback made a frame late (the probe missed them): that frame showed the rows out of place.

@@ -124,12 +124,19 @@ import UniformTypeIdentifiers
         let murl = remote.url
         check(murl != nil && murl?.path.hasPrefix(cache.path + "/") == true, "remote log: url is the local mirror")
         if let murl { check(bytes(murl).prefix(1000).allSatisfy { $0 == 0 }, "remote log: only the tail fetched at first") }
+        // A failed host range fetch must not claim that an older page was loaded.
+        // Move only this synthetic host file away; the already mirrored tail stays readable.
+        try fm.moveItem(atPath: path, toPath: path + ".offline")
+        let unavailable = await remote.loadEarlier(bytes: 100_000)
+        check(unavailable == .failed, "remote log: failed earlier fetch is not reported as more content")
+        check(rf.items.get() == r0, "remote log: failed earlier fetch preserves the visible tail")
+        try fm.moveItem(atPath: path + ".offline", toPath: path)
         var r = r0, l = l0
         for (log, feed) in [(remote, rf), (local, lf)] {
             var more = true, n = 0
             while more && n < 100 {
                 let c = feed.items.get().count
-                more = await log.loadEarlier(bytes: 40_000)
+                more = await log.loadEarlier(bytes: 40_000) == .more
                 _ = await feed.wait(timeout: more ? 5 : 1) { $0.count > c }
                 n += 1
             }
