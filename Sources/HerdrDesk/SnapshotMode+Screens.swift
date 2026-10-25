@@ -4,9 +4,45 @@ import SwiftUI
 /// Offscreen check that Overview, Needs you and Search keep their content in the centred screen column
 /// (`--test-screencolumn`, `--light` for the light pictures). Windows 1200 and 1440 wide, and a 2560 full-screen layout.
 extension ContentTests {
+    /// Overview cards: the age of the agent's last log write at the right end of the name's line, none without a log.
+    static func overviewAges(_ step: (String, Bool) -> Void) {
+        for (id, want) in [("b", "24m"), ("c", "now"), ("d", "2h"), ("j1", "1d")] {
+            guard let c = OverviewProbe.cards[id], c.card.width > 0 else { step("overview card \(id): drawn", false); continue }
+            step("overview card \(id): age \(c.ageText ?? "none") (want \(want))", c.ageText == want)
+            step("overview card \(id): age on the name's line (\(Int(c.age.midY)) in \(Int(c.name.minY))..\(Int(c.name.maxY)))",
+                 c.age.midY > c.name.minY && c.age.midY < c.name.maxY)
+            step("overview card \(id): age at the right edge, inside the padding (\(Int(c.age.maxX)) vs card \(Int(c.card.maxX)))",
+                 abs(c.card.maxX - 12 - c.age.maxX) < 0.5 && c.age.minX > c.name.maxX)
+        }
+        let h = OverviewProbe.cards["h1"]
+        step("overview card h1 (no log): no age (\(h?.ageText ?? "none"))", h?.card.width ?? 0 > 0 && h?.ageText == nil)
+    }
+
+    /// Grouped by status, a shell tab (status unknown) is a card under "Done and resting": one card per tab in the header.
+    static func overviewShell(_ step: (String, Bool) -> Void) async {
+        let model = AppModel(store: .previewWithShell)
+        let size = NSSize(width: 1200, height: 800)
+        let host = NSHostingView(rootView: RootView(flat: false).environment(model).frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        let win = OffscreenWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        WindowChrome.apply(win)
+        win.contentView = host; win.setFrameOrigin(NSPoint(x: -4000, y: -3000)); win.orderFrontRegardless()
+        OverviewProbe.cards = [:]
+        model.screen = .overview
+        try? await Task.sleep(for: .seconds(1.2))
+        let tabs = model.store.workspaces.flatMap(\.tabs).count
+        let shell = OverviewProbe.cards["h2"]
+        step("overview shell tab: a card, no age (\(shell.map { "\(Int($0.card.width)) wide, \($0.ageText ?? "none")" } ?? "no card"))",
+             shell?.card.width ?? 0 > 0 && shell?.ageText == nil)
+        step("overview: one card per tab (\(OverviewProbe.cards.count) cards, \(tabs) tabs)", OverviewProbe.cards.count == tabs)
+        capture(win, to: "\(dir)/screen-overview-shell.png")
+        win.orderOut(nil)
+    }
+
     static func screenColumn() async {
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("screencolumn-test: \(n) \(ok ? "ok" : "FAIL")") }
+        await overviewShell(step)
 
         var seen: [String: (CGRect, CGRect)] = [:]
         ScreenColumn.probe = { seen[$0] = ($1, $2) }
@@ -35,6 +71,7 @@ extension ContentTests {
                 step("\(tag) \(name): column \(Int(col.minX))..\(Int(col.maxX)) (\(Int(col.width))) centred in area \(Int(area.minX))..\(Int(area.maxX)) (\(Int(area.width)))",
                      abs(col.midX - area.midX) < 1.5 && col.width <= ScreenColumn.width + 0.5
                      && (room ? col.width > ScreenColumn.width - slack : col.width > area.width - slack))
+                if name == "overview", tag == "1200" { overviewAges(step) }
                 capture(win, to: "\(dir)/screen-\(name)-\(tag).png")
             }
             if full { ChromeTests.emulateFullScreen(win, model, false) }
