@@ -29,9 +29,14 @@ extension ContentTests {
                 for (kind, writers) in [("file", [shot as NSURL] as [NSPasteboardWriting]),
                                         ("screenshot thumbnail", [NSFilePromiseProvider(fileType: "public.png", delegate: NoPromise())])] {
                     let fd = FakeDrag(writers: writers, at: p, in: win)
+                    DropOutlineProbe.outline = .zero
                     let view = fd.enter()
                     step("\(kind) \(place): taken by \(view.map { "\(type(of: $0))" } ?? "none")", view != nil)
+                    try? await Task.sleep(for: .milliseconds(300))
+                    step("\(kind) \(place): the outline is the card's edge (\(DropOutlineProbe.outline) vs \(DropOutlineProbe.card))",
+                         DropOutlineProbe.outline != .zero && DropOutlineProbe.outline.equalTo(DropOutlineProbe.card))
                     view?.draggingExited(fd)
+                    try? await Task.sleep(for: .milliseconds(300))
                 }
             }
             try? FileManager.default.removeItem(at: shot)

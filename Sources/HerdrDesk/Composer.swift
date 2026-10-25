@@ -253,7 +253,6 @@ struct ComposerView: View {
                 .buttonStyle(.plain).disabled(!canSend).help("Send (Return)")
             }
         }
-        .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
         .onChange(of: dropping) { probe?.dropping = dropping }
         .onChange(of: text) {
             onDraft(ComposerDraft(text: text, images: images))
@@ -269,6 +268,14 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .glassCard(radius: Radius.bubble)
+        // The drop outline is the card's own edge (same corners), over everything in it (the chips' labels too).
+        .overlay {
+            if dropping {
+                RoundedRectangle(cornerRadius: Radius.bubble).strokeBorder(Color.accentColor, lineWidth: 2)
+                    .background { GeometryReader { g in Color.clear.onAppear { DropOutlineProbe.outline = g.frame(in: .global) } } }
+            }
+        }
+        .background { GeometryReader { g in Color.clear.onAppear { DropOutlineProbe.card = g.frame(in: .global) }.onChange(of: g.frame(in: .global)) { DropOutlineProbe.card = $1 } } }
         .background { FileDropArea(onFiles: readOnly ? nil : { attachFiles($0) }, onTarget: { dropping = $0 }) }
         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
     }
@@ -309,5 +316,8 @@ struct ComposerView: View {
         images.removeAll { $0 == url }
     }
 }
+
+/// Checks: where the composer's drop outline was drawn, and the card's frame (window coordinates, from SwiftUI).
+@MainActor enum DropOutlineProbe { static var outline = CGRect.zero; static var card = CGRect.zero }
 
 @MainActor final class PlaceholderProbe { var shown = false; var images: [URL] = []; var text = ""; var error: String?; var removeFirst: (() -> Void)?; var drop: (([URL]) -> Void)?; var dropping = false }

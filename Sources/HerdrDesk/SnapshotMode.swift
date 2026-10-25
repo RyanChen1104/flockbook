@@ -1293,6 +1293,13 @@ enum SnapshotRunner {
                 let view = fd.enter()
                 try? await Task.sleep(for: .milliseconds(300))
                 step("drag \(name): the drop outline shows", probe3.dropping)
+                step("drag \(name): the outline is the card's edge (\(DropOutlineProbe.outline) vs \(DropOutlineProbe.card))",
+                     DropOutlineProbe.outline != .zero && DropOutlineProbe.outline.equalTo(DropOutlineProbe.card))
+                if name == "file on the text" {
+                    try? FileManager.default.createDirectory(atPath: ContentTests.dir, withIntermediateDirectories: true)
+                    ContentTests.capture(win, to: "\(ContentTests.dir)/composer-drop-outline\(NSApp.appearance?.name == .aqua ? "-light" : "").png")
+                }
+                DropOutlineProbe.outline = .zero
                 let took = view.map(fd.finish) ?? false
                 try? await Task.sleep(for: .milliseconds(600))
                 step("drag \(name): taken by \(view.map { "\(type(of: $0))" } ?? "none"), outline gone", took && !probe3.dropping)
