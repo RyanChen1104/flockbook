@@ -1262,8 +1262,8 @@ enum SnapshotRunner {
             tv3.insertNewline(nil); try? await Task.sleep(for: .seconds(0.6))
             let pasted = sent.count == 2 ? ImagePaste.plan(sent[1], directory: tmp.path).filter { if case .paste = $0 { true } else { false } }.count : 0
             step("dropped image sends as a pasted path", pasted == 1)
-            // 9. A real drop (AppKit's route, FakeDrag): the screenshot file on the text (NSTextView takes it, not the
-            // composer's drop area) and below it, and a file promise (a screenshot's thumbnail) on the text.
+            // 9. A real drop (AppKit's drag hit test, FakeDrag): the screenshot file on the text and below it, and a file
+            // promise (a screenshot's thumbnail) on the text. The glass card hides its content from that hit test.
             tv3.string = ""; probe3.text = ""
             final class Promise: NSObject, NSFilePromiseProviderDelegate {
                 let src: URL; init(_ s: URL) { src = s }
@@ -1274,12 +1274,12 @@ enum SnapshotRunner {
             }
             let promise = Promise(shot)
             // A promise needs a real drag session: hand over the file as the provider would.
-            let receive = ComposerTextView.SubmitTextView.receive
-            ComposerTextView.SubmitTextView.receive = { _, dir, done in
+            let receive = FileDrop.receive
+            FileDrop.receive = { _, dir, done in
                 let u = dir.appendingPathComponent(shot.lastPathComponent)
                 promise.filePromiseProvider(NSFilePromiseProvider(), writePromiseTo: u) { done($0 == nil ? u : nil) }
             }
-            defer { ComposerTextView.SubmitTextView.receive = receive }
+            defer { FileDrop.receive = receive }
             // Points are read at drop time: a chip row moves the text.
             let onText = { tv3.convert(NSPoint(x: 20, y: tv3.bounds.midY), to: nil) }
             let belowText = { tv3.convert(NSPoint(x: 200, y: tv3.bounds.maxY + 16), to: nil) }

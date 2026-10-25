@@ -30,8 +30,8 @@ struct ComposerTextView: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.pasteboard = pasteboard
         tv.onPasteImages = { [weak c = context.coordinator] in c?.parent.onPasteImages($0) }
-        tv.onDropFiles = { [weak c = context.coordinator] in c?.parent.onDropFiles($0) }
-        tv.onDropTarget = { [weak c = context.coordinator] in c?.parent.onDropTarget($0) }
+        tv.drop.onFiles = { [weak c = context.coordinator] in c?.parent.onDropFiles($0) }
+        tv.drop.onTarget = { [weak c = context.coordinator] in c?.parent.onDropTarget($0) }
         tv.onMarkedChange = { [weak c = context.coordinator] in c?.markedChanged() }
         tv.isRichText = false
         tv.allowsUndo = true
@@ -62,12 +62,7 @@ struct ComposerTextView: NSViewRepresentable {
         var onMarkedChange: (() -> Void)?
         var pasteboard: NSPasteboard = .general
         var onPasteImages: (([URL]) -> Void)?
-        var onDropFiles: (([URL]) -> Void)?
-        var onDropTarget: ((Bool) -> Void)?
-        /// Receives one promised file into a folder (the checks replace it: a promise needs a real drag session).
-        static var receive: (NSFilePromiseReceiver, URL, @escaping (URL?) -> Void) -> Void = { p, dir, done in
-            p.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: .main) { url, error in done(error == nil ? url : nil) }
-        }
+        let drop = FileDrop()
         /// A screenshot on the clipboard holds only image types, which a plain-text view does not read, so the
         /// system would grey out Edit > Paste (and ⌘V) and never call `paste`. Enable it for images.
         override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
@@ -80,51 +75,14 @@ struct ComposerTextView: NSViewRepresentable {
             // Injected pasteboard (tests): NSTextView would read the system one.
             if let t = pasteboard.string(forType: .string) { insertText(t, replacementRange: selectedRange()) }
         }
-        // Files dropped on the text come here, not to the composer's drop area: a plain-text view would insert the
-        // raw path, and take a file promise (a screenshot's thumbnail) but insert nothing. Files and image promises go
-        // to `onDropFiles`; anything else (text) keeps NSTextView's own drop.
-        private static let fileOpts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        private func files(_ info: NSDraggingInfo) -> [URL] {
-            info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: Self.fileOpts) as? [URL] ?? []
-        }
-        private func imagePromises(_ info: NSDraggingInfo) -> [NSFilePromiseReceiver] {
-            let all = info.draggingPasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver] ?? []
-            return all.filter { r in r.fileTypes.contains { UTType($0)?.conforms(to: .image) == true } }
-        }
-        private func takesDrop(_ info: NSDraggingInfo) -> Bool { onDropFiles != nil && (!files(info).isEmpty || !imagePromises(info).isEmpty) }
-        override func draggingEntered(_ info: NSDraggingInfo) -> NSDragOperation {
-            guard takesDrop(info) else { return super.draggingEntered(info) }
-            onDropTarget?(true)
-            return .copy
-        }
-        override func draggingUpdated(_ info: NSDraggingInfo) -> NSDragOperation { takesDrop(info) ? .copy : super.draggingUpdated(info) }
-        override func draggingExited(_ info: NSDraggingInfo?) { onDropTarget?(false); super.draggingExited(info) }
-        override func concludeDragOperation(_ info: NSDraggingInfo?) { onDropTarget?(false); super.concludeDragOperation(info) }
-        override func performDragOperation(_ info: NSDraggingInfo) -> Bool {
-            guard let onDropFiles, takesDrop(info) else { return super.performDragOperation(info) }
-            onDropTarget?(false)
-            let urls = files(info)
-            if !urls.isEmpty { onDropFiles(urls); return true }
-            // Promised files land in a temporary folder; the composer copies the images into its own folder.
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fb-drop-\(UUID().uuidString)", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let promises = imagePromises(info)
-            let group = DispatchGroup()
-            var got: [URL] = []
-            let lock = NSLock()
-            for p in promises {
-                group.enter()
-                Self.receive(p, dir) { url in
-                    if let url { lock.lock(); got.append(url); lock.unlock() }
-                    group.leave()
-                }
-            }
-            group.notify(queue: .main) {
-                onDropFiles(got)
-                try? FileManager.default.removeItem(at: dir)
-            }
-            return true
-        }
+        // When a drag reaches the text (a composer without a glass card; see `FileDropArea`): files and image promises
+        // go to the composer as on its drop area. A plain-text view would insert the raw path, and take a file promise
+        // (a screenshot's thumbnail) but insert nothing. Anything else (text) keeps NSTextView's own drop.
+        override func draggingEntered(_ info: NSDraggingInfo) -> NSDragOperation { drop.over(info) ?? super.draggingEntered(info) }
+        override func draggingUpdated(_ info: NSDraggingInfo) -> NSDragOperation { drop.over(info) ?? super.draggingUpdated(info) }
+        override func draggingExited(_ info: NSDraggingInfo?) { drop.left(); super.draggingExited(info) }
+        override func concludeDragOperation(_ info: NSDraggingInfo?) { drop.left(); super.concludeDragOperation(info) }
+        override func performDragOperation(_ info: NSDraggingInfo) -> Bool { drop.perform(info) ?? super.performDragOperation(info) }
         override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
             super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
             onMarkedChange?()
@@ -296,11 +254,6 @@ struct ComposerView: View {
             }
         }
         .overlay { if dropping { RoundedRectangle(cornerRadius: Radius.bubble).stroke(Color.accentColor, lineWidth: 2) } }
-        .dropDestination(for: URL.self) { urls, _ in
-            guard !readOnly else { return false }
-            attachFiles(urls)
-            return true
-        } isTargeted: { dropping = $0 }
         .onChange(of: dropping) { probe?.dropping = dropping }
         .onChange(of: text) {
             onDraft(ComposerDraft(text: text, images: images))
@@ -316,6 +269,7 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .glassCard(radius: Radius.bubble)
+        .background { FileDropArea(onFiles: readOnly ? nil : { attachFiles($0) }, onTarget: { dropping = $0 }) }
         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
     }
 

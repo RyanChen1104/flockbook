@@ -1,7 +1,7 @@
 import AppKit
 
-/// A drag for the checks: AppKit's route without a mouse. The window's deepest view under `point` that registered
-/// for one of the pasteboard's types gets entered, prepare and perform, as a real drop does.
+/// A drag for the checks: AppKit's route without a mouse. The view AppKit's drag hit test finds under `point` for the
+/// pasteboard's types gets entered, prepare and perform, as a real drop does.
 @MainActor final class FakeDrag: NSObject, @MainActor NSDraggingInfo {
     let pb: NSPasteboard, point: NSPoint, window: NSWindow
     convenience init(urls: [URL], at point: NSPoint, in window: NSWindow) { self.init(writers: urls as [NSURL], at: point, in: window) }
@@ -33,23 +33,16 @@ import AppKit
     var springLoadingHighlight: NSSpringLoadingHighlight { .none }
     func resetSpringLoading() {}
 
-    /// The view that takes the drop: the frontmost view under the point registered for a type on the pasteboard
-    /// (`public.item`, SwiftUI's drop view, takes any). SwiftUI puts its drop view beside the content, not above it
-    /// in the hit-test chain, so every view is looked at, later siblings and subviews in front.
+    /// The view that takes the drop, found as AppKit finds it: its own drag hit test from the window's frame view
+    /// (`-[NSView _hitTest:dragTypes:]`, private, checks only). It goes down only through views whose frame holds the
+    /// point, so a view SwiftUI leaves at zero size (the glass card's content) hides everything in it, as in a real drag.
     func target() -> NSView? {
-        let types = Set(pb.types ?? [])
-        func takes(_ view: NSView) -> Bool {
-            let r = Set(view.registeredDraggedTypes)
-            return !r.isDisjoint(with: types) || r.contains(NSPasteboard.PasteboardType("public.item"))
-        }
-        var front: NSView?
-        func walk(_ v: NSView) {
-            guard !v.isHidden else { return }
-            if takes(v), v.convert(v.bounds, to: nil).contains(point) { front = v }
-            v.subviews.forEach(walk)
-        }
-        if let root = window.contentView?.superview ?? window.contentView { walk(root) }
-        return front
+        typealias HitTest = @convention(c) (NSView, Selector, UnsafePointer<NSPoint>, NSSet) -> NSView?
+        let sel = NSSelectorFromString("_hitTest:dragTypes:")
+        guard let root = window.contentView?.superview ?? window.contentView,
+              let m = class_getInstanceMethod(NSView.self, sel) else { print("FakeDrag: no AppKit drag hit test"); return nil }
+        var p = point
+        return unsafeBitCast(method_getImplementation(m), to: HitTest.self)(root, sel, &p, NSSet(array: (pb.types ?? []).map(\.rawValue)))
     }
     /// Entered on `target()`: the view that took it, nil when none did.
     func enter() -> NSView? {
