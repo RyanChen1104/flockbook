@@ -11,7 +11,8 @@ import Foundation
     check(SessionResolver.hostSetup(kind: "codex", sessionId: nil, remote: h) == "herdr integration install codex", "remote host: codex the same")
     check(SessionResolver.hostSetup(kind: "claude", sessionId: "s1", remote: h) == nil, "remote host: a session id needs nothing")
     check(SessionResolver.hostSetup(kind: "claude", sessionId: nil, remote: nil) == nil, "remote host: this Mac finds the log itself")
-    check(SessionResolver.hostSetup(kind: "grok", sessionId: nil, remote: h) == nil, "remote host: no herdr integration for grok, no command")
+    check(SessionResolver.hostSetup(kind: "grok", sessionId: nil, remote: h) == "herdr integration install grok", "remote host: grok the same (herdr's grok hook reports the session)")
+    check(SessionResolver.hostSetup(kind: "pi", sessionId: nil, remote: h) == nil, "remote host: an agent the app reads no log for gets no command")
     for bad in ["", "-oProxyCommand=touch /tmp/x", "-p", "host name", "a;b", "a$(b)", "a`b`", "a\nb", "a/b", "a'b", "a\"b", "ä@host"] {
         check(RemoteHost.destinationProblem(bad) != nil, "remote host: destination \(bad.debugDescription) refused")
         check((try? RemoteHost.ssh(bad)) == nil, "remote host: ssh(\(bad.debugDescription)) throws")

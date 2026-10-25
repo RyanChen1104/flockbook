@@ -202,7 +202,7 @@ public actor SessionResolver {
 
 
     /// Agent kinds whose session id herdr reports through its own integration (`herdr integration install <kind>`).
-    public static let herdrIntegrations: Set<String> = ["claude", "codex"]
+    public static let herdrIntegrations: Set<String> = ["claude", "codex", "grok"]
 
     /// On a host nothing guesses a session from its files (`resolve` returns none), so an agent herdr reports with no
     /// session id has no conversation until herdr's integration is installed there. The command to run on the host, or nil.
