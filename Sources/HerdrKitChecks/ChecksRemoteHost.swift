@@ -5,6 +5,13 @@ import Foundation
 // with /bin/sh on this Mac, so these need no second machine.
 @MainActor func checksRemoteHost() async throws {
     // Destinations ssh could read as an option, or that carry shell characters, are refused.
+    // A host agent without a session id: the conversation says to install herdr's integration there.
+    let h = try RemoteHost.ssh("user@host")
+    check(SessionResolver.hostSetup(kind: "claude", sessionId: nil, remote: h) == "herdr integration install claude", "remote host: claude without a session id needs herdr's integration")
+    check(SessionResolver.hostSetup(kind: "codex", sessionId: nil, remote: h) == "herdr integration install codex", "remote host: codex the same")
+    check(SessionResolver.hostSetup(kind: "claude", sessionId: "s1", remote: h) == nil, "remote host: a session id needs nothing")
+    check(SessionResolver.hostSetup(kind: "claude", sessionId: nil, remote: nil) == nil, "remote host: this Mac finds the log itself")
+    check(SessionResolver.hostSetup(kind: "grok", sessionId: nil, remote: h) == nil, "remote host: no herdr integration for grok, no command")
     for bad in ["", "-oProxyCommand=touch /tmp/x", "-p", "host name", "a;b", "a$(b)", "a`b`", "a\nb", "a/b", "a'b", "a\"b", "ä@host"] {
         check(RemoteHost.destinationProblem(bad) != nil, "remote host: destination \(bad.debugDescription) refused")
         check((try? RemoteHost.ssh(bad)) == nil, "remote host: ssh(\(bad.debugDescription)) throws")

@@ -482,6 +482,11 @@ import SwiftUI
         step("missing + no status: same", copy(.missing, nil).fresh && copy(.missing, nil).title == "No messages yet")
         step("missing + working/blocked/done: No conversation log + Show Terminal",
              [AgentStatus.working, .blocked, .done].allSatisfy { copy(.missing, $0).terminal && copy(.missing, $0).title == "No conversation log" })
+        let host = ConversationView.emptyCopy(.missing, status: .idle, agentName: "claude", hostSetup: "herdr integration install claude")
+        step("host agent without a session id: the host command + Show Terminal, whatever the status",
+             host.terminal && host.title == "Conversation not available" && host.detail.contains("\"herdr integration install claude\" on the host")
+             && ConversationView.emptyCopy(.missing, status: .done, agentName: "claude", hostSetup: "x").title == host.title)
+        step("host command only when the log is missing", ConversationView.emptyCopy(.ready, status: .idle, agentName: "claude", hostSetup: "x").title == "No messages yet")
         step("ready: always No messages yet; idle hint, working 'is starting', done 'has not written'",
              [AgentStatus.idle, .working, .blocked, .done].allSatisfy { copy(.ready, $0).title == "No messages yet" && !copy(.ready, $0).terminal }
              && copy(.ready, .idle).detail == first && copy(.ready, .working).detail.contains("is starting") && copy(.ready, .done).detail.contains("has not written"))

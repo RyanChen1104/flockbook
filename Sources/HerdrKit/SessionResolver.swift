@@ -201,6 +201,16 @@ public actor SessionResolver {
     }
 
 
+    /// Agent kinds whose session id herdr reports through its own integration (`herdr integration install <kind>`).
+    public static let herdrIntegrations: Set<String> = ["claude", "codex"]
+
+    /// On a host nothing guesses a session from its files (`resolve` returns none), so an agent herdr reports with no
+    /// session id has no conversation until herdr's integration is installed there. The command to run on the host, or nil.
+    public static func hostSetup(kind: String, sessionId: String?, remote: RemoteHost?) -> String? {
+        guard remote != nil, sessionId == nil, herdrIntegrations.contains(kind) else { return nil }
+        return "herdr integration install \(kind)"
+    }
+
     /// Log paths for the given panes (paneId → absolute `.jsonl` path). `claimed`: session ids or paths that other
     /// panes already use; they are never handed out again.
     public func resolve(_ needs: [Need], claimed: Set<String>) -> [String: String] {

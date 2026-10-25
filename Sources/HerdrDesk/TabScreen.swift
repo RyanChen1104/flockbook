@@ -102,6 +102,7 @@ struct PaneView: View {
                                  onFresh: { if focused { focusRequest += 1 } },
                                  loadState: model.store.conversationState(for: agent.sessionId),
                                  team: agent.team,
+                                 hostSetup: SessionResolver.hostSetup(kind: agent.kind, sessionId: agent.sessionId, remote: model.store.session.remote),
                                  scrollToken: model.sendTokens[pane.id] ?? 0,
                                  session: agent.sessionId,
                                  onLoadEarlier: { await model.store.loadEarlier(paneId: pane.id) })

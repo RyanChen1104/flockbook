@@ -20,6 +20,8 @@ struct ConversationView: View {
     var hasLog = false
     /// An agent team took the pane's log (`Agent.team`): no lead log yet reads "Waiting for the lead's log".
     var team: TeamNote? = nil
+    /// The command that makes a host agent's conversation readable (`SessionResolver.hostSetup`); nil when none is needed.
+    var hostSetup: String? = nil
     /// Changes when the user sends a message: back to the bottom whatever the position, following from there
     /// (the log shows the sent message a moment later).
     var scrollToken = 0
@@ -67,9 +69,13 @@ struct ConversationView: View {
     /// Words for an empty conversation. A new agent has no session log until its first message: that is not an error, so it
     /// reads "No messages yet" with what to do. "No conversation log" + Show Terminal only when the agent has worked
     /// (working, blocked, done) and its log still cannot be found. An agent team with no lead log known waits for it.
-    static func emptyCopy(_ state: ConversationLoadState, status: AgentStatus?, agentName: String, team: TeamNote? = nil) -> EmptyCopy {
+    static func emptyCopy(_ state: ConversationLoadState, status: AgentStatus?, agentName: String, team: TeamNote? = nil,
+                          hostSetup: String? = nil) -> EmptyCopy {
         let first = "Send your first message to see the session conversation."
         if team == .waitingForLead { return EmptyCopy(title: TeamNote.waitingTitle, detail: TeamNote.waitingDetail, terminal: true) }
+        if let hostSetup, state == .missing {
+            return EmptyCopy(title: "Conversation not available", detail: "herdr on the host does not say which session \(agentName) uses. Run \"\(hostSetup)\" on the host, then restart \(agentName).", terminal: true)
+        }
         switch (state, status) {
         case (.missing, .idle?), (.missing, nil):
             return EmptyCopy(title: "No messages yet", detail: first, fresh: true)
@@ -97,12 +103,12 @@ struct ConversationView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task { try? await Task.sleep(for: .milliseconds(500)); spinnerDue = true }
         case .ready, .missing:
-            let copy = Self.emptyCopy(state, status: agentStatus, agentName: agentName, team: team)
+            let copy = Self.emptyCopy(state, status: agentStatus, agentName: agentName, team: team, hostSetup: hostSetup)
             if copy.terminal {
                 ContentUnavailableView {
                     Label(copy.title, systemImage: "doc.text.magnifyingglass")
                 } description: {
-                    Text(copy.detail)
+                    Text(copy.detail).textSelection(.enabled)   // the host command can be copied
                 } actions: {
                     Button("Show Terminal", action: onOpenTerminal)
                 }
