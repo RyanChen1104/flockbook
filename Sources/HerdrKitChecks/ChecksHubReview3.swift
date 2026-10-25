@@ -135,6 +135,13 @@ import Foundation
         let codexNew = "› old one [Image #1]\n• Pesto\n› look [Image #1] [Image #2]\n  model · 94% left"
         check(ImagePaste.inputMarkers(codexNew, kind: "codex") == 2, "r3 marker: codex the same, after its last › line")
         check(ImagePaste.inputMarkers("FAKE\n[Image #1]\n", kind: "claude") == 1, "r3 marker: no prompt line -> the whole screen")
+        // A long input wraps: the marker can break at its space or inside a word ("[Image" / "  #2]", seen live).
+        let wrapped = "❯ old [Image #1]\n⏺ ok\n────\n❯ What single colour fills this picture? Reply with exactly: colour [Image\n  #2]\n────\n  status"
+        let wrappedWord = "────\n❯ look at [Ima\n  ge #1] and [Image #2]\n────"
+        let grokWrapped = "  ╭────────╮\n  │ ❯ a long line then [Image │\n  │   #2] here            │\n  ╰────────╯"
+        check(ImagePaste.inputMarkers(wrapped, kind: "claude") == 1 && ImagePaste.inputMarkers(wrappedWord, kind: "claude") == 2
+              && ImagePaste.inputMarkers(grokWrapped, kind: "grok") == 1,
+              "r3 marker: a marker broken by the input's wrap still counts (\(ImagePaste.inputMarkers(wrapped, kind: "claude")), \(ImagePaste.inputMarkers(wrappedWord, kind: "claude")), \(ImagePaste.inputMarkers(grokWrapped, kind: "grok")))")
     }
 
     // (4) Disk: per device held and connection caps, output bytes counted, the cache folder capped and aged.

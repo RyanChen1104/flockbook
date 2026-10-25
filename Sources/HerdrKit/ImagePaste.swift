@@ -72,7 +72,8 @@ public enum ImagePaste {
     public static func waitsForMarker(kind: String) -> Bool { kind == "claude" || kind == "codex" || kind == "grok" }
 
     /// `[Image #` markers in the agent's input: after its last prompt line (Claude `❯`, Codex `›`, Grok `│ ❯` in its
-    /// input box), or the whole screen without one. Markers in the history above do not count.
+    /// input box), or the whole screen without one. Markers in the history above do not count. A long input wraps and
+    /// can break a marker ("[Image" / "  #2]"): the lines are joined without their indent and box edges first.
     public static func inputMarkers(_ screen: String, kind: String) -> Int {
         let glyph: Character = kind == "codex" ? "›" : "❯"
         let lines = screen.split(separator: "\n", omittingEmptySubsequences: false)
@@ -81,7 +82,13 @@ public enum ImagePaste {
             guard kind == "grok" else { return t.first == glyph }
             return t.first == "│" && t.dropFirst().drop { $0 == " " }.first == glyph
         } ?? lines.startIndex
-        return lines[start...].joined(separator: "\n").components(separatedBy: "[Image #").count - 1
+        let edge: (Character) -> Bool = { $0 == " " || $0 == "│" }
+        let input = lines[start...].map { l in
+            var t = Substring(l).drop(while: edge)
+            while let c = t.last, edge(c) { t = t.dropLast() }
+            return t
+        }.joined()
+        return input.components(separatedBy: "[Image").dropFirst().filter { $0.drop { $0 == " " }.first == "#" }.count
     }
 
     /// One path as a bracketed paste.

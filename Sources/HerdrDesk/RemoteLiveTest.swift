@@ -3,7 +3,7 @@ import Foundation
 import AppKit
 
 /// `--remote <host> --session <named> --test-remote-live <paneId>`: a real Claude Code on a test host, through the app's
-/// own paths: a message from the composer's send, the question hook (install, a question, an answer) and the status
+/// own paths: a message from the composer's send, an attached picture, the question hook (install, a question, an answer) and the status
 /// line (on, a line read back, off). The hook is put back as it was; the status line always ends off. Refuses this Mac
 /// and the default session.
 @MainActor
@@ -38,6 +38,29 @@ enum RemoteLiveTest {
         let sent = await model.deliver("Reply with exactly: \(token)", pane: paneId, kind: first.kind)
         step("send: submitted", sent)
         step("send: the answer comes back from the host's log", await wait(90, { said(token) }))
+
+        // 1b. An attached picture (a chip, as the composer's attach or drop makes it): the send copies it to the host and
+        // pastes the host path, and Claude Code on the host reads it.
+        let png = FileManager.default.temporaryDirectory.appendingPathComponent("remote-live-\(token).png")
+        let red = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { r in NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1).setFill(); r.fill(); return true }
+        try? red.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }?.write(to: png)
+        let chips = PasteImages.take([png]).images
+        try? FileManager.default.removeItem(at: png)
+        step("picture: a chip from the attached file", chips.count == 1)
+        if let chip = chips.first {
+            _ = await idle()
+            let message = "What single colour fills this picture? Reply with exactly: colour-<the colour in lower case>-\(token) \(ComposerHandle.quoted(chip))"
+            let started = Date()
+            let ok = await model.deliver(message, pane: paneId, kind: first.kind)
+            step("picture: submitted (\(String(format: "%.1f", Date().timeIntervalSince(started))) s)", ok)
+            if !ok {
+                print("remote-live: why \(MessageSender.takeFailure(message) ?? "-")")
+                let screen = (try? await store.client.visibleText(paneId: paneId)) ?? "(unreadable)"
+                print("remote-live: screen tail \(screen.split(separator: "\n").suffix(8).map(String.init))")
+            }
+            step("picture: Claude Code on the host saw a red picture", await wait(120, { said("colour-red-\(token)") }))
+            PasteImages.remove(chip)
+        }
 
         // 2. The question hook on the host: install, a question shows, an answer reaches Claude Code.
         let hook = ClaudeHookSetup.live
