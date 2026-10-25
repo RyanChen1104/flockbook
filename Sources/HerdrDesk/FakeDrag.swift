@@ -36,13 +36,19 @@ import AppKit
     /// The view that takes the drop, found as AppKit finds it: its own drag hit test from the window's frame view
     /// (`-[NSView _hitTest:dragTypes:]`, private, checks only). It goes down only through views whose frame holds the
     /// point, so a view SwiftUI leaves at zero size (the glass card's content) hides everything in it, as in a real drag.
+    /// Debug builds only (the checks run those): a release binary holds no private selector, and finds no target.
     func target() -> NSView? {
+        #if DEBUG
         typealias HitTest = @convention(c) (NSView, Selector, UnsafePointer<NSPoint>, NSSet) -> NSView?
         let sel = NSSelectorFromString("_hitTest:dragTypes:")
         guard let root = window.contentView?.superview ?? window.contentView,
               let m = class_getInstanceMethod(NSView.self, sel) else { print("FakeDrag: no AppKit drag hit test"); return nil }
         var p = point
         return unsafeBitCast(method_getImplementation(m), to: HitTest.self)(root, sel, &p, NSSet(array: (pb.types ?? []).map(\.rawValue)))
+        #else
+        print("FakeDrag: a debug build only")
+        return nil
+        #endif
     }
     /// Entered on `target()`: the view that took it, nil when none did.
     func enter() -> NSView? {
