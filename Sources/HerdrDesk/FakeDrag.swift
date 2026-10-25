@@ -33,22 +33,33 @@ import AppKit
     var springLoadingHighlight: NSSpringLoadingHighlight { .none }
     func resetSpringLoading() {}
 
-    /// The view that takes the drop, found as AppKit finds it: its own drag hit test from the window's frame view
-    /// (`-[NSView _hitTest:dragTypes:]`, private, checks only). It goes down only through views whose frame holds the
-    /// point, so a view SwiftUI leaves at zero size (the glass card's content) hides everything in it, as in a real drag.
-    /// Debug builds only (the checks run those): a release binary holds no private selector, and finds no target.
+    /// The view that takes the drop, found by AppKit's rule for a drag: from the window's frame view, down only into
+    /// views whose frame holds the point (front subviews first), the deepest one registered for a type on the
+    /// pasteboard. A view SwiftUI leaves at zero size (a glass card's content) hides everything in it, as in a real drag.
+    /// Public API, so release builds (the macOS 15 checks run the app bundle) check it too; debug builds also ask
+    /// AppKit's own drag hit test and print a FAIL when the two differ.
     func target() -> NSView? {
+        guard let root = window.contentView?.superview ?? window.contentView else { return nil }
+        let types = Set(pb.types ?? [])
+        func find(_ v: NSView, _ p: NSPoint) -> NSView? {
+            guard !v.isHidden, v.frame.contains(p) else { return nil }
+            let q = v.convert(p, from: v.superview)
+            for sub in v.subviews.reversed() { if let t = find(sub, q) { return t } }
+            return Set(v.registeredDraggedTypes).isDisjoint(with: types) ? nil : v
+        }
+        let found = find(root, point)
         #if DEBUG
         typealias HitTest = @convention(c) (NSView, Selector, UnsafePointer<NSPoint>, NSSet) -> NSView?
         let sel = NSSelectorFromString("_hitTest:dragTypes:")
-        guard let root = window.contentView?.superview ?? window.contentView,
-              let m = class_getInstanceMethod(NSView.self, sel) else { print("FakeDrag: no AppKit drag hit test"); return nil }
-        var p = point
-        return unsafeBitCast(method_getImplementation(m), to: HitTest.self)(root, sel, &p, NSSet(array: (pb.types ?? []).map(\.rawValue)))
-        #else
-        print("FakeDrag: a debug build only")
-        return nil
+        if let m = class_getInstanceMethod(NSView.self, sel) {
+            var p = point
+            let appkit = unsafeBitCast(method_getImplementation(m), to: HitTest.self)(root, sel, &p, NSSet(array: types.map(\.rawValue)))
+            if appkit !== found {
+                print("FakeDrag: AppKit's drag hit test finds \(appkit.map { "\(type(of: $0))" } ?? "none"), FakeDrag \(found.map { "\(type(of: $0))" } ?? "none") FAIL")
+            }
+        }
         #endif
+        return found
     }
     /// Entered on `target()`: the view that took it, nil when none did.
     func enter() -> NSView? {
