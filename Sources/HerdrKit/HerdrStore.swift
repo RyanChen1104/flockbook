@@ -298,16 +298,16 @@ public final class HerdrStore {
         return logItems[sessionId]?.queued ?? []
     }
 
-    /// Loads an older segment of that session's log. True while older content remains. `conversation(for:)` grows within one poll.
+    /// Loads an older segment, distinguishing the start of the log from a failed read. `conversation(for:)` grows within one poll.
     @discardableResult
-    public func loadEarlier(for sessionId: String?, bytes: Int = 2_000_000) async -> Bool {
-        guard !isPreview, let sessionId, let log = logs[sessionId] else { return false }
+    public func loadEarlier(for sessionId: String?, bytes: Int = 2_000_000) async -> EarlierLoadResult {
+        guard !isPreview, let sessionId, let log = logs[sessionId] else { return .end }
         return await log.loadEarlier(bytes: bytes)
     }
 
-    /// Same as `loadEarlier(for:)`, addressed by pane. False when the pane is unknown or has no agent session.
+    /// Same as `loadEarlier(for:)`, addressed by pane. End when the pane is unknown or has no agent session.
     @discardableResult
-    public func loadEarlier(paneId: String, bytes: Int = 2_000_000) async -> Bool {
+    public func loadEarlier(paneId: String, bytes: Int = 2_000_000) async -> EarlierLoadResult {
         await loadEarlier(for: Self.sessionId(forPane: paneId, in: workspaces), bytes: bytes)
     }
 

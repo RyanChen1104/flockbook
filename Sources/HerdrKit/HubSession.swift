@@ -17,8 +17,8 @@ import CryptoKit
     func conversation(session: String) -> [ConversationItem]
     /// The log may hold items older than `conversation(session:)` has.
     func hasEarlier(session: String) -> Bool
-    /// Loads older items into `conversation(session:)`. True while still older content remains.
-    func loadEarlier(session: String) async -> Bool
+    /// Loads older items, distinguishing the log start from a failed read.
+    func loadEarlier(session: String) async -> EarlierLoadResult
     /// The pane's visible screen text (read-only).
     func screen(pane: String) async -> String?
     /// Where re-encoded images from remote devices go (the composer's image folder). Nil: images are refused.
@@ -631,7 +631,9 @@ extension Hub {
         guard var idx = items.firstIndex(where: { $0.id == before }) else { return [fail(re, .notFound, "No item \(before).")] }
         var more = backend.hasEarlier(session: session)
         if idx < Self.window, more || idx == 0 {
-            more = await backend.loadEarlier(session: session)
+            let result = await backend.loadEarlier(session: session)
+            guard result != .failed else { return [fail(re, .failed, "Could not load earlier messages. Check the host connection and try again.")] }
+            more = result == .more
             items = backend.conversation(session: session)
             idx = items.firstIndex { $0.id == before } ?? idx
         }

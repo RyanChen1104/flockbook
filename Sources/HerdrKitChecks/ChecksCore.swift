@@ -19,7 +19,7 @@ import Foundation
     check(HerdrStore.sessionId(forPane: "nope", in: ws) == nil && HerdrStore.sessionId(forPane: ws[0].tabs[1].panes[0].id, in: ws) == nil, "sessionId(forPane:) nil for unknown pane and shell pane")
     let idleStore = await HerdrStore(session: .named("hk-none"))
     let noPane = await idleStore.loadEarlier(paneId: "nope")
-    check(!noPane, "loadEarlier(paneId:) false for unknown pane")
+    check(noPane == .end, "loadEarlier(paneId:) false for unknown pane")
 }
 
 // Session
@@ -147,18 +147,18 @@ import Foundation
         let first = await it.next()!.items
         let ids0 = first.map(\.id)
         check(first.count > 2 && first.count < 150, "loadEarlier: initial tail is partial (\(first.count) items)")
-        var more = await log.loadEarlier(bytes: 3000)
+        var more = await log.loadEarlier(bytes: 3000) == .more
         var cur = await it.next()!.items
         check(more && cur.count > first.count, "loadEarlier: older items arrive, more remain")
         check(Array(cur.suffix(ids0.count)).map(\.id) == ids0 && Set(cur.map(\.id)).count == cur.count, "loadEarlier: ids stable and unique")
         var guardN = 0
-        while more && guardN < 50 { more = await log.loadEarlier(bytes: 3000); guardN += 1 }
+        while more && guardN < 50 { more = await log.loadEarlier(bytes: 3000) == .more; guardN += 1 }
         var drain = 0
         repeat { cur = await it.next()!.items; drain += 1 } while cur.count < 200 && drain < 60
         check(!more && cur.count == 200 && cur.first.map({ if case .userText(let t) = $0.kind { return t.hasPrefix("question 0 ") } else { return false } }) == true, "loadEarlier: reaches file start \(cur.count)")
         check(chipCalls(cur).count == 100 && chipCalls(cur).allSatisfy { $0.output != nil }, "loadEarlier: results matched across segments")
         let again = await log.loadEarlier()
-        check(!again, "loadEarlier: false when nothing older")
+        check(again == .end, "loadEarlier: false when nothing older")
         try? FileManager.default.removeItem(atPath: root)
     }
 }

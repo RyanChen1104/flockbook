@@ -1,5 +1,12 @@
 import Foundation
 
+/// Result of reading an older log range. A failure preserves the current range and can be retried.
+public enum EarlierLoadResult: Sendable, Equatable {
+    case more
+    case end
+    case failed
+}
+
 /// Finds and tails an agent's JSONL session log (Claude Code, Codex, pi, …).
 public final class SessionLog: Sendable {
     public let sessionId: String
@@ -56,26 +63,28 @@ public final class SessionLog: Sendable {
     /// Loads up to `bytes` more from before the current start, aligned to whole lines, and puts the parsed items
     /// in front of the stream (the next `items`/`snapshots` emission, within one poll). Tool results that sit in a
     /// later segment still match their calls, because the whole loaded range is parsed again together.
-    /// Returns true while older content remains. Returns false before the first load or when nothing is left.
+    /// Distinguishes more content, the beginning of the log, and a failed read (including a disconnected host).
     @discardableResult
-    public func loadEarlier(bytes: Int = 2_000_000) async -> Bool {
+    public func loadEarlier(bytes: Int = 2_000_000) async -> EarlierLoadResult {
         let (url, start, mirror): (URL?, UInt64, RemoteLogMirror?) = state.lock.withLock { (state.loaded ? state.url : nil, state.start, state.mirror) }
-        guard let url, start > 0, let fh = try? FileHandle(forReadingFrom: url) else { return false }
+        guard let url, start > 0 else { return .end }
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return .failed }
         defer { try? fh.close() }
         var span = UInt64(max(bytes, 1))
         while true {
             let from = start > span ? start - span : 0
-            // a mirrored log: fetch the range from the host first (true: older content is still there)
-            if let mirror, !(await mirror.ensure(from: from > 0 ? from - 1 : 0, to: start)) { return true }
+            // Fetch before reading the sparse mirror: a failed host read cannot advance the loaded range.
+            if let mirror, !(await mirror.ensure(from: from > 0 ? from - 1 : 0, to: start)) { return .failed }
             // one byte before `from` tells whether `from` is already a line start
-            try? fh.seek(toOffset: from > 0 ? from - 1 : 0)
-            guard var data = try? fh.read(upToCount: Int(start - from) + (from > 0 ? 1 : 0)) else { return false }
+            do { try fh.seek(toOffset: from > 0 ? from - 1 : 0) } catch { return .failed }
+            let count = Int(start - from) + (from > 0 ? 1 : 0)
+            guard var data = try? fh.read(upToCount: count), data.count == count else { return .failed }
             var newStart = from
             if from > 0 {
                 let prev = data.removeFirst()
                 if prev != 0x0A {
                     guard let nl = data.firstIndex(of: 0x0A) else {          // one line longer than the span: widen
-                        if from == 0 { return false }
+                        if from == 0 { return .failed }
                         span *= 2; continue
                     }
                     newStart = from + UInt64(data.distance(from: data.startIndex, to: nl)) + 1
@@ -90,7 +99,7 @@ public final class SessionLog: Sendable {
                 return newStart > 0
             }
             state.lock.withLock { state.wake }?()
-            return more
+            return more ? .more : .end
         }
     }
 

@@ -91,7 +91,7 @@ public final class SessionLog: Sendable {
     // Ids: Claude ~/.claude/projects/*/<id>.jsonl; Codex ~/.codex/sessions/**/rollout-*-<id>.jsonl.
     public static func locate(agent: String, sessionId: String, dir: String) -> URL?
     public func items() -> AsyncStream<[ConversationItem]>   // full list, re-yielded on every change
-    public func loadEarlier(bytes: Int = 2_000_000) async -> Bool   // true while older content remains
+    public func loadEarlier(bytes: Int = 2_000_000) async -> EarlierLoadResult   // .more, .end, or .failed
     public func setFull(_ full: Bool)   // full = 2 MB tail, short = ~256 KB; HerdrStore drives it from visibility
     public var url: URL?   // the file the tailer reads; nil until found
     public static func parse(lines: [String]) -> [ConversationItem]   // pure, for tests
@@ -108,7 +108,7 @@ The mirror file is deleted when the log is no longer watched; files older than a
 `SessionResolver` is off for a remote session (`ps`/`lsof` here cannot see the host): panes show herdr's
 `agent_session` as named, and teammate logs are not held back.
 
-`loadEarlier` reads up to `bytes` before the current start, cut to whole lines. The older items appear at the front of the next `items()` emission (within one poll, 0.5 s). The whole loaded range is parsed again together, so a tool result in a later segment still matches its call. Item ids do not change (Codex ids come from the line's byte offset), so the UI can keep scroll position. It returns `false` before the first load and when the file start is reached. `HerdrStore.loadEarlier(paneId:) async -> Bool` (or `loadEarlier(for: sessionId)`) wraps it for the store's own log; false for an unknown pane or a pane without an agent session. Call it from the "Show earlier" button after the loaded items are all shown.
+`loadEarlier` reads up to `bytes` before the current start, cut to whole lines. The older items appear at the front of the next `items()` emission (within one poll, 0.5 s). The whole loaded range is parsed again together, so a tool result in a later segment still matches its call. Item ids do not change (Codex ids come from the line's byte offset), so the UI can keep scroll position. It returns `.end` before the first load and when the file start is reached, `.more` while older content remains, and `.failed` when the range could not be read (including an unreachable host). A failed read preserves the loaded range and can be retried. `HerdrStore.loadEarlier(paneId:) async -> EarlierLoadResult` (or `loadEarlier(for: sessionId)`) wraps it for the store's own log; `.end` for an unknown pane or a pane without an agent session. Call it from the "Show earlier" button after the loaded items are all shown.
 
 ### Pictures in the log
 Logs keep pictures as base64 inside the JSON line. Items never hold the bytes. They hold a `LogImage.Ref`: the byte

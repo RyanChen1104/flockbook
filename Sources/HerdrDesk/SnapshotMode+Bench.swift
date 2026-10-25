@@ -171,7 +171,7 @@ extension ContentTests {
 
 @MainActor @Observable private final class BenchItems {
     var items: [ConversationItem]
-    var load: (() async -> Bool)?
+    var load: (() async -> EarlierLoadResult)?
     init(items: [ConversationItem]) { self.items = items }
 }
 
