@@ -115,3 +115,22 @@ old notice sampling miss. Its runner was also edited while bash was reading it,
 invalidating the batch's shell verdict. No completed 20-run full-churn pass is
 claimed. Subsequent repetitions use frozen runner and binary copies. Timing
 thresholds, blank-viewport checks and frame-drift checks remain intact.
+
+## Held-at-top request handshake
+
+The old observer waited two seconds for `window.__parked` but ignored a failed
+wait, then called the missing function. A controlled four-second delivery delay
+reproduces `window.__parked is not a function` with that exact old observer.
+
+The new helper first leaves the top so a real scroll event can occur, then waits
+for the actual intercepted request to resolve its readiness promise. It settles
+layout frames instead of sleeping for a guessed wheel-event duration. Missing
+requests still fail through the bounded CDP command. The same helper drives the
+full suite's existing held-touch cases.
+
+Validation: 20 normal and 20 four-second-delayed fresh headless runs passed
+(0/20 failures in each batch). The focused check uses actual touch input, waits
+until the reply completes before checking held rows, then verifies release inserts
+them. The old delayed observer failed 1/1. The full default headless suite passed
+all 353 checks, including the original heavy-row budget (15 ms measured, 80 ms
+limit, CPU throttle 4x). No heavy-row threshold changed.

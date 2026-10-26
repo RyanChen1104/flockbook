@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 
 const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt > 0 ? process.argv[onlyAt + 1] : null;
-if (onlyAt > 0 && only !== "transport") throw new Error(`unknown web-test section: ${only}`);
+if (onlyAt > 0 && !["transport", "earlier-held"].includes(only)) throw new Error(`unknown web-test section: ${only}`);
 const phase = (name) => console.log(`web-test: phase ${name}`);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const shotsAt = process.argv.indexOf("--shots");
@@ -165,6 +165,7 @@ const pages = [];
 
 try {
   if (only === "transport") await transportRun();
+  else if (only === "earlier-held") await heldEarlierRun();
   else if (live) await liveRun();
   else await fakeRun();
 } catch (e) {
@@ -191,6 +192,56 @@ async function transportRun() {
   check(await p.until("document.title === 'Flockbook'"), "transport: navigation completes");
   const values = await Promise.all([p.eval("1 + 1"), p.eval("new Promise(r => setTimeout(() => r(7), 10))"), p.eval("3 * 3")]);
   check(JSON.stringify(values) === "[2,7,9]", "transport: concurrent replies match their commands");
+}
+
+/** Hold the real earlier request at the socket boundary; its arrival resolves the observer directly. */
+async function installEarlierParking(p) {
+  const delay = Math.max(0, Number(process.env.WEB_TEST_PARK_DELAY_MS) || 0);
+  await p.eval(`(() => { const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+      if (window.__parkEarlier && typeof data === 'string' && data.includes('"loadEarlier"')) {
+        window.__parkEarlier = 0;
+        const ready = () => { window.__parked = () => send.call(this, data); window.__onParked?.(); };
+        if (${delay} > 0) setTimeout(ready, ${delay}); else ready();
+        return;
+      }
+      return send.call(this, data);
+    }; })()`);
+}
+async function parkEarlierAtTop(p, readRow) {
+  // A scroll event requires a changed offset. A previous held case can leave the page already at zero.
+  await p.eval("window.__parkEarlier = 0; window.scrollTo(0, document.documentElement.scrollHeight)");
+  if (!await p.until("window.scrollY > 0")) throw new Error("earlier: could not position the reader above the top gesture");
+  const at = await p.eval(`new Promise(resolve => {
+    window.__parkEarlier = 1; window.__parked = null;
+    window.__onParked = () => { window.__onParked = null; resolve(${readRow}); };
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0);
+  })`);
+  // Settle layout frames, rather than guessing how long a wheel's event takes on a loaded host.
+  await p.eval("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  return JSON.parse(at);
+}
+async function heldEarlierRun() {
+  phase("earlier held gesture");
+  const p = await page(await context()); pages.push(p);
+  await p.goto(origin + "/");
+  await p.eval("localStorage.setItem('flockbook.token', 'input-token')");
+  await p.goto(origin + "/#pane=w2%3Ap2");
+  if (!await p.until("!!document.querySelector('#composer-text')", 8000)) throw new Error("earlier: input page did not load");
+  hub.stdin.write("session w2:p2 held-check 60\nrich held-check 600\n");
+  if (!await p.until("document.body.innerText.includes('New session reply 59')", 8000)) throw new Error("earlier: held fixture did not load");
+  await installEarlierParking(p);
+  const rows = "document.querySelectorAll('.items > .msg').length";
+  const read = `(() => { const e = [...document.querySelectorAll('.items > .msg')].find(e => e.getBoundingClientRect().bottom > 0);
+    return JSON.stringify(e ? { text: e.textContent, top: e.getBoundingClientRect().top } : { text: '', top: NaN }); })()`;
+  const at = await parkEarlierAtTop(p, read), count = await p.eval(rows);
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
+  await p.eval("window.__parked()");
+  if (!await p.until("document.getElementById('load-earlier')?.disabled === false", 8000)) throw new Error("earlier: held request did not finish");
+  const top = `[...document.querySelectorAll('.items > .msg')].find(e => e.textContent === ${JSON.stringify(at.text)})?.getBoundingClientRect().top`;
+  check(await p.eval(rows) === count && Math.abs(await p.eval(top) - at.top) <= 2, "earlier-held: completed reply waits while a real touch is held");
+  await p.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  check(await p.until(`${rows} > ${count}`, 8000) === true, "earlier-held: release inserts the waiting rows");
 }
 
 /** The real app hub, a read device: list, one conversation, no input controls. */
@@ -1029,10 +1080,10 @@ async function fakeRun() {
     WebSocket.prototype.send = function (d) {
       if (window.__failEarlier > 0 && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__failEarlier--; d = d.replace(/"before":"[^"]*"/, '"before":"no-such-row"'); }
       if (window.__holdEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__holdEarlier = 0; setTimeout(() => send.call(this, d), 600); return; }
-      if (window.__parkEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { window.__parkEarlier = 0; window.__parked = () => send.call(this, d); return; }
       if (window.__slowEarlier && typeof d === 'string' && d.includes('"loadEarlier"')) { setTimeout(() => send.call(this, d), window.__slowEarlier); return; }
       return send.call(this, d);
     }; })()`);
+  await installEarlierParking(p);
   await p.eval("window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 3000)");
   await new Promise((r) => setTimeout(r, 600));
   const read0 = JSON.parse(await p.eval(readRow));
@@ -1087,13 +1138,7 @@ async function fakeRun() {
   const loadButtonSeen = "(() => { const b = document.getElementById('load-earlier'); return !!b && getComputedStyle(b).visibility !== 'hidden'; })()";
   /** A reader's scroll to the top, a read of older rows held, and the row on top then. */
   phase("earlier held gestures");
-  async function heldAtTop() {
-    await p.eval("window.__parkEarlier = 1; window.__parked = null");
-    const at = JSON.parse(await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0); return ${readRow}; })()`));
-    await p.until("!!window.__parked", 2000);
-    await new Promise((r) => setTimeout(r, 300));   // the reader's round from the wheel is over
-    return at;
-  }
+  async function heldAtTop() { return parkEarlierAtTop(p, readRow); }
   const finger = await heldAtTop(), fingerN = await p.eval(rowCount);
   await p.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 195, y: 420 }] });
   await p.eval("window.__parked()");
