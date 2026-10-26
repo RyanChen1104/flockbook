@@ -78,6 +78,8 @@ public enum ApprovalNotice {
         var tool: String
         var command: String
         var lines: [String]
+        /// The top of the box is off screen: no header, tool or command (see `screenBox`).
+        var clipped = false
     }
 
     /// "⚠ Claude Code will automatically deny this request in 1:23, …": its time changes every second.
@@ -90,7 +92,8 @@ public enum ApprovalNotice {
         guard let ask = raw.lastIndex(where: { $0.contains(PermissionGate.promptMarker) }),
               QuestionAdapter.claudeScreen(screen) == nil else { return nil }
         let trim: (String) -> String = { $0.trimmingCharacters(in: .whitespaces) }
-        let top = raw[..<ask].lastIndex { trim($0).hasPrefix("─") }.map { $0 + 1 } ?? 0
+        let rule = raw[..<ask].lastIndex { trim($0).hasPrefix("─") }
+        let top = rule.map { $0 + 1 } ?? 0
         // Options: down to the first blank line or the key help line.
         var end = ask
         while end + 1 < raw.count, !trim(raw[end + 1]).isEmpty, !trim(raw[end + 1]).hasPrefix("Esc to cancel") { end += 1 }
@@ -110,6 +113,14 @@ public enum ApprovalNotice {
         }
         // A wrapped command has a "│" gutter on each line (Claude Code 2.1.296).
         let ungutter: (String) -> String = { $0.hasPrefix("│") ? $0.dropFirst().trimmingCharacters(in: .whitespaces) : $0 }
+        // The box is taller than the pane and its top scrolled off into the command: no top rule, and the screen starts
+        // with a "│" command line or keeps only the command's closing "╌" rule. The first line is then a line of the
+        // command, not the header, and the command shown would be its end only: neither is read (`clipped`). `lines`
+        // stays the visible box, so the prompt keeps its id and its buttons. (A box with no rule at all that starts at
+        // its header, as older layouts drew it, is read as before.)
+        if rule == nil, header.hasPrefix("│") || body.filter(isRule).count == 1 {
+            return ScreenBox(header: "", tool: "", command: "", lines: box, clipped: true)
+        }
         let tool = String(header.split(separator: " ").first ?? "")
         return ScreenBox(header: header, tool: tool, command: command.map(ungutter).joined(separator: "\n"), lines: box)
     }
@@ -127,6 +138,9 @@ public enum ApprovalNotice {
         return "screen-" + String(h, radix: 16)
     }
 
+    /// The card's title for a box whose top is off screen: the command is not shown, the terminal has it.
+    public static let clippedTitle = "Command too long to show here. Read it in the terminal before you answer."
+
     /// The approval card's request read from the screen, for a prompt the log does not have (no transcript, or the log
     /// lags). Its `toolUseId` is `screenPrompt`.
     public static func screenRequest(_ screen: String, agent: String = "claude") -> PermissionRequest? {
@@ -135,7 +149,7 @@ public enum ApprovalNotice {
             return PermissionRequest(title: box.title, command: box.command, toolName: box.command.isEmpty ? "" : "Bash", toolUseId: grokID(box), state: .pending)
         }
         guard let box = screenBox(screen), let id = screenPrompt(screen) else { return nil }
-        return PermissionRequest(title: box.header, command: box.command, toolName: box.tool, toolUseId: id, state: .pending)
+        return PermissionRequest(title: box.clipped ? clippedTitle : box.header, command: box.command, toolName: box.tool, toolUseId: id, state: .pending)
     }
 
     /// Grok Build 1.0.67's permission prompt (live): its last "┃" block holds "› <what it does>", the command on "│"
