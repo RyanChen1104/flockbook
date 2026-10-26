@@ -164,7 +164,7 @@ deadline. The preceding swap window's content is detached so it cannot retain th
 same image during the release scenario.
 
 All 20 fresh full `pictures` offscreen checks passed, including loaded=true and
-released=true (0/20 failed or skipped). Historical CI had 0/112 picture failures;
+released=true (0/20 failed or skipped). Historical CI had 0/78 picture failures;
 the previously reported local rare flake was not independently reproduced here.
 This corrects the cache contract and observation assumptions without changing
 image loading, cache limits or the thumbnail lifetime in the product.
@@ -192,3 +192,28 @@ notification or fallback. The controlled rebind case moved 80 pt but compensated
 0 pt. Binding now refreshes the probe immediately. Twenty fresh native controls
 passed both intermediate-ancestor placement (120 pt) and rebound identity (80 pt).
 Full churn stress results are recorded separately from these focused controls.
+
+## Native sidebar visibility synchronization
+
+The baseline reproduced both chrome and menu failures: AppKit had expanded the
+sidebar while SwiftUI's visibility binding still reported it hidden. A subsequent
+toggle could therefore report the preceding native state. The local baseline
+group passed root-width and tab-overflow but failed chrome and menus (2/4).
+
+The model now reads the native collapsed state after the toggle animation ends.
+A generation guards against an older completion overwriting a later explicit
+visibility request. Explicit requests use `setSidebarVisibility`; feedback from
+the SwiftUI binding does not invalidate the pending completion. Invalidating on
+every binding assignment was tested and rejected because the native toggle's own
+feedback canceled its synchronization. The menu check waits for the real pinned
+state with a deadline instead of assuming a 600 ms sleep established it.
+
+Twenty-run verification uses a frozen app and runner with automatic retries
+disabled. Earlier candidate failures remain in the local evidence and are not
+counted as passes for the final candidate.
+
+The final candidate passed 20 complete groups of chrome, menus and root-width:
+each check passed 20/20, with zero failures, retries or skipped items. Historical
+incidence was chrome 3/115, menus 7/114 and root-width 1/112. Tab-overflow had
+0/77 observed CI failures and one full local baseline pass; its reported failure
+under load was not independently reproduced, so no tab-overflow fix is claimed.

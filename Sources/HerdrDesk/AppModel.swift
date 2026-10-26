@@ -501,10 +501,30 @@ final class AppModel {
     /// follows). Not a SwiftUI animation of the binding: that animates the split's size while AppKit keeps the detail
     /// column at full width, so the window content grows by the sidebar's width, is centred (shifting left by up to half
     /// of it) and jumps into place at the end (--test-root-width traces it).
+    @ObservationIgnored private var sidebarToggleGeneration = 0
+    /// Programmatic visibility requests supersede an unfinished native toggle; SwiftUI's binding updates do not.
+    func setSidebarVisibility(_ visibility: NavigationSplitViewVisibility) {
+        sidebarToggleGeneration += 1
+        sidebarVisibility = visibility
+    }
     func toggleSidebar() {
         endPeek()
         if let w = mainWindow, let c = WindowWidthTracker.splitView(in: w.contentView)?.delegate as? NSSplitViewController {
-            c.toggleSidebar(nil)
+            sidebarToggleGeneration += 1
+            let generation = sidebarToggleGeneration
+            NSAnimationContext.runAnimationGroup { _ in
+                c.toggleSidebar(nil)
+            } completionHandler: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.sidebarToggleGeneration == generation,
+                          let window = self.mainWindow,
+                          let controller = WindowWidthTracker.splitView(in: window.contentView)?.delegate as? NSSplitViewController,
+                          let sidebar = controller.splitViewItems.first(where: { $0.behavior == .sidebar }) else { return }
+                    // SwiftUI can report the previous collapsed state after a native toggle. Read it after the slide,
+                    // without changing the binding during the animation or accepting an older toggle's completion.
+                    self.sidebarVisibility = sidebar.isCollapsed ? .detailOnly : .all
+                }
+            }
         } else {
             sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
         }

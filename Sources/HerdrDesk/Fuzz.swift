@@ -105,7 +105,7 @@ enum FuzzRunner {
             case 7: name = "new-close-tab"; if next(2) == 0 { model.newTab() } else { model.closeTab() }
             case 8: name = "rename"; if let (_, t) = pick(allTabs()) { if next(2) == 0 { model.renamingTabID = t.id } else { model.rename(t, to: "x\(i)") } }
             case 9: name = "terminal-sheet"; model.showTerminal.toggle()
-            case 10: name = "sidebar"; model.sidebarVisibility = pick([NavigationSplitViewVisibility.all, .detailOnly, .automatic, .doubleColumn])!
+            case 10: name = "sidebar"; model.setSidebarVisibility(pick([NavigationSplitViewVisibility.all, .detailOnly, .automatic, .doubleColumn])!)
             case 11: name = "resize"; win.setContentSize(NSSize(width: CGFloat(960 + next(800)), height: CGFloat(600 + next(300))))
             case 12, 13, 14: name = "click"; click(count: 1 + next(2))
             case 15: name = "send"; if let (_, p) = pick(allPanes()) { model.send("hello 你好 \(i)", to: p) }

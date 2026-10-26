@@ -142,6 +142,9 @@ import SwiftUI
     static func sampleToggle(_ win: NSWindow, _ model: AppModel) async -> (toggles: [CGRect], islands: [CGRect], roots: [CGFloat], edgeWrites: Int, frames: FrameTimer.Stats, cpu: Double) {
         var toggles: [CGRect] = [], islands: [CGRect] = [], roots: [CGFloat] = [], edgeWrites = 0, lastEdge = model.sidebarMaxX
         let timer = FrameTimer(view: win.contentView!), cpu0 = FrameTimer.cpu(), t0 = Date()
+        if let split = WindowWidthTracker.splitView(in: win.contentView), let controller = split.delegate as? NSSplitViewController {
+            print("chrome-trace: before toggle model \(model.sidebarVisibility), native \(controller.splitViewItems.map { $0.isCollapsed }), window \(model.mainWindow === win)")
+        }
         model.toggleSidebar()
         while Date().timeIntervalSince(t0) < 0.5 {
             toggles.append(ChromeProbe.fullScreenToggle.offsetBy(dx: -ChromeProbe.root.minX, dy: -ChromeProbe.root.minY)); islands.append(TabProbe.island); roots.append(ChromeProbe.root.minX)
@@ -353,7 +356,7 @@ import SwiftUI
                 // Hidden first: the very first layout pass can leave a stale detail frame (the picture shows no clip), so
                 // "shown" is measured after a real change.
                 for vis in [NavigationSplitViewVisibility.detailOnly, .all] {
-                    model.sidebarVisibility = vis
+                    model.setSidebarVisibility(vis)
                     try? await Task.sleep(for: .milliseconds(900))
                     let r = ChromeProbe.root, d = ChromeProbe.detail
                     let acts = fs ? ChromeProbe.fullScreenActions : .zero
@@ -364,7 +367,7 @@ import SwiftUI
                     step("\(tag): root \(r) = window content 0...\(Int(w)); detail \(d.minX)...\(d.maxX), panel \(ChromeProbe.panel.minX)...\(ChromeProbe.panel.maxX), host \(host.frame.width); buttons end at \(acts.maxX)",
                          abs(r.minX) <= 0.5 && abs(r.width - w) <= 0.5 && abs(d.maxX - w) <= 0.5 && acts.maxX <= w)
                 }
-                model.sidebarVisibility = .all
+                model.setSidebarVisibility(.all)
                 try? await Task.sleep(for: .milliseconds(600))
                 // While the sidebar slides in (toggle): the root's x, sampled every ~4 ms.
                 model.toggleSidebar(); try? await Task.sleep(for: .milliseconds(700))

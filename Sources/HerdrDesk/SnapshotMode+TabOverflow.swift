@@ -35,7 +35,7 @@ extension ChromeTests {
                     let tag = "\(count) tabs, \(w) wide, sidebar \(side ? "on" : "off")"
                     host.rootView = AnyView(RootView(flat: false).environment(model).frame(width: CGFloat(w), height: 800))
                     win.setContentSize(NSSize(width: CGFloat(w), height: 800))
-                    model.sidebarVisibility = side ? .all : .detailOnly
+                    model.setSidebarVisibility(side ? .all : .detailOnly)
                     model.select(tab: first, in: ws)
                     try? await Task.sleep(for: .seconds(1.2))
 

@@ -12,3 +12,4 @@ One short line: what this release is about.
 ### ⚙️ Changes
 
 - Earlier conversation history keeps the reading position when an intermediate view moves during layout.
+- The sidebar state stays in sync with its native show and hide animation.

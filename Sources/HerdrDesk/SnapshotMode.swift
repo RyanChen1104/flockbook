@@ -166,12 +166,12 @@ enum SnapshotRunner {
         ChromeTests.emulateFullScreen(win, model, false)
         try? await Task.sleep(for: .milliseconds(800))
         // Hover reveal (the model calls the strip's and the panel's onHover make; real tracking areas need a real pointer).
-        model.sidebarVisibility = .all
+        model.setSidebarVisibility(.all)
         try? await Task.sleep(for: .milliseconds(600))
         model.setPeekHover(strip: true); try? await Task.sleep(for: .milliseconds(300))
         step("peek: sidebar pinned visible, edge hover does nothing", !model.sidebarPeek)
         model.setPeekHover(strip: false)
-        model.sidebarVisibility = .detailOnly
+        model.setSidebarVisibility(.detailOnly)
         try? await Task.sleep(for: .milliseconds(800))
         step("peek: strip at the left edge, ~7 pt wide (\(ChromeProbe.peekStrip))", ChromeProbe.peekStrip.minX <= 1 && (6...8).contains(ChromeProbe.peekStrip.width) && ChromeProbe.peekStrip.height > 400 && ChromeProbe.peekStrip.minY >= 11)
         // The rest and the retract are timers: a busy runner can only make them later, so each check times when the change
@@ -197,12 +197,16 @@ enum SnapshotRunner {
         model.select(workspace: ws.id)
         step("peek: choosing a workspace retracts it", !model.sidebarPeek)
         model.setPeekHover(strip: true); try? await Task.sleep(for: .milliseconds(400))
-        model.toggleSidebar(); try? await Task.sleep(for: .milliseconds(600))
+        if let split = WindowWidthTracker.splitView(in: win.contentView), let controller = split.delegate as? NSSplitViewController {
+            print("menus-trace: before pin model \(model.sidebarVisibility), native \(controller.splitViewItems.map { $0.isCollapsed }), window \(model.mainWindow === win)")
+        }
+        model.toggleSidebar()
+        _ = await CheckWait.until { model.sidebarVisibility == .all && !model.sidebarPeek }
         step("peek: sidebar toggle / ⌘B pins it (visibility \(model.sidebarVisibility), peek \(model.sidebarPeek))", model.sidebarVisibility == .all && !model.sidebarPeek)
-        model.fullScreen = true; model.sidebarVisibility = .detailOnly; try? await Task.sleep(for: .milliseconds(600))
+        model.fullScreen = true; model.setSidebarVisibility(.detailOnly); try? await Task.sleep(for: .milliseconds(600))
         model.setPeekHover(strip: true); try? await Task.sleep(for: .milliseconds(400))
         step("peek: works in full screen too (an overlay; AppKit's own edge reveal is off)", model.sidebarPeek)
-        model.endPeek(); model.sidebarVisibility = .all; model.fullScreen = false
+        model.endPeek(); model.setSidebarVisibility(.all); model.fullScreen = false
         try? await Task.sleep(for: .milliseconds(600))
         // Writes off
         AppDefaults.store.set(false, forKey: AppSettings.allowInputKey)
@@ -566,7 +570,7 @@ enum SnapshotRunner {
             return c.splitViewItems.filter { $0.behavior == .sidebar }.map { $0.value(forKey: "revealsOnEdgeHoverInFullscreen") as? Bool }
         }
         step("full screen: AppKit's sidebar edge reveal is off (\(systemEdgeReveal()))", systemEdgeReveal().allSatisfy { $0 == false })
-        model.sidebarVisibility = .detailOnly
+        model.setSidebarVisibility(.detailOnly)
         try? await Task.sleep(for: .milliseconds(900))
         step("full screen, sidebar hidden: our reveal strip on the left edge (\(ChromeProbe.peekStrip))", ChromeProbe.peekStrip.width > 0 && ChromeProbe.peekStrip.minX < 1)
         let hiddenToggle = ChromeProbe.fullScreenToggle
@@ -601,7 +605,7 @@ enum SnapshotRunner {
         try? await Task.sleep(for: .milliseconds(900))
         let peek = ChromeProbe.peekPanel
         step("windowed: our reveal shows the sidebar panel (\(peek)) at the docked panel's top (\(panelTop))", peek.width > 0 && abs(peek.minY - panelTop) <= 1)
-        model.endPeek(); model.sidebarVisibility = .all
+        model.endPeek(); model.setSidebarVisibility(.all)
         try? await Task.sleep(for: .milliseconds(900))
         ChromeTests.emulateFullScreen(win, model, false)
         try? await Task.sleep(for: .milliseconds(600))
@@ -737,7 +741,7 @@ enum SnapshotRunner {
         for (w, side) in [900, 1200, 1600].flatMap({ w in [(w, true), (w, false)] }) {
             host.rootView = RootView(flat: false).environment(dense).frame(width: CGFloat(w), height: 800)
             win.setContentSize(NSSize(width: CGFloat(w), height: 800)); try? await Task.sleep(for: .seconds(0.6))
-            dense.sidebarVisibility = side ? .all : .detailOnly
+            dense.setSidebarVisibility(side ? .all : .detailOnly)
             try? await Task.sleep(for: .seconds(0.8))
             for round in 1...2 {
                 if let b = biggest { dense.select(workspace: b.id) }
