@@ -4,6 +4,7 @@
 //                                                 127.0.0.1, a read device) on a named herdr session. Sends no input.
 // Drives Chrome's headless shell over the DevTools protocol with Node's built-in WebSocket: no packages, no window.
 // The browser trusts only the hub's own certificate (SPKI pin), as a paired phone does.
+import { createCDPSender, CDPCommandError } from "./lib/cdp-commands.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
@@ -11,6 +12,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
+const onlyAt = process.argv.indexOf("--only");
+const only = onlyAt > 0 ? process.argv[onlyAt + 1] : null;
+if (onlyAt > 0 && only !== "transport") throw new Error(`unknown web-test section: ${only}`);
+const phase = (name) => console.log(`web-test: phase ${name}`);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const shotsAt = process.argv.indexOf("--shots");
 const shots = shotsAt > 0 ? process.argv[shotsAt + 1] : null;
@@ -46,6 +51,7 @@ if (live && /"CGSSessionScreenIsLocked"\s*=\s*Yes/.test(execFileSync("/usr/sbin/
 }
 // The herdr environment of a calling pane must not leak into the app (it would pick that session).
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("HERDR_")));
+phase("hub startup");
 const hub = live
   ? spawn(join(root, ".build/debug/HerdrDesk"), ["--session", live, "--serve-remote"], { stdio: ["pipe", "pipe", "ignore"], env })
   : spawn(join(root, ".build/debug/HerdrKitChecks"), ["--serve-web"], { stdio: ["pipe", "pipe", "inherit"],
@@ -63,6 +69,7 @@ const spki = execFileSync("sh", ["-c", `/usr/bin/openssl x509 -in '${info.cert}'
 const origin = `https://127.0.0.1:${info.port}`;
 
 // --- The browser.
+phase("headless browser startup");
 const profile = mkdtempSync(join(tmpdir(), "fb-web-test-"));
 const chrome = spawn(findChrome(), [
   "--headless", `--user-data-dir=${profile}`, "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
@@ -76,18 +83,12 @@ const wsURL = await new Promise((resolve, reject) => {
 
 const cdp = new WebSocket(wsURL);
 await new Promise((r) => cdp.addEventListener("open", r, { once: true }));
-let nextId = 1;
-const pending = new Map(), listeners = [];
-cdp.addEventListener("message", (e) => {
-  const m = JSON.parse(e.data);
-  if (m.id && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); }
-  else for (const l of listeners) l(m);
+const commands = createCDPSender(cdp), listeners = [];
+cdp.addEventListener("message", (event) => {
+  const message = JSON.parse(event.data);
+  if (!message.id) for (const listener of listeners) listener(message);
 });
-function send(method, params = {}, sessionId) {
-  const id = nextId++;
-  cdp.send(JSON.stringify({ id, method, params, sessionId }));
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-}
+function send(method, params = {}, sessionId) { return commands.send(method, params, sessionId); }
 
 /** A fresh page (own storage when `context` is new). */
 async function page(context) {
@@ -122,7 +123,8 @@ async function page(context) {
     async until(expr, ms = 4000) {
       const end = Date.now() + ms;
       while (Date.now() < end) {
-        try { const v = await p.eval(expr); if (v) return v; } catch {}
+        try { const v = await p.eval(expr); if (v) return v; }
+        catch (error) { if (error instanceof CDPCommandError && error.fatal) throw error; }
         await new Promise((r) => setTimeout(r, 50));
       }
       return undefined;
@@ -162,7 +164,8 @@ const noScroll = "document.documentElement.scrollWidth <= window.innerWidth";
 const pages = [];
 
 try {
-  if (live) await liveRun();
+  if (only === "transport") await transportRun();
+  else if (live) await liveRun();
   else await fakeRun();
 } catch (e) {
   check(false, `test run: ${e.stack ?? e}`);
@@ -179,8 +182,20 @@ try {
 console.log(failures ? `web-test: ${failures} of ${total} FAILED` : `web-test: OK ${total} checks passed`);
 process.exit(failures ? 1 : 0);
 
+/** A short real-browser check of command matching, navigation and concurrent evaluations. */
+async function transportRun() {
+  phase("CDP transport");
+  const p = await page(await context());
+  pages.push(p);
+  await p.goto(origin + "/");
+  check(await p.until("document.title === 'Flockbook'"), "transport: navigation completes");
+  const values = await Promise.all([p.eval("1 + 1"), p.eval("new Promise(r => setTimeout(() => r(7), 10))"), p.eval("3 * 3")]);
+  check(JSON.stringify(values) === "[2,7,9]", "transport: concurrent replies match their commands");
+}
+
 /** The real app hub, a read device: list, one conversation, no input controls. */
 async function liveRun() {
+  phase("live read-only");
   const p = await page(await context());
   pages.push(p);
   await p.goto(origin + "/");
@@ -204,6 +219,7 @@ async function liveRun() {
 
 /** The fake hub: every screen and every action. */
 async function fakeRun() {
+  phase("pairing and page assets");
   // The page and the socket on one origin, scripts under the CSP.
   const fresh = await page(await context());
   pages.push(fresh);
@@ -269,6 +285,7 @@ async function fakeRun() {
     "read: no Allow/Deny, no composer");
   check((await fresh.eval(text)).includes("Read only"), "read: card says read only");
 
+  phase("notifications");
   // Notifications: the hub has a push key, so the list offers them; the worker is /sw.js on this origin. The default
   // browser context: Chrome has no Push API in the other (incognito) contexts and logs an error there.
   const np = await page();
@@ -330,6 +347,7 @@ async function fakeRun() {
   check(await gone.until(`${text}.includes('not paired')`) === true, "token: unknown token -> pair screen with a reason");
   check(await gone.eval("localStorage.getItem('flockbook.token')") === null, "token: unknown token removed");
 
+  phase("input device");
   // An input device.
   const p = await page(await context());
   pages.push(p);
@@ -361,6 +379,7 @@ async function fakeRun() {
   await p.shot("list-scrolled", true);
   await p.eval("window.scrollTo(0, 0)");
 
+  phase("approval and markdown");
   // Conversation with an approval.
   await p.click("[data-pane='w1:p1']");
   check(await p.until("!!document.querySelector('#allow')") === true, "approval: card with Allow");
@@ -480,6 +499,7 @@ async function fakeRun() {
   check(await p.until("!document.querySelector('.card.approval')") === true, "approval: card gone");
   check(await p.until("document.title === '(1) Flockbook'") === true, "approval: one less needs you");
 
+  phase("questions");
   // A question.
   await p.eval("location.hash = ''");
   await p.until("!!document.querySelector('.list')");
@@ -494,6 +514,7 @@ async function fakeRun() {
   await p.click("#submit-answer");
   check(await p.until(`${text}.includes('Deploying to the chosen target.')`) === true, "question: answer sent, agent goes on");
 
+  phase("composer");
   // Composer on an idle agent, and the in-app alert when another agent starts to wait.
   await p.eval("location.hash = '#pane=w2%3Ap2'");
   check(await p.until("document.querySelector('#composer-text')?.disabled === false") === true, "composer: on for an idle agent");
@@ -561,6 +582,7 @@ async function fakeRun() {
   check(narrow.fit && narrow.box > wide.box, `turn: portrait re-wraps the draft and the field grows (${wide.box} -> ${narrow.box}), nothing cut off`);
   await setText("");
 
+  phase("image attachments");
   // Images from the phone: pick, preview, remove, send in parts with progress; the hub re-encodes them.
   const imgDir = mkdtempSync(join(tmpdir(), "fb-web-img-"));
   const big = join(imgDir, "big.png"); writeFileSync(big, Buffer.alloc(11 * 1024 * 1024, 1));
@@ -648,6 +670,7 @@ async function fakeRun() {
   await p.eval("window.scrollTo(0, document.body.scrollHeight)");
   await p.shot("queued");
   await p.shot("queued", true);
+  phase("queued input");
   // The agent's own queue: faded "Queued" bubbles at the end, and Pull back puts it in the composer.
   await p.type("#composer-text", "queue me");
   await p.click("#composer-send");
@@ -667,6 +690,7 @@ async function fakeRun() {
   check(await p.until("!document.querySelector('.queue')") === true, "queue: the bubbles go when the agent's queue is empty");
   await p.shot("queue-pulled");
   await p.shot("queue-pulled", true);
+  phase("status line");
   // Claude Code's status line (the Mac's switch on): a row of tags over the composer's field (model, effort, context
   // with its bar, cost marked as an estimate, then the owner's line cut into parts without the repeats), the chevron at
   // the right; open: every tag, wrapped, in the parts' colours, and when it was updated; no raw line (appendix D).
@@ -891,6 +915,7 @@ async function fakeRun() {
   await p.until("false", 500);
   check(await p.eval("document.querySelector('#composer-text').value") === "", "queue: nor for the first agent");
   await p.type("#composer-text", "");
+  phase("send identity");
   // r2 P1-1: a send answered while another agent is open clears the composer it was sent from, never the open one.
   await p.type("#composer-text", "slow send");
   await p.click("#composer-send");
@@ -1047,6 +1072,7 @@ async function fakeRun() {
   await new Promise((r) => setTimeout(r, 900));
   check(await p.eval(`!${failNotice} && document.getElementById('load-earlier')?.textContent === 'Load earlier'`) === true,
     `earlier: another session in the pane starts without the other's failure (${await p.eval("document.getElementById('load-earlier')?.textContent")})`);
+  phase("earlier history");
   // The reader's case: older rows that come while the reader still scrolls at the top wait until the scroll stops. On a
   // phone a finger on the glass (or the bounce at the top), on a Mac a trackpad's momentum, takes the page back to its
   // own top whatever the page does meanwhile: rows put in then push the message being read out of view. Rows of a long
@@ -1060,6 +1086,7 @@ async function fakeRun() {
     let n = 0; for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i); if (e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden') n++; } return n; })()`;
   const loadButtonSeen = "(() => { const b = document.getElementById('load-earlier'); return !!b && getComputedStyle(b).visibility !== 'hidden'; })()";
   /** A reader's scroll to the top, a read of older rows held, and the row on top then. */
+  phase("earlier held gestures");
   async function heldAtTop() {
     await p.eval("window.__parkEarlier = 1; window.__parked = null");
     const at = JSON.parse(await p.eval(`(() => { window.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); window.scrollTo(0, 0); return ${readRow}; })()`));
@@ -1303,6 +1330,7 @@ async function fakeRun() {
   check(await p.eval("!document.querySelector('#submit-answer') && !document.querySelector('.option')") === true, "question: no answer controls for it");
   await p.shot("question-mac");
 
+  phase("newest message and following");
   // The newest message: a conversation opens at the bottom and stays there while rows arrive, after a switch, a reload
   // and a return from the background. A reader who scrolled up stays where they are.
   const bottomGap = "Math.round(document.documentElement.scrollHeight - window.innerHeight - window.scrollY)";
@@ -1583,6 +1611,7 @@ async function fakeRun() {
  *  right under its own bar, its text and composer at most 760 pt wide in the middle. Narrower (a phone, Split View at a
  *  third): the phone's one column. */
 async function twoColumns() {
+  phase("wide screens");
   const p = await page(await context());
   pages.push(p);
   const dpr = shots ? 2 : 1;   // not 3: see `scale` and the stills of pictures
@@ -1738,6 +1767,7 @@ async function twoColumns() {
 /** Pictures (remote-protocol.md 3.4): each keeps its place, is asked for only near the view, stays in memory only, and
  *  the full picture comes on a tap. */
 async function pictures() {
+  phase("pictures");
   const p = await page(await context());
   pages.push(p);
   await p.onEveryLoad(`{ window.__pics = []; const send = WebSocket.prototype.send;
@@ -1940,6 +1970,7 @@ async function pictures() {
 
 /** An agent team took the pane's log: the same two notes as the Mac, from the snapshot's `team`. */
 async function team() {
+  phase("agent teams");
   const p = await page(await context());
   pages.push(p);
   await p.goto(origin + "/");
