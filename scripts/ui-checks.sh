@@ -188,6 +188,7 @@ for entry in "${CHECKS[@]}"; do
     echo "$line" | tee -a "$summary"
     if [[ "$verdict" == SKIP* ]]; then skipped+=("$name"); continue; fi
     grep 'WARN (CI runner' "$log" | sed "s/^/::warning title=ui-checks::$name: /"   # timing misses a CI runner does not count
+    grep '^tab-overflow: WARN selected tab ' "$log" | sed "s/^/::warning title=ui-checks::$name: /"
     known=no; [[ "$KNOWN" == *" $name "* ]] && known=yes
     if [ "$verdict" != ok ]; then
         if [ "$known" = yes ]; then

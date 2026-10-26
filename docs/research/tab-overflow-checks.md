@@ -98,3 +98,7 @@ The separate two-second-delay full overflow check also passed all 24 last-tab
 assertions. Local raw logs, controlled sources and frozen binaries are retained
 under the ignored build evidence directory (121 MB for this follow-up). Remote
 CI and real-window acceptance remain separate from these local results.
+
+Normal-debounce timing is measured separately from the correctness deadline in
+[tab-selection-latency.md](tab-selection-latency.md), including the two-revision
+comparison and the permanent 1.2 second warning.

@@ -9,26 +9,51 @@ extension ChromeTests {
     /// item falls into the ">>" overflow, and the last tab, once selected, scrolls fully into the island.
     /// Pictures: build/snapshots-tab-overflow/.
     static func runTabOverflowTest() async {
+        let focused = CommandLine.arguments.contains("latency-probe-only")
+        let blockMilliseconds = focused ? min(2000, max(0, Int(ProcessInfo.processInfo.environment["TAB_OVERFLOW_BLOCK_MAIN_MS"] ?? "0") ?? 0)) : 0
         TabProbe.selectionDelayMilliseconds = min(4000, max(200, Int(ProcessInfo.processInfo.environment["TAB_OVERFLOW_SCROLL_DELAY_MS"] ?? "200") ?? 200))
         TabProbe.traceSelection = ProcessInfo.processInfo.environment["TAB_OVERFLOW_TRACE"] != nil
+        TabProbe.measureSelection = true
         if TabProbe.traceSelection { print("tab-overflow: selection debounce \(TabProbe.selectionDelayMilliseconds) ms, trace enabled") }
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("tab-overflow: \(n) \(ok ? "ok" : "FAIL")") }
         let dir = "build/snapshots-tab-overflow"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         func f(_ r: CGRect) -> String { String(format: "x %.0f...%.0f w %.0f", r.minX, r.maxX, r.width) }
-        func selectedTabVisible(_ id: String) async -> Bool {
-            let start = ContinuousClock.now
+        func selectedTabVisible(_ tab: Tab, in workspace: Workspace, model: AppModel, host: IslandHost, tag: String) async -> Bool {
+            TabProbe.beginSelection(tab.id, model: model, host: host)
+            let start = TabProbe.selectionTiming!.start
+            model.select(tab: tab, in: workspace)
+            // Focused control verifies that normal-debounce slow placement warns without failing valid geometry.
+            func blockMainActor() { Thread.sleep(forTimeInterval: Double(blockMilliseconds) / 1000) }
+            if blockMilliseconds > 0 { blockMainActor() }
             // Keep the original observation interval, so an old in-view probe cannot pass before selection updates.
             // A delayed selection task may still be pending then: wait for its actual placed result, with a deadline.
             try? await Task.sleep(for: .milliseconds(1200))
             let ready = await CheckWait.until(.seconds(5) - start.duration(to: .now)) {
-                let pill = TabProbe.pills[id] ?? .zero, island = TabProbe.island
+                let pill = TabProbe.pills[tab.id] ?? .zero, island = TabProbe.island
                 return island.width > 0 && pill.width > 0
                     && pill.minX >= island.minX - 0.5 && pill.maxX <= island.maxX + 0.5
             }
-            if TabProbe.traceSelection { print("tab-overflow: selected \(id) visible \(ready) after \(start.duration(to: .now))") }
-            return ready
+            let timing = TabProbe.selectionTiming!
+            func milliseconds(_ duration: Duration) -> Double {
+                Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+            }
+            let elapsed = timing.visibleAfter.map(milliseconds)
+            if TabProbe.selectionDelayMilliseconds == 200, let elapsed, elapsed > 1200 {
+                print(String(format: "tab-overflow: WARN selected tab took %.3f ms (> 1200 ms): %@", elapsed, tag))
+            }
+            if TabProbe.traceSelection {
+                let row: [String: Any] = ["case": tag, "tab": tab.id, "debounce_ms": TabProbe.selectionDelayMilliseconds,
+                    "visible": ready && elapsed != nil, "visible_ms": elapsed.map { $0 as Any } ?? NSNull(),
+                    "task_ms": timing.taskAfter.map { milliseconds($0) as Any } ?? NSNull(),
+                    "scrolled": timing.scrolled, "initially_visible": timing.initiallyVisible]
+                if let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]), let json = String(data: data, encoding: .utf8) {
+                    print("tab-selection-timing: \(json)")
+                }
+            }
+            TabProbe.selectionTiming = nil
+            return ready && elapsed != nil
         }
         func picture(_ win: NSWindow, _ file: String) {
             typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
@@ -36,7 +61,7 @@ extension ChromeTests {
                   let img = unsafeBitCast(sym, to: Fn.self)(.null, 8, UInt32(win.windowNumber), 1)?.takeRetainedValue() else { return }
             try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(file).png"))
         }
-        for count in [20, 40] {
+        for count in focused ? [40] : [20, 40] {
             let model = AppModel(store: .previewManyTabs(count))
             let size = NSSize(width: 1200, height: 800)
             let host = NSHostingView(rootView: AnyView(RootView(flat: false).environment(model).frame(width: size.width, height: size.height)))
@@ -46,8 +71,8 @@ extension ChromeTests {
             win.contentView = host; win.setFrameOrigin(NSPoint(x: -3000, y: -3000)); win.orderFrontRegardless()
             try? await Task.sleep(for: .seconds(1.5))
             guard let ws = model.store.workspaces.first, let first = ws.tabs.first, let last = ws.tabs.last else { step("\(count) tabs: store", false); continue }
-            for w in [1200, 1600, 2000] {
-                for side in [true, false] {
+            for w in focused ? [1600] : [1200, 1600, 2000] {
+                for side in focused ? [false] : [true, false] {
                     let tag = "\(count) tabs, \(w) wide, sidebar \(side ? "on" : "off")"
                     host.rootView = AnyView(RootView(flat: false).environment(model).frame(width: CGFloat(w), height: 800))
                     win.setContentSize(NSSize(width: CGFloat(w), height: 800))
@@ -67,8 +92,7 @@ extension ChromeTests {
                         step("\(tag) windowed: toolbar row measured", false)
                     }
                     picture(win, "\(count)-\(w)-\(side ? "side" : "noside")-windowed")
-                    model.select(tab: last, in: ws)
-                    let windowedReady = await selectedTabVisible(last.id)
+                    let windowedReady = await selectedTabVisible(last, in: ws, model: model, host: .toolbar, tag: "\(tag) windowed")
                     let pill = TabProbe.pills[last.id] ?? .zero, island = TabProbe.island
                     step("\(tag) windowed: last tab \(f(pill)) inside island \(f(island))",
                          windowedReady && pill.width > 0 && pill.minX >= island.minX - 0.5 && pill.maxX <= island.maxX + 0.5)
@@ -82,8 +106,7 @@ extension ChromeTests {
                     step("\(tag) full screen: island \(f(ci)), buttons \(f(ca)), toggle \(f(ct))",
                          ci.width > 0 && ca.width > 0 && ci.maxX <= ca.minX + 1 && ci.minX >= ct.maxX - 1 && ca.maxX <= CGFloat(w))
                     picture(win, "\(count)-\(w)-\(side ? "side" : "noside")-fullscreen")
-                    model.select(tab: last, in: ws)
-                    let fullScreenReady = await selectedTabVisible(last.id)
+                    let fullScreenReady = await selectedTabVisible(last, in: ws, model: model, host: .content, tag: "\(tag) full screen")
                     let fp = TabProbe.pills[last.id] ?? .zero, fi = TabProbe.island
                     step("\(tag) full screen: last tab \(f(fp)) inside island \(f(fi))",
                          fullScreenReady && fp.width > 0 && fp.minX >= fi.minX - 0.5 && fp.maxX <= fi.maxX + 0.5)
