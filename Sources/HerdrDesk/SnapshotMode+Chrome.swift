@@ -333,6 +333,8 @@ import SwiftUI
 
     static func runRootWidthTest() async {
         var failures = 0
+        // Controlled delayed observer: exercise an animation finishing while the sampling task is suspended.
+        let sampleDelay = min(2000, max(4, Int(ProcessInfo.processInfo.environment["ROOT_SAMPLE_DELAY_MS"] ?? "4") ?? 4))
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1; print("root-width: failed step: \(n)") } else { print("root-width: \(n) ok") } }
         for w in [CGFloat(960), 1200] {
             let model = AppModel(store: .preview)
@@ -369,23 +371,35 @@ import SwiftUI
                 }
                 model.setSidebarVisibility(.all)
                 try? await Task.sleep(for: .milliseconds(600))
+                let shownPanel = ChromeProbe.panel, shownDetail = ChromeProbe.detail
                 // While the sidebar slides in (toggle): the root's x, sampled every ~4 ms.
                 model.toggleSidebar(); try? await Task.sleep(for: .milliseconds(700))
                 var xs: [CGFloat] = [], panels: [CGFloat] = []
                 let t0 = Date()
                 model.toggleSidebar()
                 var trace: [String] = []
-                while Date().timeIntervalSince(t0) < 0.6 {
+                var finished = false
+                while true {
                     xs.append(ChromeProbe.root.minX)
                     if panels.last != ChromeProbe.panel.minX { panels.append(ChromeProbe.panel.minX) }
                     let r = ChromeProbe.root, d = ChromeProbe.detail, pn = ChromeProbe.panel
                     let line = String(format: "root %.0f+%.0f detail %.0f+%.0f panel %.0f+%.0f", r.minX, r.width, d.minX, d.width, pn.minX, pn.width)
                     if trace.last != line { trace.append(line) }
-                    try? await Task.sleep(for: .milliseconds(4))
+                    let controller = WindowWidthTracker.splitView(in: win.contentView)?.delegate as? NSSplitViewController
+                    let sidebar = controller?.splitViewItems.first(where: { $0.behavior == .sidebar })
+                    let elapsed = Date().timeIntervalSince(t0)
+                    // Always sample after resuming. A busy main actor can resume beyond the old 0.6 s loop guard,
+                    // leaving a mid-animation sample compared with a newer geometry value. Observe the full original
+                    // interval, then require the real native and placed endpoint, with a deadline if it never arrives.
+                    finished = elapsed >= 0.6 && sidebar?.isCollapsed == false
+                        && abs(pn.minX - shownPanel.minX) <= 0.5 && abs(pn.width - shownPanel.width) <= 0.5
+                        && abs(d.minX - shownDetail.minX) <= 0.5
+                    if finished || elapsed >= 5 { break }
+                    try? await Task.sleep(for: .milliseconds(sampleDelay))
                 }
                 if ProcessInfo.processInfo.environment["ROOT_TRACE"] != nil { print(trace.joined(separator: "\n")) }
-                step("\(Int(w)) \(fs ? "full-screen layout" : "windowed"), sidebar slides in: content stays at x 0 (root minX \(Set(xs.map { Int($0) }).sorted()) over \(xs.count) samples), panel moves only right (\(panels.map { Int($0) }))",
-                     xs.allSatisfy { abs($0) <= 0.5 } && zip(panels.dropFirst(), panels).allSatisfy { $0 >= $1 - 0.5 } && (panels.last ?? 0) == ChromeProbe.panel.minX)
+                step("\(Int(w)) \(fs ? "full-screen layout" : "windowed"), sidebar slides in: content stays at x 0 (root minX \(Set(xs.map { Int($0) }).sorted()) over \(xs.count) samples), panel moves only right (\(panels.map { Int($0) })), reached shown endpoint \(finished)",
+                     xs.allSatisfy { abs($0) <= 0.5 } && zip(panels.dropFirst(), panels).allSatisfy { $0 >= $1 - 0.5 } && finished)
             }
             emulateFullScreen(win, model, false)
             // Gone for good: the next window's probes must not be overwritten by this one's late layout passes.

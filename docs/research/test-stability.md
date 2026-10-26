@@ -298,3 +298,58 @@ Final source gate: `disk-guard 5` reported sufficient free space, `swift build`
 printed `Build complete! (5.18s)`, and `swift run HerdrKitChecks` printed
 `OK 2281 checks passed` (exit 0). The full default browser suite separately
 printed `OK 353 checks passed`. No workflow dispatch, push or merge was performed.
+
+
+## Root-width CI follow-up
+
+[Run 40277928912](https://github.com/minchenlee/flockbook/actions/runs/40277928912)
+failed the 1200 pt full-screen slide check. All four root samples were zero and
+the panel samples moved right (`-250, -33`). Those values satisfy the root and
+monotonicity assertions; the remaining assertion compared the last sampled panel
+position against a newer geometry value after the sampling task resumed.
+
+The original loop checked its 0.6 second deadline before sampling. If its last
+sleep resumed after that deadline, it skipped the final frame and compared a
+mid-animation sample with the now-expanded panel. The same predicate exists on
+`b1557bb`, before the native-toggle synchronization in `7cdb677`.
+
+Normal first-invocation comparison, using separate frozen binaries and each
+revision's UI runner, passed root-width 10/10 on `b1557bb` and 10/10 on
+`fix/test-stability@7da09a8`, without retries or skips. That small sample alone
+cannot exclude a regression. An identical controlled 800 ms observer suspension
+then failed all four slide cases on each revision: root x remained zero and the
+recorded panel positions were monotonic. This reproduces the stale-final-sample
+failure independently of `7cdb677`; that product fix is retained.
+
+The observer now always samples after resuming, observes at least the original
+0.6 seconds, and requires the actual native sidebar to be expanded with both the
+panel and detail at the previously verified shown positions. A five-second
+readiness deadline fails a sidebar that never finishes. Root-position and
+monotonic-motion assertions remain unchanged. This replaces the comparison with
+an unsampled frame; it does not loosen the geometric tolerance or change the
+sidebar animation or visibility synchronization.
+
+
+After the fix, the same 800 ms delayed observer passed all four slide cases,
+recording panel positions `-250, 8`, root x zero, and a verified shown endpoint.
+The required fresh-process batches completed without retries or skips:
+
+| Check | Passed | Failed |
+| --- | ---: | ---: |
+| root-width | 10/10 | 0 |
+| sidebar | 10/10 | 0 |
+| chrome | 9/10 | 1 |
+
+Chrome repetition 8 failed the unchanged `glass Full, windowed` pixel comparison:
+sidebar RGB was 0.167/0.167/0.167 while content was 0/0/0. Its native toggle checks
+passed, and the subsequent full-screen surface comparison matched at 0.167.
+`--test-chrome` does not call the changed root-width observer. This new evidence is
+retained as an unresolved capture/surface failure, not retried into a passing
+batch or classified as fixed (`hg-chrome-surface-capture-flake`). No cause for that
+separate failure is claimed here.
+
+Source gate: `swift build` printed `Build complete! (50.34s)` and
+`swift run HerdrKitChecks` printed `OK 2281 checks passed` (exit 0).
+The branch remains `fix/test-stability`; no product source, animation behavior,
+workflow or release-note behavior changed in this follow-up. No push or remote
+CI rerun was performed.
