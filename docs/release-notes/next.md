@@ -10,3 +10,5 @@ One short line: what this release is about.
 ### 🐛 Bug Fixes
 
 ### ⚙️ Changes
+
+- Earlier conversation history keeps the reading position when an intermediate view moves during layout.

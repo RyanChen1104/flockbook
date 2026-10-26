@@ -684,17 +684,18 @@ private struct EntryRow: View, Equatable {
 /// In the background of the anchor row: when SwiftUI places the row (while the frame is drawn), the view moves by as much
 /// as the row did, so that frame shows the row where it was. It watches its host and the document: SwiftUI can move a
 /// parent of the row, and then only the document's frame changes (it grew by the rows that came in above).
-private struct AnchorProbe: NSViewRepresentable {
+struct AnchorProbe: NSViewRepresentable {
     let tracker: ConversationView.BottomTracker
     let key: String
     final class Probe: NSView {
         weak var tracker: ConversationView.BottomTracker?
         var key = ""
-        private var watched: [NSView] = []
+        private let watched = NSHashTable<NSView>.weakObjects()
         private func watch(_ views: [NSView]) {
-            for w in watched { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
-            watched = views
+            for w in watched.allObjects { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
+            watched.removeAllObjects()
             for w in views {
+                watched.add(w)
                 w.postsFrameChangedNotifications = true
                 NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSView.frameDidChangeNotification, object: w)
             }
@@ -703,9 +704,20 @@ private struct AnchorProbe: NSViewRepresentable {
         /// The first placement comes before the probe is in a window (no scroll view yet).
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); rewatch() }
         private func rewatch() {
-            watch([superview, window == nil ? nil : enclosingScrollView?.documentView].compactMap { $0 })
+            // SwiftUI may place any intermediate ancestor while the immediate host and document keep their frames.
+            // Observe that placement in the same transaction, before the delayed fallback can move a drawn row.
+            var ancestors = [self as NSView]
+            let document = enclosingScrollView?.documentView
+            var next = superview
+            while let view = next {
+                ancestors.append(view)
+                if view === document { break }
+                next = view.superview
+            }
+            watch(ancestors)
             moved()
         }
+        deinit { NotificationCenter.default.removeObserver(self) }
         @objc func moved() {
             guard let t = tracker, window != nil, let sv = enclosingScrollView else { return }
             t.scrollView = sv; t.probe = self; t.probeKey = key

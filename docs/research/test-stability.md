@@ -72,3 +72,14 @@ names. The current workflow uses `kit-macos15-${{ github.run_id }}` and
 `app-macos15-${{ github.run_id }}` with overwrite on upload. A failed-job-only rerun
 therefore addresses the original build's artifact. No further workflow change is
 made; this is static verification, not a newly executed remote rerun.
+
+## Churn anchor placement
+
+A deterministic offscreen fixture moves an intermediate ancestor by 120 pt while
+the immediate parent and document retain their frames. The old observer produces
+0 pt compensation; observing the full ancestor chain produces 120 pt immediately,
+before any delayed fallback can run. Observers are held weakly and removed on
+teardown. The full churn drift and delayed-correction assertions are retained.
+
+Focused red/green command:
+`HerdrDesk --test-conversation-churn anchor-placement-only`.

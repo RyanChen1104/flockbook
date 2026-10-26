@@ -21,7 +21,9 @@ extension ContentTests {
         // `--test-conversation-churn <rows>`: rows on screen (default 150, one page); a long session read far back has more.
         if let i = args.firstIndex(of: "--test-conversation-churn"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { ConversationView.page = n }
         print("churn-test: \(ConversationView.page) rows shown of a 3000-item session")
-        var failures = 0
+        let placementOK = anchorPlacement()
+        if args.contains("anchor-placement-only") { exit(placementOK ? 0 : 1) }
+        var failures = placementOK ? 0 : 1
         let t0 = Date()
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("churn-test: \(n) \(ok ? "ok" : "FAIL")") }
         // On a shared CI runner, stall times and the short-lived notice measure how busy the machine is: there a miss is
