@@ -24,7 +24,16 @@ extension ContentTests {
         let moved = scroll.contentView.bounds.minY - before
         let ok = abs(moved - 120) < 0.5
         print("churn-test: intermediate ancestor placement compensates before the next frame (\(Int(moved)) pt, want 120) \(ok ? "ok" : "FAIL")")
+        let reboundTop = probe.convert(probe.bounds, to: doc).minY - ConversationView.listPadding
+        let reboundBefore = scroll.contentView.bounds.minY
+        tracker.anchor = ("replacement", reboundTop, reboundBefore, Date().addingTimeInterval(30))
+        tracker.tops["replacement"] = reboundTop
+        outer.setFrameOrigin(NSPoint(x: 0, y: outer.frame.minY + 80))
+        probe.bind(tracker, key: "replacement")
+        let rebound = scroll.contentView.bounds.minY - reboundBefore
+        let reboundOK = abs(rebound - 80) < 0.5
+        print("churn-test: rebinding a placed probe compensates immediately (\(Int(rebound)) pt, want 80) \(reboundOK ? "ok" : "FAIL")")
         win.contentView = nil; win.orderOut(nil)
-        return ok
+        return ok && reboundOK
     }
 }

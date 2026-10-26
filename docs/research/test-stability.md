@@ -182,3 +182,13 @@ run-loop source can handle an AppKit event instead of the overdue timer, which
 produced a false zero in an intermediate full churn run. The full churn check now
 runs both the positive and negative meter controls before its scenarios. No
 performance budget was increased.
+
+## Reused anchor probe identity
+
+Frame observation alone is insufficient when SwiftUI reuses a probe that is
+already placed and binds it to a different anchor key. The old update path only
+assigned the new tracker/key, leaving the measurements stale until a later
+notification or fallback. The controlled rebind case moved 80 pt but compensated
+0 pt. Binding now refreshes the probe immediately. Twenty fresh native controls
+passed both intermediate-ancestor placement (120 pt) and rebound identity (80 pt).
+Full churn stress results are recorded separately from these focused controls.

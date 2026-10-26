@@ -472,7 +472,10 @@ struct ConversationView: View {
             if let sv = tracker.scrollView {
                 let was = sv.contentView.bounds.minY
                 tracker.fixNow(sv, partly: true)
-                if abs(sv.contentView.bounds.minY - was) > 0.5 { ConversationProbe.lateFixes += 1 }
+                if abs(sv.contentView.bounds.minY - was) > 0.5 {
+                    ConversationProbe.lateFixes += 1
+                    if ConversationProbe.enabled { print("churn-trace: fallback compensation \(sv.contentView.bounds.minY - was) pt, from \(was), document \(sv.documentView?.frame.height ?? 0)") }
+                }
                 return
             }
             guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
@@ -718,14 +721,18 @@ struct AnchorProbe: NSViewRepresentable {
             moved()
         }
         deinit { NotificationCenter.default.removeObserver(self) }
+        func bind(_ tracker: ConversationView.BottomTracker, key: String) {
+            self.tracker = tracker; self.key = key
+            moved()   // a reused, already placed NSView need not receive another frame notification
+        }
         @objc func moved() {
             guard let t = tracker, window != nil, let sv = enclosingScrollView else { return }
             t.scrollView = sv; t.probe = self; t.probeKey = key
             t.fixNow(sv)
         }
     }
-    func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; v.key = key; return v }
-    func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker; v.key = key }
+    func makeNSView(context: Context) -> Probe { let v = Probe(); v.bind(tracker, key: key); return v }
+    func updateNSView(_ v: Probe, context: Context) { v.bind(tracker, key: key) }
 }
 
 /// "Loading earlier…" over the top of the rows while older rows come in.
