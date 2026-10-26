@@ -353,3 +353,9 @@ Source gate: `swift build` printed `Build complete! (50.34s)` and
 The branch remains `fix/test-stability`; no product source, animation behavior,
 workflow or release-note behavior changed in this follow-up. No push or remote
 CI rerun was performed.
+
+## Subsequent tab-overflow CI follow-up
+
+The later failure in run 40282379616 and its native-completion investigation,
+controlled red/green evidence, revision comparison and four-check validation are
+recorded separately in [tab-overflow-checks.md](tab-overflow-checks.md).

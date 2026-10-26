@@ -9,11 +9,27 @@ extension ChromeTests {
     /// item falls into the ">>" overflow, and the last tab, once selected, scrolls fully into the island.
     /// Pictures: build/snapshots-tab-overflow/.
     static func runTabOverflowTest() async {
+        TabProbe.selectionDelayMilliseconds = min(4000, max(200, Int(ProcessInfo.processInfo.environment["TAB_OVERFLOW_SCROLL_DELAY_MS"] ?? "200") ?? 200))
+        TabProbe.traceSelection = ProcessInfo.processInfo.environment["TAB_OVERFLOW_TRACE"] != nil
+        if TabProbe.traceSelection { print("tab-overflow: selection debounce \(TabProbe.selectionDelayMilliseconds) ms, trace enabled") }
         var failures = 0
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("tab-overflow: \(n) \(ok ? "ok" : "FAIL")") }
         let dir = "build/snapshots-tab-overflow"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         func f(_ r: CGRect) -> String { String(format: "x %.0f...%.0f w %.0f", r.minX, r.maxX, r.width) }
+        func selectedTabVisible(_ id: String) async -> Bool {
+            let start = ContinuousClock.now
+            // Keep the original observation interval, so an old in-view probe cannot pass before selection updates.
+            // A delayed selection task may still be pending then: wait for its actual placed result, with a deadline.
+            try? await Task.sleep(for: .milliseconds(1200))
+            let ready = await CheckWait.until(.seconds(5) - start.duration(to: .now)) {
+                let pill = TabProbe.pills[id] ?? .zero, island = TabProbe.island
+                return island.width > 0 && pill.width > 0
+                    && pill.minX >= island.minX - 0.5 && pill.maxX <= island.maxX + 0.5
+            }
+            if TabProbe.traceSelection { print("tab-overflow: selected \(id) visible \(ready) after \(start.duration(to: .now))") }
+            return ready
+        }
         func picture(_ win: NSWindow, _ file: String) {
             typealias Fn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
             guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
@@ -52,10 +68,10 @@ extension ChromeTests {
                     }
                     picture(win, "\(count)-\(w)-\(side ? "side" : "noside")-windowed")
                     model.select(tab: last, in: ws)
-                    try? await Task.sleep(for: .seconds(1.2))
+                    let windowedReady = await selectedTabVisible(last.id)
                     let pill = TabProbe.pills[last.id] ?? .zero, island = TabProbe.island
                     step("\(tag) windowed: last tab \(f(pill)) inside island \(f(island))",
-                         pill.width > 0 && pill.minX >= island.minX - 0.5 && pill.maxX <= island.maxX + 0.5)
+                         windowedReady && pill.width > 0 && pill.minX >= island.minX - 0.5 && pill.maxX <= island.maxX + 0.5)
 
                     // Full-screen layout at rest: the content copy, where the toolbar laid its items out.
                     model.select(tab: first, in: ws)
@@ -67,10 +83,10 @@ extension ChromeTests {
                          ci.width > 0 && ca.width > 0 && ci.maxX <= ca.minX + 1 && ci.minX >= ct.maxX - 1 && ca.maxX <= CGFloat(w))
                     picture(win, "\(count)-\(w)-\(side ? "side" : "noside")-fullscreen")
                     model.select(tab: last, in: ws)
-                    try? await Task.sleep(for: .seconds(1.2))
+                    let fullScreenReady = await selectedTabVisible(last.id)
                     let fp = TabProbe.pills[last.id] ?? .zero, fi = TabProbe.island
                     step("\(tag) full screen: last tab \(f(fp)) inside island \(f(fi))",
-                         fp.width > 0 && fp.minX >= fi.minX - 0.5 && fp.maxX <= fi.maxX + 0.5)
+                         fullScreenReady && fp.width > 0 && fp.minX >= fi.minX - 0.5 && fp.maxX <= fi.maxX + 0.5)
                     // Full screen at rest on a one-tab workspace, then over to the many tabs: the toolbar is hidden
                     // the whole time (as at rest in real full screen), so its layout is the one-tab workspace's.
                     if let small = model.store.workspaces.last, small.id != ws.id {
@@ -97,7 +113,7 @@ extension ChromeTests {
                     emulateFullScreen(win, model, false)
                 }
             }
-            win.orderOut(nil)
+            win.contentView = nil; win.orderOut(nil)
         }
         print("tab-overflow: \(failures == 0 ? "PASS" : "FAIL x\(failures)")")
         NSApp.terminate(nil)

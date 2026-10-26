@@ -81,9 +81,12 @@ struct TopRow: View {
         // Scroll the selected tab into view after the update pass, not inside it.
         .task(id: model.tab?.id) {
             // Debounced: rapid tab churn cancels earlier runs; no scroll when the tab is already in view.
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: .milliseconds(TabProbe.selectionDelayMilliseconds))
             // scrollTo always scrolls: the strip forgets its offset when the workspace changes, a remembered id would not.
-            if !Task.isCancelled, let id = model.tab?.id, !visibleTabs.contains(id) { scroll.scrollTo(id: id, anchor: .center) }
+            if !Task.isCancelled, let id = model.tab?.id, !visibleTabs.contains(id) {
+                if TabProbe.traceSelection { print("tab-scroll-trace: \(host) scroll selected \(id), delay \(TabProbe.selectionDelayMilliseconds) ms") }
+                scroll.scrollTo(id: id, anchor: .center)
+            }
         }
         // herdr's snapshot caught up with the drop (or anything else changed the tabs): show its order again.
         .onChange(of: tabs.map(\.id)) { _, _ in dropped = nil }
@@ -260,6 +263,9 @@ struct TabPill: View {
 
 /// Test probes: global frame of each tab's label and of each tab's mouse view (the whole pill).
 enum TabProbe {
+    /// Controlled delayed selection work in the offscreen overflow check; normal debounce remains 200 ms.
+    @MainActor static var selectionDelayMilliseconds = 200
+    @MainActor static var traceSelection = false
     nonisolated(unsafe) static var labels: [String: CGRect] = [:]
     nonisolated(unsafe) static var pills: [String: CGRect] = [:]
     nonisolated(unsafe) static var island: CGRect = .zero
