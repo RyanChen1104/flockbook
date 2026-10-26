@@ -151,3 +151,20 @@ A missing frame/display state fails explicitly at a five-second readiness deadli
 Twenty fresh full `termtheme` checks with `TERMTHEME_FRAME_DELAY_MS=2000` passed:
 0/20 failed or skipped. The intermediate frame-only version failed 1/1 delayed
 runs; the historical CI incidence was 1/72 observed job executions.
+
+## Picture cache and thumbnail lifecycle checks
+
+[NSCache permits automatic eviction](https://developer.apple.com/documentation/foundation/nscache),
+so an immediate cache hit is not a reliable correctness requirement under memory
+pressure. The cache check now uses its own cache, forces eviction, and verifies
+that the same thumbnail size decodes again. It retains stale-ref and fingerprint
+checks. The displayed image is read from the actual thumbnail layer rather than
+from the cache; readiness and release wait on their respective conditions with a
+deadline. The preceding swap window's content is detached so it cannot retain the
+same image during the release scenario.
+
+All 20 fresh full `pictures` offscreen checks passed, including loaded=true and
+released=true (0/20 failed or skipped). Historical CI had 0/112 picture failures;
+the previously reported local rare flake was not independently reproduced here.
+This corrects the cache contract and observation assumptions without changing
+image loading, cache limits or the thumbnail lifetime in the product.
