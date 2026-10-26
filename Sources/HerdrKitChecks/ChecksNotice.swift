@@ -175,6 +175,26 @@ import Foundation
         check(ctrl.body == "echo red", "notice text: colour codes and control characters removed (\(ctrl.body.debugDescription))")
     }
 
+    // A box taller than the pane: its top rule, header and the start of the command scrolled off. The screen top is
+    // not the header: the card says the command is too long to show and leaves it to the Screen; the buttons still work.
+    do {
+        let rule = String(repeating: "╌", count: 40)
+        let clipped = (21...40).map { " │ line \($0) of a long heredoc" }.joined(separator: "\n")
+            + "\n\(rule)\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend"
+        let r = N.screenRequest(clipped)
+        check(r != nil && r?.title == N.clippedTitle && r?.command == "" && r?.toolName == "",
+              "notice clipped: no header or command from the screen top (\(r?.title ?? "nil") / \(r?.command.debugDescription ?? "nil"))")
+        check(N.screenPrompt(clipped) != nil && N.screenPrompt(clipped) == r?.toolUseId, "notice clipped: the prompt still has its screen id")
+        let plain = (21...40).map { " line \($0) of a long heredoc" }.joined(separator: "\n")
+            + "\n\(rule)\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend"
+        check(N.screenRequest(plain)?.title == N.clippedTitle, "notice clipped: no gutter, only the command's closing rule left -> clipped too")
+        let st = N.PaneState(agentKind: "claude", blocked: true, pendingToolUseId: "toolu_7", screen: clipped, pendingTool: "Bash",
+                             pendingCommand: (1...40).map { "line \($0) of a long heredoc" }.joined(separator: "\n"))
+        check(N.prompt(st, writes: true) == N.screenPrompt(clipped), "notice clipped: the buttons answer the prompt on screen")
+        let push = Hub.openApproval(st, logged: PermissionRequest(title: "Bash command", command: "x", toolName: "Bash", toolUseId: "toolu_7"))
+        check(push?.title == N.clippedTitle && push?.id == N.screenPrompt(clipped), "notice clipped: the phone's card says so too (\(push?.title ?? "nil"))")
+    }
+
     // Claude 2.1.296 draws a "│" gutter on a wrapped command and breaks it mid-word (seen live).
     do {
         let rule = String(repeating: "╌", count: 40)

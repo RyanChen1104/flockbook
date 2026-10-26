@@ -937,7 +937,9 @@ struct ApprovalCard: View {
                 Text(request.title).font(.headline).lineLimit(maxHeight == nil ? nil : 3)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { head = $0 }
-            if maxHeight != nil {
+            if request.command.isEmpty {
+                // No command to show (a prompt box taller than the pane: `ApprovalNotice.clippedTitle`).
+            } else if maxHeight != nil {
                 // A text view's own height is taken at the narrowest width (a window's minimum size asks at width 0): a long
                 // command there made the window tens of thousands of points tall. In a scroll view of measured height it never is.
                 ScrollView {

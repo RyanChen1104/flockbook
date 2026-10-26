@@ -6,13 +6,20 @@ import SwiftUI
 /// is read from a synthetic screen and shown on the preview store's blocked tab; no button is pressed.
 extension ContentTests {
     /// Claude Code's prompt for a long heredoc as a 40-line pane read shows it: the box's top rule and header have scrolled
-    /// off, so the whole visible screen becomes the card's command.
-    static func longPromptScreen() -> String {
+    /// off. Not a card with the command: the screen's top is a line of the command (`ApprovalNotice.clippedTitle`).
+    static func clippedPromptScreen() -> String {
         let lines = (21...60).map { "│ line \($0): lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore \($0)" }
         return (lines + ["│ EOF", "│ wc -l report.txt", String(repeating: "╌", count: 118),
                          "Heredoc with unquoted delimiter undergoes shell expansion", "", "Do you want to proceed?",
                          "❯ 1. Yes", "  2. Yes, and switch to auto mode · auto mode handles these prompts for you", "  3. No", "",
                          "Esc to cancel · Tab to amend"]).joined(separator: "\n")
+    }
+    /// A whole box (a pane tall enough) with a 42-line heredoc: the tallest card.
+    static func longPromptScreen() -> String {
+        let lines = (1...40).map { "│ line \($0): lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore \($0)" }
+        return ([String(repeating: "─", count: 118), " Bash command", "", String(repeating: "╌", count: 118), "│ cat > report.txt <<EOF"] + lines
+                + ["│ EOF", String(repeating: "╌", count: 118), "Write a long report", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "",
+                   "Esc to cancel · Tab to amend"]).joined(separator: "\n")
     }
     /// A whole box whose command is one word with no break point.
     static func widePromptScreen() -> String {
@@ -28,6 +35,8 @@ extension ContentTests {
         let long = ApprovalNotice.screenRequest(longPromptScreen())
         let wide = ApprovalNotice.screenRequest(widePromptScreen())
         step("long fixture reads as a card (\(long?.command.split(separator: "\n").count ?? 0) lines)", (long?.command.split(separator: "\n").count ?? 0) > 30)
+        let clipped = ApprovalNotice.screenRequest(clippedPromptScreen())
+        step("clipped fixture: a card with no command (\(clipped?.title ?? "nil"))", clipped?.title == ApprovalNotice.clippedTitle && clipped?.command == "")
         step("wide fixture reads as a card (\(wide?.command.count ?? 0) chars)", (wide?.command.count ?? 0) > 1000)
 
         // "none": the same window without a card, the baseline. A window is clamped to the screen (a CI runner's is 1024x768),
