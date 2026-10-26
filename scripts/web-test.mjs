@@ -520,6 +520,21 @@ async function fakeRun() {
   await p.type("#composer-text", "Typing while it compacts");
   await p.shot("composer-compacting");
   await p.shot("composer-compacting", true);
+  // Screen: opened by the reader, it stays open while hub ticks bring a new screen (each re-renders the page); closed
+  // again, it stays closed.
+  const screenOpen = "document.querySelector('details.screen')?.open";
+  const twoTicks = async (what) => {
+    for (const n of [1, 2]) {
+      const before = await p.eval("document.querySelector('.screen pre')?.textContent ?? ''");
+      check(await p.until(`(document.querySelector('.screen pre')?.textContent ?? '') !== ${JSON.stringify(before)}`) === true, `${what}: tick ${n} brings a new screen`);
+    }
+  };
+  check(await p.eval(screenOpen) === false && await p.click("details.screen summary") === true && await p.eval(screenOpen) === true, "screen: the reader opens it");
+  await twoTicks("screen open");
+  check(await p.eval(screenOpen) === true, "screen: still open after two ticks");
+  await p.click("details.screen summary");
+  await twoTicks("screen closed");
+  check(await p.eval(screenOpen) === false, "screen: closed again, stays closed after two ticks");
   await p.type("#composer-text", "compact done");
   await p.click("#composer-send");
   check(await p.until("!(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting')") === true, "compacting: done");

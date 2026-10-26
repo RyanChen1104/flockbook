@@ -76,6 +76,11 @@ const state = {
   placed: new Set<string>(),
   /** Panes whose Claude Code status line is open: every tag and when it was updated. */
   statusOpen: new Set<string>(),
+  /** Each pane's Screen as the reader left it, open or closed; a pane not in it shows its default. A hub tick re-renders
+   *  the page and builds the Screen again: without this it took its default back. */
+  screenOpen: new Map<string, boolean>(),
+  /** Tool chips the reader opened (`<pane> <row id> <chip index>`): a running call changes its row, which is built again. */
+  chipsOpen: new Set<string>(),
   /** On a wide screen, the reader hid the agents beside the conversation (kept on this device). */
   sideHidden: load(SIDE_KEY) === "hidden",
 };
@@ -1089,8 +1094,7 @@ function conversationScreen(pane: string): HTMLElement {
   }
   items.push(...rowsFor(pane, rows));
   if (!rows.length && !v.screen && team !== "waitingForLead") items.push(h("p", { class: "center muted" }, where ? "Loading…" : "This agent is gone."));
-  if (v.screen && (!rows.length || where?.p.agent === undefined)) items.push(screenView(v.screen, true));
-  else if (v.screen) items.push(screenView(v.screen, false));
+  if (v.screen) items.push(screenView(pane, v.screen, !rows.length || where?.p.agent === undefined));
   if (v.queue && status === "working") items.push(queueView(pane, v.queue));
 
   const card = v.approval ? approvalCard(pane, v.approval) : v.question ? questionCard(pane, v.question, v.items) : null;
@@ -1212,10 +1216,15 @@ function itemView(it: Item, pane: string): HTMLElement {
     case "assistant": return h("div", { class: "msg assistant" }, markdown(it.text));
     case "status": return h("p", { class: "status-line" }, it.text);
     case "tools":
-      return h("div", { class: "tools" }, ...it.tools.map((c) => h("details", { class: "chip" },
+      return h("div", { class: "tools" }, ...it.tools.map((c, i) => {
+        const key = `${pane} ${it.id} ${i}`;
+        const e: HTMLDetailsElement = h("details", { class: "chip", open: state.chipsOpen.has(key),
+          ontoggle: () => { if (e.open) state.chipsOpen.add(key); else state.chipsOpen.delete(key); } },
         h("summary", {}, c.text),
         h("ul", {}, ...c.calls.map((call) => h("li", { class: call.error ? "error" : call.done ? "" : "running" },
-          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary)))))), pictures);
+          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary)))));
+        return e;
+      }), pictures);
     case "approval": {
       const a = it.approval;
       return h("div", { class: `logged ${a.state}` }, h("span", { class: "muted" }, a.state === "pending" ? "Asks: " : "Asked: "), a.title, " ", h("code", {}, a.command));
@@ -1256,8 +1265,10 @@ function queueView(pane: string, q: Queue): HTMLElement {
         "Pull back to edit") : null));
 }
 
-function screenView(text: string, open: boolean): HTMLElement {
-  return h("details", { class: "screen", open }, h("summary", {}, "Screen"), h("pre", {}, text));
+function screenView(pane: string, text: string, byDefault: boolean): HTMLElement {
+  const e: HTMLDetailsElement = h("details", { class: "screen", open: state.screenOpen.get(pane) ?? byDefault,
+    ontoggle: () => { state.screenOpen.set(pane, e.open); } }, h("summary", {}, "Screen"), h("pre", {}, text));
+  return e;
 }
 
 function approvalCard(pane: string, a: Approval): HTMLElement {
