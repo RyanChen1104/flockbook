@@ -13,3 +13,6 @@ One short line: what this release is about.
 - On the phone and iPad, a Screen you open stays open while the agent works, and an opened tool chip stays open while its command runs. Before, the next update closed them.
 
 ### ⚙️ Changes
+
+- Earlier conversation history keeps the reading position when an intermediate view moves during layout.
+- The sidebar state stays in sync with its native show and hide animation.

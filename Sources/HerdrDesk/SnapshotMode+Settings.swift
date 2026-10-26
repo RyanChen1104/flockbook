@@ -594,7 +594,7 @@ extension ChromeTests {
         }
 
         // The sidebar hidden: the page brings its own list, Back on top.
-        model.sidebarVisibility = .detailOnly; try? await Task.sleep(for: .milliseconds(800))
+        model.setSidebarVisibility(.detailOnly); try? await Task.sleep(for: .milliseconds(800))
         model.showSettings(); try? await Task.sleep(for: .milliseconds(800))
         let own = SettingsProbe.pageList, page2 = SettingsProbe.page
         step("sidebar hidden: the page shows Back and the tabs on its left (\(own.integral) in \(page2.integral)), Back at \(SettingsProbe.back.integral)",
@@ -606,7 +606,7 @@ extension ChromeTests {
         win.appearance = NSAppearance(named: .aqua); try? await Task.sleep(for: .milliseconds(300))
         await click(SettingsProbe.back)
         step("sidebar hidden: Back returns (\(model.screen)), the sidebar stays hidden (\(model.sidebarVisibility))", model.screen == .tab && model.sidebarVisibility == .detailOnly)
-        model.sidebarVisibility = .all; try? await Task.sleep(for: .milliseconds(600))
+        model.setSidebarVisibility(.all); try? await Task.sleep(for: .milliseconds(600))
 
         // Full screen (the model's flag: the row there is window content, FullScreenTopRow): none while Settings shows.
         model.fullScreen = true; try? await Task.sleep(for: .milliseconds(600))

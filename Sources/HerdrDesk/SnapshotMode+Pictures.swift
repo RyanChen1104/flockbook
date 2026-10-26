@@ -72,14 +72,18 @@ extension ContentTests {
         step("tool group height before load \(cb) = after \(ca), picture 240 high", cb >= 26 + 240 && abs(cb - ca) < 0.5)
 
         // Decoded once, kept in a bounded cache; a ref that does not match the file loads nothing.
-        step("cache is bounded", PictureCache.shared.countLimit > 0 && PictureCache.shared.totalCostLimit > 0)
-        let thumb = await PictureCache.shared.load(url: url, ref: userRef, maxPixel: 240)
+        let cache = PictureCache()   // independent of asynchronous thumbnails in the height fixtures
+        step("cache is bounded", cache.countLimit > 0 && cache.totalCostLimit > 0)
+        let thumb = await cache.load(url: url, ref: userRef, maxPixel: 240)
         step("thumbnail decodes (\(String(describing: thumb?.size)))", thumb != nil)
-        step("second ask is a cache hit", PictureCache.shared.cached(url: url, ref: userRef, maxPixel: 240) != nil)
+        // NSCache may evict immediately under pressure. Test recovery after deterministic eviction, not retention.
+        cache.removeAll()
+        let reloaded = await cache.load(url: url, ref: userRef, maxPixel: 240)
+        step("an evicted thumbnail decodes again with its original size", reloaded != nil && reloaded?.size == thumb?.size)
         let wrong = LogImage.Ref(format: .png, width: 9, height: 9, offset: userRef.offset, index: 0, digest: userRef.digest)
-        step("a stale ref loads nothing", await PictureCache.shared.load(url: url, ref: wrong, maxPixel: 240) == nil)
+        step("a stale ref loads nothing", await cache.load(url: url, ref: wrong, maxPixel: 240) == nil)
         var otherDigest = userRef; otherDigest.digest &+= 1
-        step("the cache key has the fingerprint", PictureCache.shared.cached(url: url, ref: otherDigest, maxPixel: 240) == nil)
+        step("the cache key has the fingerprint", cache.cached(url: url, ref: otherDigest, maxPixel: 240) == nil)
         var otherSize = userRef; otherSize.width = 800; otherSize.height = 400
         let ids = Set([userRef, otherSize, otherDigest].map { LogPicture.taskID(url: url, ref: $0, maxPixel: 240) })
         step("the load's id changes with the ref's size and fingerprint (\(ids.count) of 3)", ids.count == 3)
@@ -106,7 +110,7 @@ extension ContentTests {
         box.ref = pref(green, 800, 400)
         try? await Task.sleep(for: .seconds(1))
         let c2 = centre("pictures-swap-2")
-        swapWin.orderOut(nil)
+        swapWin.contentView = nil; swapWin.orderOut(nil)
         func rgb(_ c: NSColor?) -> String { c.map { "\(Int($0.redComponent * 255)),\(Int($0.greenComponent * 255)),\(Int($0.blueComponent * 255))" } ?? "nil" }
         step("a new picture at the same place replaces the old thumbnail (\(rgb(c1)) -> \(rgb(c2)))",
              (c1?.redComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) > 0.8 && (c2?.greenComponent ?? 0) - (c2?.redComponent ?? 1) > 0.4)
@@ -125,21 +129,21 @@ extension ContentTests {
         PictureCache.shared.removeAll()
         let gref = pref(green, 800, 400)
         let (lazyWin, lazyView) = offscreen(LazyPictures(ref: gref).environment(\.logURL, swapFile), NSSize(width: 300, height: 300))
-        try? await Task.sleep(for: .seconds(1))
         weak var held: NSImage?
-        autoreleasepool {
-            held = PictureCache.shared.cached(url: swapFile, ref: gref,
-                                              maxPixel: LogPicture.maxPixel(PictureLayout.thumb(gref), scale: lazyWin.backingScaleFactor))
+        // Observe the displayed image, not an NSCache entry that may legitimately be evicted at any time.
+        let loadedLazy = await CheckWait.until {
+            autoreleasepool {
+                held = Self.all(ThumbnailLayer.LayerView.self, in: lazyView).compactMap { $0.layer?.contents as? NSImage }.first
+                return held != nil
+            }
         }
-        let loadedLazy = held != nil
         PictureCache.shared.removeAll()
         func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
         if let sv = scrollViews(lazyView).first, let doc = sv.documentView {
             doc.scroll(NSPoint(x: 0, y: doc.isFlipped ? doc.bounds.height - 300 : 0))
         }
-        try? await Task.sleep(for: .seconds(1))
+        let releasedLazy = await CheckWait.until { autoreleasepool { held == nil } }
         capture(lazyWin, to: "\(Self.dir)/pictures-scrolled.png")
-        let releasedLazy = held == nil
         lazyWin.orderOut(nil)
         step("a picture scrolled out of view lets its thumbnail go (loaded \(loadedLazy), released \(releasedLazy))", loadedLazy && releasedLazy)
 

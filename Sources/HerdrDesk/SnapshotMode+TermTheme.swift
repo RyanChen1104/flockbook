@@ -126,7 +126,8 @@ extension ContentTests {
         let script = tmp + "/herdr"
         let text = "$ ls\r\n" + (30...37).map { "\u{1b}[\($0)mcolour\($0 - 30)\u{1b}[0m" }.joined(separator: " ") + "\r\n$ "
         let frame = #"{"type":"terminal.frame","seq":1,"full":true,"width":80,"height":24,"bytes":"\#(Data(text.utf8).base64EncodedString())"}"#
-        try? "#!/bin/sh\necho '\(frame)'\nsleep 8\n".write(toFile: script, atomically: true, encoding: .utf8)
+        let delay = min(5000, max(0, Int(ProcessInfo.processInfo.environment["TERMTHEME_FRAME_DELAY_MS"] ?? "") ?? 0))
+        try? "#!/bin/sh\nsleep \(Double(delay) / 1000)\necho '\(frame)'\nsleep 8\n".write(toFile: script, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script)
         TerminalNSView.testLauncher = [script]
         defer { TerminalNSView.testLauncher = nil }
@@ -138,7 +139,17 @@ extension ContentTests {
             let (win, host) = offscreen(ZStack { WindowSurface(glass: .off)
                 ObservedTerminal(client: model.store.client, paneId: "w1:p9", terminalId: "term_theme\(mode)\(dark)", writable: true, focused: false) }, size)
             win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            try? await Task.sleep(for: .milliseconds(1500))
+            let received = await CheckWait.until {
+                guard let terminal = terminalView(host), String(decoding: terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("colour7") else { return false }
+                // SwiftTerm queues display updates after feed(): the fixture ends at row 2, column 2 (zero based).
+                let caret = terminal.caretFrame
+                return caret.width > 0 && caret.height > 0
+                    && abs(caret.minX - 2 * caret.width) < 1
+                    && abs(terminal.bounds.height - caret.maxY - 2 * caret.height) < 1
+            }
+            step("\(tag): the synthetic terminal frame arrived before pixel checks", received)
+            guard received else { win.orderOut(nil); continue }
+            host.layoutSubtreeIfNeeded(); win.displayIfNeeded(); CATransaction.flush()
             let path = "\(dir)/termtheme\(mode == .flockbook ? "-flockbook" : "")\(dark ? "-dark" : "").png"
             capture(win, to: path)
             let at = pixels(path, host), px = at?(size.width / 2, size.height - 12)

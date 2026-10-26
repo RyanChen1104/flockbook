@@ -14,8 +14,12 @@ extension ContentTests {
         let (win, _) = offscreen(EarlierFailureView(state: state), NSSize(width: 800, height: 500))
         try? await Task.sleep(for: .milliseconds(600))
         step("the retry action is present", ConversationProbe.pressEarlier != nil)
+        let noticeBefore = ConversationProbe.loadingShows
         ConversationProbe.pressEarlier?()
+        // Deliberately observe after the minimum notice lifetime: testing only its current frame would miss it.
         try? await Task.sleep(for: .seconds(1))
+        step("a late observer retains the notice's actual appearance (current \(ConversationProbe.loading.height), observed \(ConversationProbe.lastLoadingFrame.height))",
+             ConversationProbe.loadingShows > noticeBefore && ConversationProbe.lastLoadingFrame.height > 0)
         step("failure ends loading and shows an explanation", ConversationProbe.earlierFailed && ConversationProbe.loading == .zero)
         step("the tail remains and retry stays available", state.items.count == 3 && ConversationProbe.pressEarlier != nil)
         // Give automatic scroll/layout reactions time to run: a failure cannot keep asking the host.

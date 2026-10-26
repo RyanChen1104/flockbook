@@ -21,7 +21,11 @@ extension ContentTests {
         // `--test-conversation-churn <rows>`: rows on screen (default 150, one page); a long session read far back has more.
         if let i = args.firstIndex(of: "--test-conversation-churn"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { ConversationView.page = n }
         print("churn-test: \(ConversationView.page) rows shown of a 3000-item session")
-        var failures = 0
+        if args.contains("stall-meter-only") { exit(await stallMeterCheck() ? 0 : 1) }
+        let placementOK = anchorPlacement()
+        if args.contains("anchor-placement-only") { exit(placementOK ? 0 : 1) }
+        let meterOK = await stallMeterCheck()
+        var failures = (placementOK ? 0 : 1) + (meterOK ? 0 : 1)
         let t0 = Date()
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("churn-test: \(n) \(ok ? "ok" : "FAIL")") }
         // On a shared CI runner, stall times and the short-lived notice measure how busy the machine is: there a miss is
@@ -296,6 +300,7 @@ extension ContentTests {
             let outside = NSPoint(x: 0, y: -sv.contentInsets.top + ConversationView.nearTop + 400)
             for _ in 0..<2 { sv.contentView.scroll(to: outside); sv.reflectScrolledClipView(sv.contentView); try? await Task.sleep(for: .milliseconds(500)) }
             _ = stall.take()
+            let noticeBefore = ConversationProbe.loadingShows
             sv.contentView.scroll(to: NSPoint(x: 0, y: -sv.contentInsets.top)); sv.reflectScrolledClipView(sv.contentView)
             let before = topMessage(), count = Self.all(MessageTextView.self, in: host).count
             // Feedback: a "Loading earlier" notice over the top of the rows (it moves none of them), gone when they are in.
@@ -303,9 +308,9 @@ extension ContentTests {
             var worst: CGFloat = 0, looks = 0
             func look() { if let b = before, let d = y(of: b.text) { worst = max(worst, abs(d - b.y)); looks += 1 } else { worst = .infinity } }
             for _ in 0..<15 { try? await Task.sleep(for: .milliseconds(8)); look() }
-            let pill = ConversationProbe.loading, viewport = sv.convert(sv.bounds, to: nil)
-            timing("autoload: a Loading earlier notice shows at the top while rows load (\(pill))",
-                 pill.height > 0 && pill.minY >= viewport.minY && pill.maxY <= viewport.maxY)
+            let pill = ConversationProbe.lastLoadingFrame, viewport = sv.convert(sv.bounds, to: nil)
+            step("autoload: a Loading earlier notice was observed at the top while rows loaded (\(pill))",
+                 ConversationProbe.loadingShows > noticeBefore && pill.height > 0 && pill.minY >= viewport.minY && pill.maxY <= viewport.maxY)
             stall.pause(); capture(win, to: "\(dir)/churn-\(ConversationView.page)-autoload-loading\(dark ? "-dark" : "").png"); stall.resume()
             for _ in 0..<60 { try? await Task.sleep(for: .milliseconds(8)); look() }
             step("autoload: while rows come in, the top message never moves (worst \(Int(worst)) pt over \(looks) looks)",
@@ -681,20 +686,27 @@ private struct ProbeView: View {
     private var timer: Timer?
     private var last = Date()
     private var worst: TimeInterval = 0
+    private var paused = false
     func start() {
+        paused = false
         last = Date()
         timer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let now = Date(); self.worst = max(self.worst, now.timeIntervalSince(self.last)); self.last = now
+                let now = Date()
+                if !self.paused { self.worst = max(self.worst, now.timeIntervalSince(self.last)) }
+                self.last = now
             }
         }
         RunLoop.main.add(timer!, forMode: .common)
     }
     func take() -> TimeInterval { defer { worst = 0 }; return worst }
     /// The check's own work starts: the gap so far (an app stall before it) counts, the work's own span does not.
-    func pause() { worst = max(worst, Date().timeIntervalSince(last)) }
-    func resume() { last = Date() }
+    func pause() {
+        if !paused { worst = max(worst, Date().timeIntervalSince(last)) }
+        paused = true
+    }
+    func resume() { last = Date(); paused = false }
     func stop() { timer?.invalidate() }
 }
 

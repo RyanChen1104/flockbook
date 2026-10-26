@@ -472,7 +472,10 @@ struct ConversationView: View {
             if let sv = tracker.scrollView {
                 let was = sv.contentView.bounds.minY
                 tracker.fixNow(sv, partly: true)
-                if abs(sv.contentView.bounds.minY - was) > 0.5 { ConversationProbe.lateFixes += 1 }
+                if abs(sv.contentView.bounds.minY - was) > 0.5 {
+                    ConversationProbe.lateFixes += 1
+                    if ConversationProbe.enabled { print("churn-trace: fallback compensation \(sv.contentView.bounds.minY - was) pt, from \(was), document \(sv.documentView?.frame.height ?? 0)") }
+                }
                 return
             }
             guard !tracker.atBottom, let a = tracker.anchor, a.until > Date(), let top = tracker.tops[a.key], abs(top - a.top) > 0.5 else { return }
@@ -684,17 +687,18 @@ private struct EntryRow: View, Equatable {
 /// In the background of the anchor row: when SwiftUI places the row (while the frame is drawn), the view moves by as much
 /// as the row did, so that frame shows the row where it was. It watches its host and the document: SwiftUI can move a
 /// parent of the row, and then only the document's frame changes (it grew by the rows that came in above).
-private struct AnchorProbe: NSViewRepresentable {
+struct AnchorProbe: NSViewRepresentable {
     let tracker: ConversationView.BottomTracker
     let key: String
     final class Probe: NSView {
         weak var tracker: ConversationView.BottomTracker?
         var key = ""
-        private var watched: [NSView] = []
+        private let watched = NSHashTable<NSView>.weakObjects()
         private func watch(_ views: [NSView]) {
-            for w in watched { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
-            watched = views
+            for w in watched.allObjects { NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: w) }
+            watched.removeAllObjects()
             for w in views {
+                watched.add(w)
                 w.postsFrameChangedNotifications = true
                 NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSView.frameDidChangeNotification, object: w)
             }
@@ -703,8 +707,23 @@ private struct AnchorProbe: NSViewRepresentable {
         /// The first placement comes before the probe is in a window (no scroll view yet).
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); rewatch() }
         private func rewatch() {
-            watch([superview, window == nil ? nil : enclosingScrollView?.documentView].compactMap { $0 })
+            // SwiftUI may place any intermediate ancestor while the immediate host and document keep their frames.
+            // Observe that placement in the same transaction, before the delayed fallback can move a drawn row.
+            var ancestors = [self as NSView]
+            let document = enclosingScrollView?.documentView
+            var next = superview
+            while let view = next {
+                ancestors.append(view)
+                if view === document { break }
+                next = view.superview
+            }
+            watch(ancestors)
             moved()
+        }
+        deinit { NotificationCenter.default.removeObserver(self) }
+        func bind(_ tracker: ConversationView.BottomTracker, key: String) {
+            self.tracker = tracker; self.key = key
+            moved()   // a reused, already placed NSView need not receive another frame notification
         }
         @objc func moved() {
             guard let t = tracker, window != nil, let sv = enclosingScrollView else { return }
@@ -712,8 +731,8 @@ private struct AnchorProbe: NSViewRepresentable {
             t.fixNow(sv)
         }
     }
-    func makeNSView(context: Context) -> Probe { let v = Probe(); v.tracker = tracker; v.key = key; return v }
-    func updateNSView(_ v: Probe, context: Context) { v.tracker = tracker; v.key = key }
+    func makeNSView(context: Context) -> Probe { let v = Probe(); v.bind(tracker, key: key); return v }
+    func updateNSView(_ v: Probe, context: Context) { v.bind(tracker, key: key) }
 }
 
 /// "Loading earlier…" over the top of the rows while older rows come in.
@@ -728,7 +747,13 @@ private struct EarlierNotice: View {
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading earlier messages")
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.loading = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            ConversationProbe.loading = $0
+            if ConversationProbe.enabled, $0.height > 0 {
+                ConversationProbe.loadingShows += 1
+                ConversationProbe.lastLoadingFrame = $0
+            }
+        }
         .onDisappear { ConversationProbe.loading = .zero }
     }
 }
@@ -742,6 +767,9 @@ private struct EarlierNotice: View {
     static var earlier = CGRect.zero, latest = CGRect.zero
     /// The "Loading earlier" notice while older rows load (window coordinates), else zero.
     static var loading = CGRect.zero
+    /// A delayed test observer can miss a notice that correctly appeared and disappeared between samples.
+    static var loadingShows = 0
+    static var lastLoadingFrame = CGRect.zero
     static var earlierFailed = false
     /// A check holds the reader's scrolling here (an offscreen window gets no trackpad gestures).
     static var scrolling = false
