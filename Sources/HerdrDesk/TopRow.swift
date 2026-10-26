@@ -2,7 +2,7 @@ import HerdrKit
 import SwiftUI
 
 /// Which copy of the tab row a view belongs to: the system toolbar's, or the full-screen content copy (FullScreenTopRow).
-enum IslandHost { case toolbar, content }
+enum IslandHost: Hashable { case toolbar, content }
 private struct IslandHostKey: EnvironmentKey { static let defaultValue = IslandHost.toolbar }
 extension EnvironmentValues {
     var islandHost: IslandHost { get { self[IslandHostKey.self] } set { self[IslandHostKey.self] = newValue } }
@@ -42,7 +42,9 @@ struct TopRow: View {
         .frame(minWidth: 120, idealWidth: islandWidth, maxWidth: islandWidth)
         .frame(height: Self.height)
         .modifier(IslandGlass())   // the only glass shape: exactly the content width, nothing behind it
-        .probe { [probes = TabProbe.writes(host, model)] r in if probes { TabProbe.island = r } }
+        .probe { [probes = TabProbe.writes(host, model)] r in
+            if probes { TabProbe.island = r; TabProbe.observeIsland(r, model: model, host: host) }
+        }
         .onAppear { TabProbe.rowsShown += 1 }
         .onDisappear { TabProbe.rowsShown -= 1 }
     }
@@ -81,9 +83,16 @@ struct TopRow: View {
         // Scroll the selected tab into view after the update pass, not inside it.
         .task(id: model.tab?.id) {
             // Debounced: rapid tab churn cancels earlier runs; no scroll when the tab is already in view.
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: .milliseconds(TabProbe.selectionDelayMilliseconds))
             // scrollTo always scrolls: the strip forgets its offset when the workspace changes, a remembered id would not.
-            if !Task.isCancelled, let id = model.tab?.id, !visibleTabs.contains(id) { scroll.scrollTo(id: id, anchor: .center) }
+            if !Task.isCancelled, let id = model.tab?.id {
+                let needsScroll = !visibleTabs.contains(id)
+                TabProbe.observeSelectionTask(id, model: model, host: host, scrolled: needsScroll)
+                if needsScroll {
+                    if TabProbe.traceSelection { print("tab-scroll-trace: \(host) scroll selected \(id), delay \(TabProbe.selectionDelayMilliseconds) ms") }
+                    scroll.scrollTo(id: id, anchor: .center)
+                }
+            }
         }
         // herdr's snapshot caught up with the drop (or anything else changed the tabs): show its order again.
         .onChange(of: tabs.map(\.id)) { _, _ in dropped = nil }
@@ -240,7 +249,9 @@ struct TabPill: View {
                     onRename: { if model.writesEnabled, let ws = model.workspace { model.select(tab: tab, in: ws); model.renamingTabID = tab.id } },
                     menu: { model.tabMenu(tab) },
                     onDrag: onDrag, onDrop: onDrop)
-                    .probe { r in if probes { TabProbe.pills[tab.id] = r } }
+                    .probe { r in
+                        if probes { TabProbe.pills[tab.id] = r; TabProbe.observePill(r, id: tab.id, model: model, host: host) }
+                    }
             }
         }
         .overlay(alignment: .trailing) { if closable { TabCloseButton(tab: tab).padding(.trailing, 5) } }
@@ -260,6 +271,51 @@ struct TabPill: View {
 
 /// Test probes: global frame of each tab's label and of each tab's mouse view (the whole pill).
 enum TabProbe {
+    /// Controlled delayed selection work in the offscreen overflow check; normal debounce remains 200 ms.
+    @MainActor static var selectionDelayMilliseconds = 200
+    @MainActor static var traceSelection = false
+    struct GeometryOwner: Hashable { let model: ObjectIdentifier; let host: IslandHost }
+    struct SelectionTiming {
+        let owner: GeometryOwner
+        let id: String
+        let start: ContinuousClock.Instant
+        var visibleAfter: Duration?
+        var taskAfter: Duration?
+        var scrolled = false
+        var initiallyVisible = false
+    }
+    @MainActor static var measureSelection = false
+    @MainActor static var selectionTiming: SelectionTiming?
+    @MainActor private static var timingIslands: [GeometryOwner: CGRect] = [:]
+    @MainActor private static var timingPills: [GeometryOwner: [String: CGRect]] = [:]
+    @MainActor static func beginSelection(_ id: String, model: AppModel, host: IslandHost) {
+        selectionTiming = SelectionTiming(owner: GeometryOwner(model: ObjectIdentifier(model), host: host), id: id, start: .now)
+        confirmVisibility(initial: true)
+    }
+    @MainActor static func observeIsland(_ frame: CGRect, model: AppModel, host: IslandHost) {
+        guard measureSelection, writes(host, model) else { return }
+        timingIslands[GeometryOwner(model: ObjectIdentifier(model), host: host)] = frame
+        confirmVisibility()
+    }
+    @MainActor static func observePill(_ frame: CGRect, id: String, model: AppModel, host: IslandHost) {
+        guard measureSelection, writes(host, model) else { return }
+        timingPills[GeometryOwner(model: ObjectIdentifier(model), host: host), default: [:]][id] = frame
+        confirmVisibility()
+    }
+    @MainActor static func observeSelectionTask(_ id: String, model: AppModel, host: IslandHost, scrolled: Bool) {
+        guard measureSelection, var timing = selectionTiming, timing.id == id, timing.taskAfter == nil,
+              timing.owner == GeometryOwner(model: ObjectIdentifier(model), host: host) else { return }
+        timing.taskAfter = timing.start.duration(to: .now); timing.scrolled = scrolled
+        selectionTiming = timing
+    }
+    @MainActor private static func confirmVisibility(initial: Bool = false) {
+        guard var timing = selectionTiming, timing.visibleAfter == nil,
+              let island = timingIslands[timing.owner], let pill = timingPills[timing.owner]?[timing.id],
+              island.width > 0, pill.width > 0, pill.minX >= island.minX - 0.5, pill.maxX <= island.maxX + 0.5 else { return }
+        timing.visibleAfter = initial ? .zero : timing.start.duration(to: .now)
+        timing.initiallyVisible = initial
+        selectionTiming = timing
+    }
     nonisolated(unsafe) static var labels: [String: CGRect] = [:]
     nonisolated(unsafe) static var pills: [String: CGRect] = [:]
     nonisolated(unsafe) static var island: CGRect = .zero
