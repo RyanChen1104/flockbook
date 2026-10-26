@@ -83,3 +83,16 @@ teardown. The full churn drift and delayed-correction assertions are retained.
 
 Focused red/green command:
 `HerdrDesk --test-conversation-churn anchor-placement-only`.
+
+## Locked screen results
+
+The runner checks lock state before each item and after it finishes. A locked
+screen produces a per-item `SKIP`; checks invalidated by locking during execution
+also become `SKIP`. The final summary subtracts skipped items from passed items
+and prints their count and names. A later item may run after the screen unlocks.
+An unlocked application failure still fails the run.
+
+The old runner failed 3/4 controlled cases. The revised runner passed all four
+cases in 20 fresh runs (0/20 failed). Twenty real offscreen `closetab` invocations
+on an unlocked screen also passed, with zero skipped items. No real lock or
+unlock operation was sent to the user's computer.

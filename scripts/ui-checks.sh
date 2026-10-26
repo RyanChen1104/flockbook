@@ -6,6 +6,7 @@
 # Not here: the checks that drive a live pane or session (--test-approve, --snapshot-demo, ...): they need a herdr server.
 # A check fails when it exits non-zero, runs past its timeout, prints FAIL, or does not print its PASS line.
 # Known failures (KNOWN) still run: a failure there is a warning, not a failed run; a pass asks for its removal.
+# A locked screen makes that check SKIP (also if it locks during the check); skipped checks never count as passed.
 # Each check's output goes to <out-dir>/logs/<name>.log; its pictures to <out-dir>/<name>/ or the app's build/snapshots-*.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -129,9 +130,7 @@ if [ -n "${SHARD:-}" ]; then
     CHECKS=("${picked[@]}")
 fi
 
-if ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
-    echo "ui-checks: screen is locked; not starting" >&2; exit 3
-fi
+screen_locked() { ioreg -n Root -d1 | grep -q '"CGSSessionScreenIsLocked"=Yes'; }
 [ -x "$BIN" ] || { echo "ui-checks: $BIN not found: run swift build first" >&2; exit 2; }
 mkdir -p "$OUT/logs"
 # A herdr pane's variables would point the app at the owner's session.
@@ -154,22 +153,29 @@ run_once() {
     run_limited "$LIMIT" "$BIN" "${args[@]}" > "$log" 2>&1; code=$?
     secs=$(( $(date +%s) - start ))
     verdict=ok
-    if [ "$code" = 124 ]; then verdict="timeout after ${LIMIT}s"
+    if screen_locked; then verdict="SKIP (screen locked during check)"
+    elif [ "$code" = 124 ]; then verdict="timeout after ${LIMIT}s"
     elif [ "$code" != 0 ]; then verdict="exit $code"
     elif grep -q 'FAIL' "$log"; then verdict="FAIL line"
     elif [ "$pass" != - ] && ! grep -qF "$pass" "$log"; then verdict="no '$pass' line"
     fi
 }
 
-failed=(); known_failed=(); flaky_passed=()
+failed=(); known_failed=(); flaky_passed=(); skipped=()
 summary="$OUT/summary.txt"; : > "$summary"
 for entry in "${CHECKS[@]}"; do
     IFS='|' read -r name pass argline <<< "$entry"
     read -r -a args <<< "$argline"
     log="$OUT/logs/$name.log"
+    if screen_locked; then
+        skipped+=("$name")
+        printf '%-20s %4ss  SKIP (screen locked)\n' "$name" 0 | tee -a "$summary"
+        echo "ui-checks: $name not run: screen locked" > "$log"
+        continue
+    fi
     [ "$MODE" = real ] && export FS_REAL_DIR="$OUT/$name"
     run_once
-    if [ "$verdict" != ok ] && [[ "$FLAKY" == *" $name "* ]]; then
+    if [[ "$verdict" != SKIP* ]] && [ "$verdict" != ok ] && [[ "$FLAKY" == *" $name "* ]]; then
         first="$verdict"; mv "$log" "$OUT/logs/$name.first.log"
         printf '%-20s %4ss  %s\n' "$name" "$secs" "$first; once more (FLAKY)" | tee -a "$summary"
         grep 'FAIL' "$OUT/logs/$name.first.log" | sed "s/^/$name failed, first run: /"
@@ -180,6 +186,7 @@ for entry in "${CHECKS[@]}"; do
     fi
     line=$(printf '%-20s %4ss  %s' "$name" "$secs" "$verdict")
     echo "$line" | tee -a "$summary"
+    if [[ "$verdict" == SKIP* ]]; then skipped+=("$name"); continue; fi
     grep 'WARN (CI runner' "$log" | sed "s/^/::warning title=ui-checks::$name: /"   # timing misses a CI runner does not count
     known=no; [[ "$KNOWN" == *" $name "* ]] && known=yes
     if [ "$verdict" != ok ]; then
@@ -194,5 +201,5 @@ for entry in "${CHECKS[@]}"; do
         echo "::notice title=ui-checks::$name passes now: remove it from KNOWN in scripts/ui-checks.sh"
     fi
 done
-echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}${flaky_passed:+; flaky passed on retry: ${flaky_passed[*]}}" | tee -a "$summary"
+echo "ui-checks $MODE: $(( ${#CHECKS[@]} - ${#failed[@]} - ${#known_failed[@]} - ${#skipped[@]} ))/${#CHECKS[@]} passed${failed:+; failed: ${failed[*]}}${known_failed:+; known failures: ${known_failed[*]}}${flaky_passed:+; flaky passed on retry: ${flaky_passed[*]}}${skipped:+; skipped: ${#skipped[@]} (${skipped[*]})}" | tee -a "$summary"
 [ ${#failed[@]} = 0 ]
