@@ -502,6 +502,20 @@ async function fakeRun() {
   check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'hello from the phone')") === true, "composer: text sent and shown");
   check(await p.eval("document.querySelector('#composer-text').value") === "", "composer: cleared after send");
 
+  const screenOpen = "document.querySelector('details.screen')?.open";
+  // Untouched, the Screen keeps following its default: open while the pane has no rows, closed once rows come. (Built
+  // open, the page gets a toggle event of its own; that is not the reader's choice.) A session with no rows, here.
+  hub.stdin.write("session w2:p2 s30 0\n");
+  check(await p.until(`${screenOpen} === true && !document.querySelector('.items .msg')`) === true, "screen default: open while the pane has no rows");
+  await new Promise((r) => setTimeout(r, 1500));   // several hub ticks, each re-renders the page
+  check(await p.eval(screenOpen) === true, "screen default: still open after ticks");
+  await p.type("#composer-text", "the first row");
+  await p.click("#composer-send");
+  check(await p.until("[...document.querySelectorAll('.msg.user')].some(e => e.textContent === 'the first row')") === true, "screen default: a row comes");
+  check(await p.until(`${screenOpen} === false`) === true, `screen default: closed once rows come, the reader never touched it (${await p.eval(screenOpen)})`);
+  hub.stdin.write("session w2:p2 s4\n");
+  check(await p.until("[...document.querySelectorAll('.msg')].some(e => e.textContent.includes('Notes are up to date.'))") === true, "screen default: back to the notes session");
+
   // Compacting: the screen changes on every hub tick. The text field stays the same element (a phone keyboard closes
   // when its field leaves the page), with its text, caret and focus; a message sent meanwhile goes to the agent.
   await p.type("#composer-text", "compact me");
@@ -520,6 +534,20 @@ async function fakeRun() {
   await p.type("#composer-text", "Typing while it compacts");
   await p.shot("composer-compacting");
   await p.shot("composer-compacting", true);
+  // Screen: opened by the reader, it stays open while hub ticks bring a new screen (each re-renders the page); closed
+  // again, it stays closed.
+  const twoTicks = async (what) => {
+    for (const n of [1, 2]) {
+      const before = await p.eval("document.querySelector('.screen pre')?.textContent ?? ''");
+      check(await p.until(`(document.querySelector('.screen pre')?.textContent ?? '') !== ${JSON.stringify(before)}`) === true, `${what}: tick ${n} brings a new screen`);
+    }
+  };
+  check(await p.eval(screenOpen) === false && await p.click("details.screen summary") === true && await p.eval(screenOpen) === true, "screen: the reader opens it");
+  await twoTicks("screen open");
+  check(await p.eval(screenOpen) === true, "screen: still open after two ticks");
+  await p.click("details.screen summary");
+  await twoTicks("screen closed");
+  check(await p.eval(screenOpen) === false, "screen: closed again, stays closed after two ticks");
   await p.type("#composer-text", "compact done");
   await p.click("#composer-send");
   check(await p.until("!(document.querySelector('.screen pre')?.textContent ?? '').includes('Compacting')") === true, "compacting: done");
