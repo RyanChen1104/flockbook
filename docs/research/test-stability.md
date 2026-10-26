@@ -134,3 +134,20 @@ until the reply completes before checking held rows, then verifies release inser
 them. The old delayed observer failed 1/1. The full default headless suite passed
 all 353 checks, including the original heavy-row budget (15 ms measured, 80 ms
 limit, CPU throttle 4x). No heavy-row threshold changed.
+
+## Terminal theme capture readiness
+
+[Run 40168389645 attempt 1](https://github.com/minchenlee/flockbook/actions/runs/40168389645/attempts/1)
+contains the theme failure (black capture values). The fixed 1.5-second sleep did
+not establish that the synthetic terminal had received and displayed its frame.
+A frame-only wait with a two-second fixture delay still reproduced a cursor
+failure: SwiftTerm queues its display update after feeding the buffer.
+
+The check now waits for both the frame's `colour7` marker and the fixture's final
+caret position (zero-based row 2, column 2), then lays out and flushes the window
+before capturing. Original colour, cursor and background assertions are unchanged.
+A missing frame/display state fails explicitly at a five-second readiness deadline.
+
+Twenty fresh full `termtheme` checks with `TERMTHEME_FRAME_DELAY_MS=2000` passed:
+0/20 failed or skipped. The intermediate frame-only version failed 1/1 delayed
+runs; the historical CI incidence was 1/72 observed job executions.
