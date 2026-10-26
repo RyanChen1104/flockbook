@@ -217,3 +217,84 @@ each check passed 20/20, with zero failures, retries or skipped items. Historica
 incidence was chrome 3/115, menus 7/114 and root-width 1/112. Tab-overflow had
 0/77 observed CI failures and one full local baseline pass; its reported failure
 under load was not independently reproduced, so no tab-overflow fix is claimed.
+
+## Remaining full-churn failure
+
+The frozen candidate failed repetition 16: scrolled-up recorded a 337 ms stall
+against the unchanged 250 ms limit. In the busy-core fling the viewport drift was
+1 pt, but the delayed fallback still moved it by 1241 pt once (`lateFixes = 1`).
+The existing assertion correctly rejected this. The two deterministic placement
+fixes and paused-meter control therefore do not establish that the complete churn
+flake is resolved. No speculative additional product fix or retry-policy change
+is made. The residual placement race and load-sensitive stall remain tracked by
+`hg-uichecks-churn-flake` and `hg-ci-churn-flaky`.
+
+All 20 first invocations completed: 18 passed, 2 failed, none retried or skipped.
+Repetition 20 measured a 282099 ms stall during scrolled-up. System power logs
+confirm clamshell sleep for 284 seconds overlapping that run. This is an
+environment-contaminated timing sample, retained as a raw failure rather than
+silently discarded. Even excluding it would not meet the zero-failure criterion:
+repetition 16 still has both a stall and a late correction. Historical churn
+incidence was 25/116 observed job executions; this local batch is 2/20 raw failures
+and is not a matched CI comparison or evidence that churn is fixed.
+
+Stall distributions include all 20 completed runs, including both failures. P95
+uses the nearest-rank definition; values are milliseconds. The busy-fling
+diagnostic's longest step is a separate measure from this stall table.
+
+| Phase | Median | P95 | Maximum | Original limit |
+| --- | ---: | ---: | ---: | ---: |
+| append | 29.5 | 45 | 64 | 250 |
+| depth | 24 | 44 | 44 | 250 |
+| composer | 24 | 44 | 64 | 250 |
+| width | 27.5 | 46 | 77 | 250 |
+| scrolled-up | 39.5 | 337 | 282099 (sleep overlap) | 250 |
+| burst | 53 | 67 | 78 | 250 |
+| autoload | 44 | 54 | 76 | 90 |
+| autoload-cap | 50 | 62 | 67 | 90 |
+
+## Validation summary
+
+Each row is a separate batch of fresh processes. These local results must not be
+interpreted as an estimate of the historical CI failure probability.
+
+| Changed check or controlled case | Before | After |
+| --- | --- | --- |
+| CDP faults | 4/4 cases failed | 20/20 runs passed, four cases each |
+| Real CDP transport | unbounded sender | 20/20 passed |
+| Ancestor placement / identity rebind | 0 pt compensation instead of 120 / 80 pt | 20/20 native controls passed |
+| Paused stall meter | 435 ms falsely included | 20/20 controls passed; unpaused blocking still detected |
+| Lock transitions | 3/4 cases failed | 20/20 runs passed, four cases each |
+| Real unlocked runner (closetab) | control | 20/20 passed, zero skips |
+| Delayed notice observer (earlier-failure) | current frame misses recorded 28 pt notice | 20/20 passed |
+| Held-at-top request | delayed old observer failed 1/1 | 20/20 normal and 20/20 four-second-delay passed |
+| Terminal theme | frame-only delayed observer failed 1/1 | 20/20 delayed full checks passed |
+| Pictures | local rare flake not reproduced | 20/20 full checks passed |
+| Chrome / menus / root-width | local baseline group failed chrome and menus | 20/20 complete groups passed |
+| Full conversation-churn | historical 25/116 | 18/20 passed; unresolved |
+
+All successful 20-run native batches had zero retries and zero skipped items.
+The full default browser suite additionally passed 353 checks. Local evidence is
+retained under the ignored build directory (378 MB at the final checkpoint).
+
+## Scope and remaining validation
+
+All local native runs use offscreen windows; browser runs use headless Chrome.
+They do not establish real-window behavior or acceptance on a remote macOS 15
+runner. Full churn includes its existing synthetic main-thread blocking and
+busy-core fling cases, but no claim is made about every possible host load.
+The 250 ms general stall, 90 ms local autoload and 80 ms browser heavy-row limits
+are unchanged. The baseline's CI-only timing-warning policy is also unchanged;
+correctness assertions, including notice appearance, still fail explicitly.
+
+The artifact rerun repair predates this branch and was verified statically only.
+The orchestration owner still needs to exercise a failed-job-only rerun remotely.
+Root-width has 20 local passes after the native sidebar fix; the separate
+tab-overflow load report remains open because it was not reproduced
+(`hg-uichecks-rootwidth-taboverflow`). Remaining remote churn/load acceptance is
+tracked by `hg-ci-churn-flaky`.
+
+Final source gate: `disk-guard 5` reported sufficient free space, `swift build`
+printed `Build complete! (5.18s)`, and `swift run HerdrKitChecks` printed
+`OK 2281 checks passed` (exit 0). The full default browser suite separately
+printed `OK 353 checks passed`. No workflow dispatch, push or merge was performed.
