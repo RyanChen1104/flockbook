@@ -740,7 +740,13 @@ private struct EarlierNotice: View {
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading earlier messages")
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationProbe.loading = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            ConversationProbe.loading = $0
+            if ConversationProbe.enabled, $0.height > 0 {
+                ConversationProbe.loadingShows += 1
+                ConversationProbe.lastLoadingFrame = $0
+            }
+        }
         .onDisappear { ConversationProbe.loading = .zero }
     }
 }
@@ -754,6 +760,9 @@ private struct EarlierNotice: View {
     static var earlier = CGRect.zero, latest = CGRect.zero
     /// The "Loading earlier" notice while older rows load (window coordinates), else zero.
     static var loading = CGRect.zero
+    /// A delayed test observer can miss a notice that correctly appeared and disappeared between samples.
+    static var loadingShows = 0
+    static var lastLoadingFrame = CGRect.zero
     static var earlierFailed = false
     /// A check holds the reader's scrolling here (an offscreen window gets no trackpad gestures).
     static var scrolling = false

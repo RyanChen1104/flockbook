@@ -96,3 +96,22 @@ The old runner failed 3/4 controlled cases. The revised runner passed all four
 cases in 20 fresh runs (0/20 failed). Twenty real offscreen `closetab` invocations
 on an unlocked screen also passed, with zero skipped items. No real lock or
 unlock operation was sent to the user's computer.
+
+## Notice observation
+
+Polling only the final `ConversationProbe.loading` frame can miss a notice that
+correctly appeared and disappeared while the observer was delayed. The probe now
+retains actual nonzero geometry events. Churn checks that an appearance occurred
+in the load interval and was inside the viewport, as a correctness assertion
+rather than a CI timing warning. The app's notice lifetime is unchanged.
+
+The controlled delayed observer sees current height 0 but recorded height 28 pt;
+the old current-frame predicate would fail. Twenty fresh `earlier-failure`
+offscreen checks passed (0/20 failed). The separate native intermediate-anchor
+placement check also passed in 20 fresh processes.
+
+The exploratory full churn run still exposed timing misses (264–690 ms) and the
+old notice sampling miss. Its runner was also edited while bash was reading it,
+invalidating the batch's shell verdict. No completed 20-run full-churn pass is
+claimed. Subsequent repetitions use frozen runner and binary copies. Timing
+thresholds, blank-viewport checks and frame-drift checks remain intact.
