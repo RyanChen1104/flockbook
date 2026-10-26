@@ -21,9 +21,11 @@ extension ContentTests {
         // `--test-conversation-churn <rows>`: rows on screen (default 150, one page); a long session read far back has more.
         if let i = args.firstIndex(of: "--test-conversation-churn"), args.indices.contains(i + 1), let n = Int(args[i + 1]) { ConversationView.page = n }
         print("churn-test: \(ConversationView.page) rows shown of a 3000-item session")
+        if args.contains("stall-meter-only") { exit(await stallMeterCheck() ? 0 : 1) }
         let placementOK = anchorPlacement()
         if args.contains("anchor-placement-only") { exit(placementOK ? 0 : 1) }
-        var failures = placementOK ? 0 : 1
+        let meterOK = await stallMeterCheck()
+        var failures = (placementOK ? 0 : 1) + (meterOK ? 0 : 1)
         let t0 = Date()
         func step(_ n: String, _ ok: Bool) { if !ok { failures += 1 }; print("churn-test: \(n) \(ok ? "ok" : "FAIL")") }
         // On a shared CI runner, stall times and the short-lived notice measure how busy the machine is: there a miss is
@@ -684,20 +686,27 @@ private struct ProbeView: View {
     private var timer: Timer?
     private var last = Date()
     private var worst: TimeInterval = 0
+    private var paused = false
     func start() {
+        paused = false
         last = Date()
         timer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let now = Date(); self.worst = max(self.worst, now.timeIntervalSince(self.last)); self.last = now
+                let now = Date()
+                if !self.paused { self.worst = max(self.worst, now.timeIntervalSince(self.last)) }
+                self.last = now
             }
         }
         RunLoop.main.add(timer!, forMode: .common)
     }
     func take() -> TimeInterval { defer { worst = 0 }; return worst }
     /// The check's own work starts: the gap so far (an app stall before it) counts, the work's own span does not.
-    func pause() { worst = max(worst, Date().timeIntervalSince(last)) }
-    func resume() { last = Date() }
+    func pause() {
+        if !paused { worst = max(worst, Date().timeIntervalSince(last)) }
+        paused = true
+    }
+    func resume() { last = Date(); paused = false }
     func stop() { timer?.invalidate() }
 }
 

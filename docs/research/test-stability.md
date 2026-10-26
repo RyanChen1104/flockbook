@@ -168,3 +168,17 @@ released=true (0/20 failed or skipped). Historical CI had 0/112 picture failures
 the previously reported local rare flake was not independently reproduced here.
 This corrects the cache contract and observation assumptions without changing
 image loading, cache limits or the thumbnail lifetime in the product.
+
+## Paused stall-meter callbacks
+
+`pause()` recorded the elapsed gap but did not stop timer callbacks inside nested
+run loops from counting the check's own work. A controlled paused nested loop
+recorded 435 ms with the old meter. The fixed meter records 0 ms while paused and
+still records the deliberately blocked unpaused work (336 ms in the focused
+combined run). Twenty fresh controlled runs passed.
+
+The control pumps the nested loop for its full interval: processing only one
+run-loop source can handle an AppKit event instead of the overdue timer, which
+produced a false zero in an intermediate full churn run. The full churn check now
+runs both the positive and negative meter controls before its scenarios. No
+performance budget was increased.
