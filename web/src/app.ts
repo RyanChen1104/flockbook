@@ -1218,12 +1218,11 @@ function itemView(it: Item, pane: string): HTMLElement {
     case "tools":
       return h("div", { class: "tools" }, ...it.tools.map((c, i) => {
         const key = `${pane} ${it.id} ${i}`;
-        const e: HTMLDetailsElement = h("details", { class: "chip", open: state.chipsOpen.has(key),
-          ontoggle: () => { if (e.open) state.chipsOpen.add(key); else state.chipsOpen.delete(key); } },
+        return toggled(h("details", { class: "chip", open: state.chipsOpen.has(key) },
         h("summary", {}, c.text),
         h("ul", {}, ...c.calls.map((call) => h("li", { class: call.error ? "error" : call.done ? "" : "running" },
-          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary)))));
-        return e;
+          h("span", { class: "tool" }, call.tool), " ", h("code", {}, call.summary))))),
+        (open) => { if (open) state.chipsOpen.add(key); else state.chipsOpen.delete(key); });
       }), pictures);
     case "approval": {
       const a = it.approval;
@@ -1266,8 +1265,15 @@ function queueView(pane: string, q: Queue): HTMLElement {
 }
 
 function screenView(pane: string, text: string, byDefault: boolean): HTMLElement {
-  const e: HTMLDetailsElement = h("details", { class: "screen", open: state.screenOpen.get(pane) ?? byDefault,
-    ontoggle: () => { state.screenOpen.set(pane, e.open); } }, h("summary", {}, "Screen"), h("pre", {}, text));
+  return toggled(h("details", { class: "screen", open: state.screenOpen.get(pane) ?? byDefault }, h("summary", {}, "Screen"), h("pre", {}, text)),
+    (open) => state.screenOpen.set(pane, open));
+}
+
+/** Calls `changed` when the reader opens or closes `e`. Built open, a `details` gets a toggle event of its own (the
+ *  HTML spec queues one for any change of `open`): that one leaves `open` as built and is not the reader's. */
+function toggled(e: HTMLDetailsElement, changed: (open: boolean) => void): HTMLDetailsElement {
+  let shown = e.open;
+  e.addEventListener("toggle", () => { if (e.open !== shown) { shown = e.open; changed(e.open); } });
   return e;
 }
 
