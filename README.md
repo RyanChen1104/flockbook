@@ -6,7 +6,7 @@ Flockbook is a native macOS reading view for your [Herdr](https://herdr.dev) age
 
 Your agents' conversations are already in the terminal. Flockbook shows the same conversation in a layout that is easier to read.
 
-**Built with AI.** AI coding agents write Flockbook: Claude Code writes the code and Codex reviews it. A human sets the direction, tests the app, and reviews every change. See [How this was built](#how-this-was-built).
+**Built with AI.** AI coding agents write Flockbook: Claude Code writes the code, and a separate AI reviewer (Codex or Claude) checks each change. A human sets the direction, tests the app, and reviews every change. See [How this was built](#how-this-was-built).
 
 **[Download for macOS](https://github.com/minchenlee/flockbook/releases/latest)** · [Website](https://flockbook.mclee.dev) · Requires macOS 15 or later.
 
@@ -139,7 +139,7 @@ Tap **Notify me** at the top of the agent list. The phone then shows a notificat
 
 - macOS 15 or later
 - Herdr, running
-- Agents in Herdr: Claude Code, Codex, Cursor, or pi. Flockbook reads their local session logs to show the conversation.
+- Agents in Herdr: Claude Code, Codex, Grok Build, Cursor, or pi. Flockbook reads their local session logs to show the conversation.
 
 ## Releases
 
@@ -167,11 +167,11 @@ The Rust code in `xplat/` is an early port of Flockbook to Linux and Windows, bu
 
 ## Privacy
 
-Flockbook runs locally. It reads agent session logs on your Mac (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.pi/agent/sessions/`) and talks to Herdr through its local socket. It has no telemetry. It goes on the network only for the hourly update check (you can turn it off) and, when you turn them on, for remote access over Tailscale or your local network and for phone notifications through the phone's push service.
+Flockbook runs locally. It reads agent session logs on your Mac (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.grok/sessions/`, `~/.cursor/projects/`, `~/.pi/agent/sessions/`) and talks to Herdr through its local socket. It has no telemetry. It goes on the network only for the hourly update check (you can turn it off) and, when you turn them on, for remote access over Tailscale or your local network and for phone notifications through the phone's push service.
 
 ## How this was built
 
-Flockbook was developed with extensive help from AI: [Claude Code](https://claude.com/claude-code) (Anthropic) writes most of the code, and Codex (OpenAI) reviews the changes. The repository is open; read the code and judge it on its merits.
+Flockbook was developed with extensive help from AI: [Claude Code](https://claude.com/claude-code) (Anthropic) writes most of the code, and a separate AI reviewer (Codex or Claude) checks each change. The repository is open; read the code and judge it on its merits.
 
 <details>
 <summary>About the process</summary>
