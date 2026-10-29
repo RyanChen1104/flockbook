@@ -13,6 +13,7 @@ public struct ConversationParser: Sendable {
     var callById: [String: ToolCall] = [:]   // call details; results patch these after the chip was emitted
     var runsByKey: [String: [(tool: String, label: ToolLabel, id: String)]] = [:]
     var questionAt: [String: Int] = [:]      // AskUserQuestion tool_use id -> index in `done`
+    var thought: (id: String, message: String?, text: String)?   // Claude thinking with words, until its message's next block
     var pi = PiState()                               // pi entry tree (see ConversationParser+Pi.swift)
     var grok = GrokState()                           // Grok Build chunk merging (see ConversationParser+Grok.swift)
     /// Claude Code's queue of messages typed while it works (`queue-operation` lines).
@@ -76,9 +77,25 @@ public struct ConversationParser: Sendable {
         let pics = type == "user" && !meta && !compactFlag ? LogImage.refs(LogImage.found(message: msg), offset: offset) : []
         let firstNew = done.count
 
+        let messageId = msg["id"] as? String
         for (i, b) in blocks.enumerated() {
             let bid = "\(uuid)-\(i)"
-            switch b["type"] as? String {
+            let kind = b["type"] as? String
+            // Thinking stays hidden, except words logged as thinking right before a tool call of the same message: the
+            // terminal shows those as the reply's text.
+            if kind == "thinking" || kind == "redacted_thinking" {
+                let words = (b["thinking"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if type == "assistant", !words.isEmpty { thought = (bid, messageId, words) }
+                continue
+            }
+            if let t = thought {
+                thought = nil
+                if kind == "tool_use", type == "assistant", t.message == messageId {
+                    flush()
+                    done.append(ConversationItem(id: t.id, kind: .assistantText(t.text), timestamp: lineTS))
+                }
+            }
+            switch kind {
             case "text":
                 let text = (b["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if text.isEmpty { continue }

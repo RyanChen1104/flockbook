@@ -128,6 +128,25 @@ import Foundation
     check(SessionLog.parse(lines: lines) == SessionLog.parse(lines: lines), "items() equal across calls (stable chip ids)")
 }
 
+// Claude Code sometimes logs the words it shows before a tool call as a thinking block (one line per block, one message
+// id). The terminal shows them, so they show as text; thinking not followed by a tool call of its message stays hidden.
+@MainActor func checksThinkingBeforeTool() async throws {
+    var p = ConversationParser()
+    p.feed(line: #"{"type":"assistant","uuid":"k0","message":{"id":"m1","content":[{"type":"thinking","thinking":"","signature":"s"}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k1","message":{"id":"m1","content":[{"type":"thinking","thinking":"Shown before the tool","signature":"s"}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k2","message":{"id":"m1","content":[{"type":"tool_use","id":"tm","name":"mcp__memes__meme","input":{"meme":"x"}}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k3","message":{"id":"m2","content":[{"type":"thinking","thinking":"Private reasoning","signature":"s"}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k4","message":{"id":"m2","content":[{"type":"text","text":"Answer"}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k5","message":{"id":"m3","content":[{"type":"thinking","thinking":"Other message's reasoning","signature":"s"}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k6","message":{"id":"m4","content":[{"type":"tool_use","id":"tb","name":"Bash","input":{"command":"ls"}}]}}"#)
+    p.feed(line: #"{"type":"assistant","uuid":"k7","message":{"id":"m5","content":[{"type":"thinking","thinking":"Same line","signature":"s"},{"type":"tool_use","id":"tc","name":"Bash","input":{"command":"pwd"}}]}}"#)
+    let texts = p.items().compactMap { if case .assistantText(let t) = $0.kind { t } else { nil } }
+    check(texts == ["Shown before the tool", "Answer", "Same line"], "thinking: shown only right before its message's tool call \(texts)")
+    let i = p.items()
+    let shown = i.firstIndex { if case .assistantText("Shown before the tool") = $0.kind { true } else { false } }
+    check(shown != nil && shown! + 1 < i.count && { if case .toolChips = i[shown! + 1].kind { true } else { false } }(), "thinking: the text comes before the tool chips")
+}
+
 // loadEarlier: 300 lines, tail of ~1 KB first, then step back; ids stable, cross-segment result matched
 @MainActor func checksLoadEarlier() async throws {
     do {

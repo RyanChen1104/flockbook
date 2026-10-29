@@ -9,4 +9,6 @@ One short line: what this release is about.
 
 ### 🐛 Bug Fixes
 
+- Claude Code: words that Claude Code logs as thinking right before a tool call now show in the conversation, as in the terminal.
+
 ### ⚙️ Changes
